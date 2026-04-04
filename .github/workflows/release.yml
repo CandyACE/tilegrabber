@@ -1,0 +1,241 @@
+name: 打包发布
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 Tag（例如 v1.2.0），留空则使用当前分支名"
+        required: false
+
+permissions:
+  contents: write
+
+# 统一计算 tag，供所有 job 使用
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux — AppImage + deb
+          - os: ubuntu-22.04
+            label: Linux
+            bundles: appimage,deb
+
+          # Windows — NSIS 安装包
+          - os: windows-latest
+            label: Windows
+            bundles: nsis
+
+          # macOS Apple Silicon (M 系列)
+          - os: macos-latest
+            label: macOS-arm64
+            bundles: dmg
+            rust-target: aarch64-apple-darwin
+
+          # macOS Intel
+          # - os: macos-13
+          #   label: macOS-x64
+          #   bundles: dmg
+          #   rust-target: x86_64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+    name: Build · ${{ matrix.label }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      # ── Node.js ──────────────────────────────────────────────────────────────
+      - name: 配置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      # ── Rust ─────────────────────────────────────────────────────────────────
+      - name: 安装 Rust stable 工具链
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target || '' }}
+
+      - name: 缓存 Cargo 依赖
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # ── Linux 系统依赖 ────────────────────────────────────────────────────────
+      - name: 安装 Linux 系统依赖
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # ── 前端依赖 ─────────────────────────────────────────────────────────────
+      - name: 安装前端依赖
+        run: npm ci
+
+      # ── 打包 ─────────────────────────────────────────────────────────────────
+      - name: 打包应用 (tauri-action)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 编译期注入更新检查地址，指向本仓库 releases/latest/download/latest.json
+          # 应用启动后将从该 URL 获取最新版本信息
+          TILEGRABBER_UPDATE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/latest.json
+        with:
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: "御图 ${{ env.RELEASE_TAG }}"
+          releaseBody: |
+            ## 下载安装
+
+            | 平台 | 文件 | 说明 |
+            |------|------|------|
+            | Windows | `*_x64-setup.exe` | NSIS 安装包，双击运行 |
+            | macOS（M 芯片） | `*_aarch64.dmg` | Apple Silicon |
+            | macOS（Intel） | `*_x64.dmg` | Intel x86_64 |
+            | Linux | `*.AppImage` | 免安装，`chmod +x` 后直接运行 |
+            | Linux | `*_amd64.deb` | Debian / Ubuntu |
+
+            > **macOS 用户**：首次打开如遇 Gatekeeper 拦截，请在「系统设置 → 隐私与安全性」中允许运行，或执行 `xattr -d com.apple.quarantine <应用路径>` 解除隔离。
+          releaseDraft: true
+          prerelease: false
+          args: >-
+            ${{ matrix.rust-target && format('--target {0}', matrix.rust-target) || '' }}
+            --bundles ${{ matrix.bundles }}
+
+  # ── 生成 latest.json 并发布 Release ────────────────────────────────────────
+  publish:
+    name: 发布 Release · 生成自动更新清单
+    needs: build
+    runs-on: ubuntu-latest
+    # 只在 tag 触发时（或 workflow_dispatch 指定了 tag）才发布
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+
+    steps:
+      - name: 等待所有产物上传完成（60 秒缓冲）
+        run: sleep 60
+
+      - name: 检出代码（用于读取 CHANGELOG.md）
+        uses: actions/checkout@v4
+
+      - name: 从 CHANGELOG.md 提取本版本更新内容
+        id: changelog
+        env:
+          TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          VER="${TAG#v}"   # 去掉 v 前缀（v1.2.0 → 1.2.0）
+          # 提取 ## [vVER] 到下一个 ## 之间的内容（不含标题行本身）
+          NOTES=$(awk -v ver="v${VER}" '
+            /^## \[/ { if (found) exit; if (index($0, "[" ver "]") > 0) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md | sed '/^[[:space:]]*$/d; /^---/d')
+          if [ -z "$NOTES" ]; then
+            NOTES="请查阅 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) 了解详细更新内容。"
+          fi
+          # 多行输出写法
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$NOTES"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: 生成 latest.json 并发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          echo "::group::获取 Release 资产列表"
+          # /releases/tags/{tag} 不包含草稿 Release，需从列表中按 tag 查找
+          RELEASE_JSON=$(gh api "repos/$REPO/releases" \
+            | jq --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | .[0]')
+          if [ "$(echo "$RELEASE_JSON" | jq -r '.id // empty')" = "" ]; then
+            echo "未找到 tag=$TAG 对应的 Release，请确认 build job 已完成" >&2
+            exit 1
+          fi
+          echo "$RELEASE_JSON" | jq '.assets[].name'
+          echo "::endgroup::"
+
+          # ── 各平台安装包 URL ──────────────────────────────────────
+          WIN_URL=$(echo "$RELEASE_JSON" | jq -r '
+            [.assets[] | select(.name | test("-setup\\.exe$"))]
+            | sort_by(.name) | last | .browser_download_url // ""')
+
+          MACOS_ARM_URL=$(echo "$RELEASE_JSON" | jq -r '
+            [.assets[] | select(.name | test("_aarch64\\.dmg$"))]
+            | sort_by(.name) | last | .browser_download_url // ""')
+
+          MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r '
+            [.assets[] | select(.name | test("_x64\\.dmg$"))]
+            | sort_by(.name) | last | .browser_download_url // ""')
+
+          LINUX_URL=$(echo "$RELEASE_JSON" | jq -r '
+            [.assets[] | select(.name | test("\\.AppImage$"))]
+            | sort_by(.name) | last | .browser_download_url // ""')
+
+          # changelog 来自上一步从 CHANGELOG.md 提取的内容
+          CHANGELOG_NOTES='${{ steps.changelog.outputs.notes }}'
+
+          echo "Windows  : $WIN_URL"
+          echo "macOS arm: $MACOS_ARM_URL"
+          echo "macOS x64: $MACOS_X64_URL"
+          echo "Linux    : $LINUX_URL"
+
+          # ── 组合 Release 正文（更新日志 + 下载说明）──────────────
+          DOWNLOAD_TABLE=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
+          FULL_BODY=$(printf '%s\n\n---\n\n%s' "$CHANGELOG_NOTES" "$DOWNLOAD_TABLE")
+
+          # ── 生成 latest.json ──────────────────────────────────────
+          # body 字段只保留更新日志（不含下载表格，供应用内「新版本」弹窗展示）
+          # macos 字段优先用 arm64，若没有则回退到 x64
+          MACOS_URL="$MACOS_ARM_URL"
+          if [ -z "$MACOS_URL" ]; then
+            MACOS_URL="$MACOS_X64_URL"
+          fi
+
+          jq -n \
+            --arg tag    "$TAG" \
+            --arg html   "https://github.com/$REPO/releases/tag/$TAG" \
+            --arg body   "$CHANGELOG_NOTES" \
+            --arg win    "$WIN_URL" \
+            --arg mac    "$MACOS_URL" \
+            --arg mac_x64 "$MACOS_X64_URL" \
+            --arg linux  "$LINUX_URL" \
+            '{
+              tag_name: $tag,
+              html_url: $html,
+              body: $body,
+              assets: {
+                windows: (if $win   != "" then $win   else null end),
+                macos:   (if $mac   != "" then $mac   else null end),
+                macos_x64: (if $mac_x64 != "" then $mac_x64 else null end),
+                linux:   (if $linux != "" then $linux else null end)
+              }
+            }' > latest.json
+
+          echo "::group::生成的 latest.json"
+          cat latest.json
+          echo "::endgroup::"
+
+          # ── 上传 latest.json 到 Release ──────────────────────────
+          gh release upload "$TAG" latest.json --clobber --repo "$REPO"
+
+          # ── 更新 Release 正文（写入更新日志 + 下载说明）──────────
+          gh release edit "$TAG" --notes "$FULL_BODY" --repo "$REPO"
+
+          # ── 发布（移除草稿状态）────────────────────────────────────
+          gh release edit "$TAG" --draft=false --repo "$REPO"
+          echo "Release $TAG 发布成功！"

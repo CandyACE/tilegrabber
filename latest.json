@@ -1,0 +1,9 @@
+{
+  "tag_name": "v1.0.0",
+  "body": "## 更新内容\n- 修复导出 GeoTIFF 时多边形任务边缘未按多边形形状裁剪的问题\n- GeoTIFF 导出改用 BigTIFF 格式（64-bit 偏移量），支持超过 4 GB 的大体积图像导出\n- 修复下载过程中遇到 502 / 503 / 504 响应未重试的问题，改为最多重试 5 次并逐步加大等待间隔\n- 修复所有预览瓦片统一通过内置代理协议加载，解决部分来源预览空白的问题\n- 修复 ZoomPicker 拖拽时出现闪烁/高度跳动的问题\n- 地图禁用倾斜与旋转\n- 任务范围叠加多边形边界（橙色）预览\n- 外部 .tgr 任务在卡片上显示存储标识；删除时支持保留或一并删除外部文件\n- .tgr 导入/导出改用零拷贝 SQLite 方案（v2 格式），大幅提升速度",
+  "assets": {
+    "windows": "http://oss.emapgis.com/soft/tiledownload/TileGrabber_1.0.0_x64-setup.exe",
+    "macos": null,
+    "linux": null
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "name": "tilegrabber",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 4000",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "typescript": "^5.8.0",
+    "vue-tsc": "^2.2.0"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.1.0",
+    "@fontsource/sora": "^5.1.0",
+    "@radix-icons/vue": "^1.0.0",
+    "@tailwindcss/vite": "^4.2.2",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "@vueuse/core": "^14.2.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-vue-next": "^1.0.0",
+    "maplibre-gl": "^4.7.0",
+    "marked": "^17.0.5",
+    "radix-vue": "^1.9.17",
+    "reka-ui": "^2.9.2",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.2",
+    "terra-draw": "^1.0.0-rc.2",
+    "terra-draw-maplibre-gl-adapter": "^1.3.0",
+    "vite": "^8.0.3",
+    "vue": "^3.5.31",
+    "vue-i18n": "^11.3.0"
+  }
+}

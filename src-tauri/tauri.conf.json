@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "御图",
+  "identifier": "com.tilegrabber.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:4000",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "御图",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false
+      },
+      {
+        "label": "float",
+        "title": "御图 速度",
+        "url": "float.html",
+        "width": 200,
+        "height": 56,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "resizable": false,
+        "visible": false,
+        "skipTaskbar": true,
+        "center": false,
+        "x": 40,
+        "y": 40
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "sidebarImage": "installer-assets/sidebar.bmp",
+        "headerImage": "installer-assets/header.bmp",
+        "installMode": "currentUser"
+      }
+    }
+  }
+}

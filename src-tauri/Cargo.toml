@@ -1,0 +1,70 @@
+[package]
+name = "tilegrabber"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "tilegrabber_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# XML 解析 (lrc 文件)
+quick-xml = { version = "0.37", features = ["serialize"] }
+encoding_rs = "0.8"
+
+# Gzip 解压 (lra 文件)
+flate2 = "1"
+
+# Zip 打包 (任务导入/导出)
+zip = "2"
+
+# HTTP 客户端 (WMTS/TMS 探测 + 更新包下载)
+reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli", "deflate", "stream", "http2"], default-features = false }
+tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
+
+# 错误处理
+anyhow = "1"
+thiserror = "2"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
+
+# 时间
+chrono = { version = "0.4", features = ["serde"] }
+
+# 数据库
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# 随机数 (反封禁延迟 + UA 轮换)
+rand = "0.8"
+
+# 图像处理 (GeoTIFF 导出：瓦片解码 + 拼接)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tiff = "0.9"
+
+# 并行迭代器（导出多线程加速）
+rayon = "1"
+
+# 瓦片发布服务
+axum = { version = "0.7", features = [] }
+tower-http = { version = "0.5", features = ["cors"] }
+tower = { version = "0.4" }
+roxmltree = "0.21.1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
