@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 defineProps<{ open: boolean }>();
 const emit = defineEmits<{
@@ -31,10 +34,10 @@ function handleDisagree() {
       <!-- 中央内容 -->
       <div class="disclaimer-body">
         <!-- 顶部标签 -->
-        <div class="tag">使用前须知</div>
+        <div class="tag">{{ t('disclaimer.tag') }}</div>
 
         <!-- 主标题 -->
-        <h1 class="title">用户须知与免责声明</h1>
+        <h1 class="title">{{ t('disclaimer.title') }}</h1>
 
         <!-- 分割线 -->
         <div class="divider" />
@@ -42,7 +45,7 @@ function handleDisagree() {
         <!-- 条款文本 -->
         <div class="clauses">
           <p class="intro">
-            本软件（<em>御图</em>）仅供个人学习、科研及合法的离线地图使用场景。<br />
+            本软件（<em>{{ t('appName') }}</em>）仅供个人学习、科研及合法的离线地图使用场景。<br />
             继续使用前，请仔细阅读以下全部条款。
           </p>
 
@@ -50,33 +53,32 @@ function handleDisagree() {
             <li>
               <span class="clause-no">01</span>
               <div>
-                <strong>版权合规</strong>
+                <strong>{{ t('disclaimer.clause01Title') }}</strong>
                 —
-                地图数据版权归各数据提供方所有。请确保您的使用符合相关服务条款，不得用于商业分发或违反数据提供方的授权协议。
+                {{ t('disclaimer.clause01Body') }}
               </div>
             </li>
             <li>
               <span class="clause-no">02</span>
               <div>
-                <strong>合法使用</strong>
+                <strong>{{ t('disclaimer.clause02Title') }}</strong>
                 —
-                严禁用于任何违反国家法律法规或侵犯他人权益的行为。涉密地图数据受相关保密法律约束，请勿违规下载或存储。
+                {{ t('disclaimer.clause02Body') }}
               </div>
             </li>
             <li>
               <span class="clause-no">03</span>
               <div>
-                <strong>风险自担</strong>
+                <strong>{{ t('disclaimer.clause03Title') }}</strong>
                 —
-                因使用本软件所产生的任何法律责任或损失，由使用者自行承担，软件开发者不承担任何连带责任。
+                {{ t('disclaimer.clause03Body') }}
               </div>
             </li>
             <li>
               <span class="clause-no">04</span>
               <div>
-                <strong>封禁风险</strong>
-                — 频繁、大量的瓦片请求可能触发数据提供方的反爬机制，导致您的 IP
-                或账号被限流或封禁，请谨慎使用。
+                <strong>{{ t('disclaimer.clause04Title') }}</strong>
+                — {{ t('disclaimer.clause04Body') }}
               </div>
             </li>
           </ul>
@@ -85,10 +87,10 @@ function handleDisagree() {
         <!-- 操作按钮 -->
         <div class="actions">
           <button class="btn-disagree" @click="handleDisagree">
-            不同意，退出
+            {{ t('disclaimer.disagree') }}
           </button>
           <button class="btn-agree" @click="handleAgree">
-            我已阅读并同意 →
+            {{ t('disclaimer.agree') }}
           </button>
         </div>
       </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { save as saveDialog, open as openDir } from "@tauri-apps/plugin-dialog";
 import {
@@ -50,6 +51,7 @@ const starting = ref(false);
 const startError = ref<string | null>(null);
 
 const { registerJob } = useExportJobs();
+const { t } = useI18n();
 
 watch(
   () => props.open,
@@ -143,11 +145,11 @@ function fmtCount(n: number) {
   return String(n);
 }
 
-const formatLabel: Record<ExportFormat, string> = {
+const formatLabel = computed((): Record<ExportFormat, string> => ({
   mbtiles: "MBTiles",
-  directory: "目录 (z/x/y)",
+  directory: t("taskDetail.exportFormat.directory"),
   tiff: "GeoTIFF",
-};
+}));
 </script>
 
 <template>
@@ -187,7 +189,7 @@ const formatLabel: Record<ExportFormat, string> = {
                   <h2
                     class="text-sm font-semibold text-slate-900 leading-tight"
                   >
-                    导出瓦片
+                    {{ t('export.title') }}
                   </h2>
                   <p class="text-xs text-slate-500 mt-0.5 truncate max-w-64">
                     {{ task.name }}
@@ -211,13 +213,7 @@ const formatLabel: Record<ExportFormat, string> = {
             >
               <Info class="size-3.5 shrink-0 text-blue-500" />
               <span class="text-xs text-slate-600">
-                共
-                <strong class="text-slate-900 font-semibold">{{
-                  fmtCount(task.downloadedTiles)
-                }}</strong>
-                个瓦片 &nbsp;·&nbsp; 层级 z{{ task.minZoom }}–z{{
-                  task.maxZoom
-                }}
+                {{ t('export.tiles', { count: fmtCount(task.downloadedTiles) }) }}
               </span>
               <Layers class="size-3.5 shrink-0 text-slate-400 ml-auto" />
             </div>
@@ -227,7 +223,7 @@ const formatLabel: Record<ExportFormat, string> = {
               <p
                 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3"
               >
-                选择导出格式
+                {{ t('export.selectFormat') }}
               </p>
               <div class="grid grid-cols-3 gap-2.5">
                 <!-- MBTiles -->
@@ -279,7 +275,7 @@ const formatLabel: Record<ExportFormat, string> = {
                     MBTiles
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    单文件 SQLite，兼容 QGIS、Cesium 等。
+                    {{ t('export.mbtitlesDesc') }}
                   </p>
                 </button>
 
@@ -331,10 +327,10 @@ const formatLabel: Record<ExportFormat, string> = {
                         : 'text-slate-800'
                     "
                   >
-                    目录 z/x/y
+                    {{ t('taskDetail.exportFormat.directory') }}
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    文件树，可作静态 XYZ 服务。
+                    {{ t('export.directoryDesc') }}
                   </p>
                 </button>
 
@@ -387,7 +383,7 @@ const formatLabel: Record<ExportFormat, string> = {
                     GeoTIFF
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    地理参考栅格图，支持 QGIS/ArcGIS。
+                    {{ t('export.tiffDesc') }}
                   </p>
                 </button>
               </div>
@@ -398,7 +394,7 @@ const formatLabel: Record<ExportFormat, string> = {
               <p
                 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2"
               >
-                {{ format === "directory" ? "导出目录" : "保存位置" }}
+                {{ format === "directory" ? t('export.exportDir') : t('export.savePath') }}
               </p>
               <div class="flex items-center gap-2">
                 <div
@@ -412,8 +408,8 @@ const formatLabel: Record<ExportFormat, string> = {
                     {{
                       destPath ||
                       (format === "directory"
-                        ? "未选择目录…"
-                        : "未选择保存路径…")
+                        ? t('export.noDir')
+                        : t('export.noPath'))
                     }}
                   </span>
                 </div>
@@ -422,7 +418,7 @@ const formatLabel: Record<ExportFormat, string> = {
                   :class="starting ? 'opacity-40 pointer-events-none' : ''"
                   @click="pickPath"
                 >
-                  浏览…
+                  {{ t('export.browse') }}
                 </button>
               </div>
             </div>
@@ -441,13 +437,12 @@ const formatLabel: Record<ExportFormat, string> = {
                   <Layers class="size-3.5 shrink-0 text-slate-400" />
                   <div>
                     <div class="text-xs font-medium text-slate-700">
-                      拼合层级
+                      {{ t('export.mergeZoom') }}
                     </div>
                     <div
                       class="text-[11px] text-slate-400 mt-0.5 leading-tight"
                     >
-                      z{{ task.minZoom }}–z{{ task.maxZoom }}
-                      可选，层级越高越清晰但文件越大
+                      {{ t('export.mergeZoomDesc', { min: task.minZoom, max: task.maxZoom }) }}
                     </div>
                   </div>
                 </div>
@@ -492,13 +487,13 @@ const formatLabel: Record<ExportFormat, string> = {
                 <Scissors class="size-3.5 shrink-0 text-slate-400" />
                 <div>
                   <div class="text-xs font-medium text-slate-700">
-                    严格裁剪至任务选框范围
+                    {{ t('export.clipOption') }}
                   </div>
                   <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
                     {{
                       format === "tiff"
-                        ? "将输出像素精确裁剪至任务选框经纬度边界"
-                        : "仅导出完全位于任务选框内的瓦片，排除边缘相交瓦片"
+                        ? t('export.clipTiffDesc')
+                        : t('export.clipDefaultDesc')
                     }}
                   </div>
                 </div>
@@ -553,7 +548,7 @@ const formatLabel: Record<ExportFormat, string> = {
                 class="h-8 px-4 text-xs font-medium rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="emit('close')"
               >
-                取消
+                {{ t('export.cancel') }}
               </button>
               <button
                 class="h-8 px-5 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all duration-200"
@@ -567,7 +562,7 @@ const formatLabel: Record<ExportFormat, string> = {
               >
                 <Loader2 v-if="starting" class="size-3.5 animate-spin" />
                 <PackageCheck v-else class="size-3.5" />
-                {{ starting ? "导出中…" : "开始导出" }}
+                {{ starting ? t('export.exporting') : t('export.startExport') }}
               </button>
             </div>
           </div>

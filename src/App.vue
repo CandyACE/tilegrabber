@@ -8,6 +8,8 @@ import type { Map as MaplibreMap, LngLatBoundsLike } from "maplibre-gl";
 import type { Bounds, CrsType, TileSource } from "~/types/tile-source";
 import { useWizardState } from "~/composables/useWizardState";
 import { useTaskDetail } from "~/composables/useTaskDetail";
+import { initUpdateListener, destroyUpdateListener } from "~/composables/useUpdateState";
+import { i18n } from "~/i18n";
 import AppHeader from "~/components/AppHeader.vue";
 import TaskSidebar from "~/components/sidebar/TaskSidebar.vue";
 import LayerSidebar from "~/components/sidebar/LayerSidebar.vue";
@@ -116,14 +118,27 @@ const appVisible = ref(false);
 let unlistenClose: (() => void) | null = null;
 
 onMounted(async () => {
+  // Apply saved language setting before UI renders
+  try {
+    const saved = await invoke<Record<string, string>>("get_all_settings");
+    const lang = saved["app.language"];
+    if (lang && lang !== "auto" && lang !== "") {
+      i18n.global.locale.value = lang as "zh-CN" | "en";
+    }
+  } catch {
+    // ignore - fallback to navigator.language detection already done in i18n.ts
+  }
   // 拦截窗口关闭请求（包括 OS 标题栏 X 按钮 / Alt+F4）
   unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
     handleCloseRequest(event);
   });
+  // 初始化后台更新检查监听器（Rust 端延迟 12 秒静默检查）
+  await initUpdateListener();
 });
 
 onUnmounted(() => {
   unlistenClose?.();
+  destroyUpdateListener();
 });
 
 async function onSplashDone() {

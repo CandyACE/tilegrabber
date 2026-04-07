@@ -2,8 +2,11 @@
 import { ref, computed, watch } from "vue";
 import { Clock, Gauge, RotateCcw, Save, CheckCircle2 } from "lucide-vue-next";
 import { Switch } from "@/components/ui/switch";
+import { useI18n } from "vue-i18n";
 
 // ─── Props / Emits ───────────────────────────────────────────────────────────
+
+const { t } = useI18n();
 
 const props = defineProps<{
   settings: Record<string, string>;
@@ -69,8 +72,8 @@ const windowDesc = computed(() => {
 // ─── 速率描述文本 ─────────────────────────────────────────────────────────────
 
 const rateDesc = computed(() => {
-  if (maxTilesPerSec.value === 0) return "不限速";
-  return `≤ ${maxTilesPerSec.value} 瓦片/秒`;
+  if (maxTilesPerSec.value === 0) return t('rules.noLimit')
+  return t('rules.rateValue', { count: maxTilesPerSec.value })
 });
 
 // ─── 小时选项 ─────────────────────────────────────────────────────────────────
@@ -95,14 +98,14 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
       <div class="flex items-center gap-2">
         <Clock :size="14" class="text-blue-500 shrink-0" />
         <span class="text-xs font-semibold text-slate-700 tracking-wide"
-          >下载时间窗口</span
+          >{{ t('rules.timeWindow') }}</span
         >
         <div class="ml-auto flex items-center gap-2">
           <span
             class="text-xs"
             :class="timeWindowEnabled ? 'text-blue-600' : 'text-slate-400'"
           >
-            {{ timeWindowEnabled ? "已启用" : "已禁用" }}
+            {{ timeWindowEnabled ? t('rules.enabled') : t('rules.disabled') }}
           </span>
           <Switch
             :model-value="timeWindowEnabled"
@@ -114,7 +117,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
 
       <!-- 描述 -->
       <p class="text-xs text-slate-500 leading-relaxed">
-        只在指定时间段内运行下载，适合夜间低峰期下载大量瓦片，避免占用白天带宽。
+        {{ t('rules.timeWindowDesc') }}
       </p>
 
       <!-- 时间范围选择 -->
@@ -122,7 +125,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
         <div v-if="timeWindowEnabled" class="flex flex-col gap-2 pt-1">
           <div class="flex items-center gap-3">
             <div class="flex flex-col gap-1 flex-1">
-              <label class="text-xs text-slate-500">开始时间</label>
+              <label class="text-xs text-slate-500">{{ t('rules.startTime') }}</label>
               <select
                 :value="startHour"
                 @change="
@@ -142,7 +145,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
             </div>
             <div class="mt-5 text-slate-400 text-sm shrink-0">–</div>
             <div class="flex flex-col gap-1 flex-1">
-              <label class="text-xs text-slate-500">结束时间</label>
+              <label class="text-xs text-slate-500">{{ t('rules.endTime') }}</label>
               <select
                 :value="endHour"
                 @change="
@@ -162,9 +165,9 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
             </div>
           </div>
           <p class="text-xs text-blue-600 font-medium">
-            将在 {{ windowDesc }} 内下载
+            {{ t('rules.windowRange', { range: windowDesc }) }}
             <span v-if="startHour > endHour" class="text-slate-400 font-normal"
-              >（跨午夜）</span
+              >{{ t('rules.crossMidnight') }}</span
             >
           </p>
         </div>
@@ -182,7 +185,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
       <div class="flex items-center gap-2">
         <Gauge :size="14" class="text-amber-500 shrink-0" />
         <span class="text-xs font-semibold text-slate-700 tracking-wide"
-          >下载速率限制</span
+          >{{ t('rules.rateLimit') }}</span
         >
         <span
           class="ml-auto text-xs font-medium"
@@ -193,8 +196,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
       </div>
 
       <p class="text-xs text-slate-500 leading-relaxed">
-        限制每秒最大瓦片下载数，防止请求过于密集触发服务器封禁。设为 0
-        表示不限速。
+        {{ t('rules.rateLimitDesc') }}
       </p>
 
       <!-- 滑块 -->
@@ -246,16 +248,15 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
     >
       <div class="flex items-center gap-2">
         <span class="text-xs font-semibold text-slate-700 tracking-wide"
-          >批次间停顿时间（ms）</span
+          >{{ t('rules.burstPause') }}</span
         >
         <span class="ml-auto text-xs font-mono text-slate-500">
-          {{ burstPauseMs === 0 ? "随机 600–2200ms" : `${burstPauseMs} ms` }}
+          {{ burstPauseMs === 0 ? t('rules.burstPauseDefault') : t('rules.burstPauseValue', { ms: burstPauseMs }) }}
         </span>
       </div>
 
       <p class="text-xs text-slate-500">
-        每下完一批瓦片后的等待时间，模拟用户地图拖拽行为。0 =
-        使用内置随机停顿（推荐）。
+        {{ t('rules.burstPauseDesc') }}
       </p>
 
       <div class="flex items-center gap-3">
@@ -271,7 +272,7 @@ const hourOptions = Array.from({ length: 24 }, (_, i) => ({
           class="flex-1 h-1.5 accent-blue-500 cursor-pointer"
         />
         <span class="w-16 text-right text-xs font-mono text-slate-600 shrink-0">
-          {{ burstPauseMs === 0 ? "自动" : burstPauseMs + "ms" }}
+          {{ burstPauseMs === 0 ? t('rules.auto') : burstPauseMs + 'ms' }}
         </span>
       </div>
     </div>

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
@@ -22,6 +23,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   done: [];
 }>();
+
+const { t } = useI18n();
 
 // ─── 状态 ──────────────────────────────────────────────────────────────────
 const payload = ref<ProgressPayload | null>(null);
@@ -60,21 +63,21 @@ const progressBarColor = computed(() => {
 const statusLabel = computed(() => {
   switch (payload.value?.status) {
     case "downloading":
-      return "下载中";
+      return t('progress.status.downloading')
     case "processing":
-      return "裁剪中";
+      return t('progress.status.processing')
     case "paused":
-      return "已暂停";
+      return t('progress.status.paused')
     case "completed":
-      return "已完成";
+      return t('progress.status.completed')
     case "completed_with_errors":
-      return "完成（含失败）";
+      return t('progress.status.completed_with_errors')
     case "failed":
-      return "失败";
+      return t('progress.status.failed')
     case "cancelled":
-      return "已取消";
+      return t('progress.status.cancelled')
     default:
-      return "等待中";
+      return t('progress.status.pending')
   }
 });
 
@@ -189,16 +192,12 @@ onUnmounted(() => {
       class="flex items-center justify-between text-[11px] text-(--color-text-secondary)"
     >
       <span v-if="payload?.status === 'processing'">
-        已裁剪 {{ formatCount(payload?.downloaded ?? 0) }}
-        /
-        {{ formatCount(payload?.total ?? 0) }} 瓦片
+        {{ t('progress.clipped', { done: formatCount(payload?.downloaded ?? 0), total: formatCount(payload?.total ?? 0) }) }}
       </span>
       <span v-else>
-        {{ formatCount(payload?.downloaded ?? 0) }}
-        /
-        {{ formatCount(payload?.total ?? 0) }} 瓦片
+        {{ t('progress.tiles', { done: formatCount(payload?.downloaded ?? 0), total: formatCount(payload?.total ?? 0) }) }}
         <span v-if="(payload?.failed ?? 0) > 0" class="text-red-500 ml-1">
-          ({{ payload!.failed }} 失败)
+          {{ t('progress.failed', { count: payload!.failed }) }}
         </span>
       </span>
       <span class="flex items-center gap-2 font-mono">
@@ -224,7 +223,7 @@ onUnmounted(() => {
           @click="pause"
         >
           <span class="i-lucide-pause size-3" />
-          暂停
+          {{ t('progress.pauseBtn') }}
         </button>
 
         <button
@@ -233,7 +232,7 @@ onUnmounted(() => {
           @click="resume"
         >
           <span class="i-lucide-play size-3" />
-          继续
+          {{ t('progress.resumeBtn') }}
         </button>
 
         <button
@@ -241,7 +240,7 @@ onUnmounted(() => {
           @click="requestCancel"
         >
           <span class="i-lucide-x size-3" />
-          取消
+          {{ t('progress.cancelBtn') }}
         </button>
       </div>
 
@@ -252,20 +251,20 @@ onUnmounted(() => {
           class="rounded-lg border border-red-200 bg-red-50 p-2.5 space-y-2"
         >
           <p class="text-[11px] text-red-700 font-medium">
-            确定取消此下载任务？
+            {{ t('progress.confirmCancel') }}
           </p>
           <div class="flex gap-1.5">
             <button
               class="flex-1 rounded-md px-2 py-1 text-xs border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
               @click="confirmingCancel = false"
             >
-              继续下载
+              {{ t('progress.keepDownloading') }}
             </button>
             <button
               class="flex-1 rounded-md px-2 py-1 text-xs border border-red-300 bg-red-100 text-red-700 hover:bg-red-200 transition-colors font-medium"
               @click="doCancel"
             >
-              确定取消
+              {{ t('progress.doCancel') }}
             </button>
           </div>
         </div>

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import logoUrl from "~/assets/logo.png";
+
+const { t } = useI18n();
 
 const emit = defineEmits<{ done: [] }>();
 
@@ -26,10 +29,10 @@ onMounted(() => {
       </div>
 
       <!-- 应用名称 -->
-      <div class="app-name">御图</div>
+      <div class="app-name">{{ t('appName') }}</div>
 
       <!-- 副标题 -->
-      <div class="app-sub">地理位置瓦片下载与管理工具</div>
+      <div class="app-sub">{{ t('splash.subtitle') }}</div>
 
       <!-- 底部装饰线 -->
       <div class="accent-line" />

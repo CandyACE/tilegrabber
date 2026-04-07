@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, computed } from "vue";
 import { getVersion } from "@tauri-apps/api/app";
+import { useI18n } from "vue-i18n";
 import {
   ExternalLink,
   MapPin,
@@ -12,19 +13,14 @@ import {
 } from "lucide-vue-next";
 import logoUrl from "~/assets/logo.png";
 
+const { t, tm } = useI18n();
+
 const appVersion = ref("");
 getVersion().then((v) => {
   appVersion.value = v;
 });
 
-const features = [
-  "支持 TMS / XYZ / WMTS 瓦片图源",
-  "多线程并发下载，断点续传",
-  "导出 MBTiles 或目录结构",
-  "内置 TMS / WMTS 发布服务",
-  "支持 .lrc / .lra / .ovmap 图层配置文件",
-  "支持天地图、星图、自定义图源",
-];
+const features = computed(() => tm('about.features') as string[])
 </script>
 
 <template>
@@ -45,10 +41,10 @@ const features = [
           class="text-base font-semibold"
           style="color: var(--color-text-primary)"
         >
-          关于御图
+          {{ t('about.title') }}
         </h2>
         <p class="text-xs" style="color: var(--color-text-muted)">
-          离线地图瓦片管理工具
+          {{ t('about.subtitle') }}
         </p>
       </div>
     </div>
@@ -74,10 +70,10 @@ const features = [
               class="text-xl font-bold tracking-tight"
               style="color: var(--color-text-primary)"
             >
-              御图
+              {{ t('appName') }}
             </h1>
             <p class="text-sm" style="color: var(--color-text-secondary)">
-              离线地图瓦片管理工具
+              {{ t('about.subtitle') }}
             </p>
             <div class="flex items-center gap-2 pt-1">
               <span
@@ -96,7 +92,7 @@ const features = [
                   color: #15803d;
                 "
               >
-                稳定版
+                {{ t('about.stableVersion') }}
               </span>
             </div>
           </div>
@@ -109,7 +105,7 @@ const features = [
             style="color: var(--color-text-primary)"
           >
             <Coffee class="size-4" style="color: var(--color-accent)" />
-            核心功能
+            {{ t('about.featuresTitle') }}
           </h3>
           <ul class="grid grid-cols-1 gap-2">
             <li
@@ -138,7 +134,7 @@ const features = [
             style="color: var(--color-text-primary)"
           >
             <Building2 class="size-4" style="color: var(--color-accent)" />
-            关于公司
+            {{ t('about.companyTitle') }}
           </h3>
           <div
             class="rounded-xl border overflow-hidden"
@@ -160,13 +156,13 @@ const features = [
                   class="text-xs font-medium"
                   style="color: var(--color-text-muted)"
                 >
-                  公司名称
+                  {{ t('about.companyNameLabel') }}
                 </p>
                 <p
                   class="text-sm mt-0.5"
                   style="color: var(--color-text-primary)"
                 >
-                  苏州御空未来科技有限公司
+                  {{ t('about.companyName') }}
                 </p>
               </div>
             </div>
@@ -186,13 +182,13 @@ const features = [
                   class="text-xs font-medium"
                   style="color: var(--color-text-muted)"
                 >
-                  行业领域
+                  {{ t('about.industryLabel') }}
                 </p>
                 <p
                   class="text-sm mt-0.5"
                   style="color: var(--color-text-primary)"
                 >
-                  无人机 · 地图数据 · 低空智联 · AI
+                  {{ t('about.industry') }}
                 </p>
               </div>
             </div>
@@ -209,7 +205,7 @@ const features = [
                   class="text-xs font-medium"
                   style="color: var(--color-text-muted)"
                 >
-                  联系方式
+                  {{ t('about.contactLabel') }}
                 </p>
                 <p
                   class="text-sm mt-0.5"
@@ -232,11 +228,11 @@ const features = [
           "
         >
           <p class="font-medium" style="color: var(--color-text-secondary)">
-            © 2026 苏州御空未来科技有限公司
+            {{ t('about.copyright') }}
           </p>
-          <p>保留所有权利。本软件仅供授权用户使用。</p>
+          <p>{{ t('about.rightsReserved') }}</p>
           <p class="pt-1">
-            地图数据版权归各数据提供方所有，使用前请确认已获得相应授权。
+            {{ t('about.mapDataNote') }}
           </p>
         </section>
       </div>

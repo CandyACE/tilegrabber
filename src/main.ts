@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import "./assets/css/main.css";
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { i18n } from "./i18n";
 
 window.addEventListener(
   "contextmenu",
@@ -25,4 +26,4 @@ if (!("__TAURI_INTERNALS__" in window)) {
   );
 }
 
-createApp(App).mount("#app");
+createApp(App).use(i18n).mount("#app");

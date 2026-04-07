@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from "vue";
+import { ref, watch, onUnmounted, computed } from "vue";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -19,11 +19,14 @@ import {
 import UiInput from "@/components/ui/input/Input.vue";
 import UiButton from "@/components/ui/button/Button.vue";
 import type { TileSource } from "~/types/tile-source";
+import { useI18n } from "vue-i18n";
 
 const emit = defineEmits<{
   confirm: [source: TileSource];
   close: [];
 }>();
+
+const { t } = useI18n();
 
 type SourceType = "file" | "wmts" | "tms" | "web";
 type Step = 1 | 2;
@@ -99,22 +102,32 @@ function applyRequestConfig(source: TileSource): TileSource {
   return { ...source, headers, extra_params, param_scripts };
 }
 
-const sourceTypeOptions = [
+const sourceTypeOptions = computed(() => [
   {
-    value: "file",
+    value: "file" as const,
     icon: Upload,
-    label: "本地文件",
-    desc: ".lrc / .lra / .ovmap 图层资源文件",
+    label: t('wizard.sourceFile'),
+    desc: t('wizard.sourceFileDesc'),
   },
   {
-    value: "wmts",
+    value: "wmts" as const,
     icon: Globe,
-    label: "WMTS 服务",
-    desc: "输入 GetCapabilities URL",
+    label: t('wizard.sourceWmts'),
+    desc: t('wizard.sourceWmtsDesc'),
   },
-  { value: "tms", icon: Link, label: "TMS/XYZ URL", desc: "输入瓦片 URL 模板" },
-  { value: "web", icon: Scan, label: "网页抓取", desc: "拦截浏览器实际请求" },
-] as const;
+  {
+    value: "tms" as const,
+    icon: Link,
+    label: t('wizard.sourceTms'),
+    desc: t('wizard.sourceTmsDesc'),
+  },
+  {
+    value: "web" as const,
+    icon: Scan,
+    label: t('wizard.sourceWeb'),
+    desc: t('wizard.sourceWebDesc'),
+  },
+] as const)
 
 function stopPolling() {
   if (pollTimer !== null) {
@@ -242,8 +255,8 @@ async function handleNext() {
 async function pickAndParseFile() {
   const selected = await open({
     multiple: false,
-    title: "选择图层资源文件",
-    filters: [{ name: "图层资源", extensions: ["lrc", "lra", "ovmap"] }],
+    title: t('wizard.selectFileTitle'),
+    filters: [{ name: t('wizard.selectFileFilter'), extensions: ["lrc", "lra", "ovmap"] }],
   });
   if (!selected) return;
   const filePath = typeof selected === "string" ? selected : selected[0];
@@ -262,14 +275,14 @@ async function pickAndParseFile() {
 
 async function parseWmts() {
   if (!urlInput.value.trim()) {
-    errorMsg.value = "请输入 WMTS 服务 URL";
+    errorMsg.value = t('wizard.errNoWmtsUrl');
     return;
   }
   const results: TileSource[] = await invoke("parse_wmts_url", {
     url: urlInput.value.trim(),
   });
   if (!results.length) {
-    errorMsg.value = "WMTS 服务未返回任何图层";
+    errorMsg.value = t('wizard.errNoLayers');
     return;
   }
   if (results.length === 1) {
@@ -285,7 +298,7 @@ async function parseWmts() {
 
 async function parseTms() {
   if (!urlInput.value.trim()) {
-    errorMsg.value = "请输入瓦片 URL 模板";
+    errorMsg.value = t('wizard.errNoTmsUrl');
     return;
   }
   const result: TileSource = await invoke("parse_tms_url", {
@@ -298,7 +311,7 @@ async function parseTms() {
 /** 开始抓取：打开 WebView 窗口，开始轮询捕获结果 */
 async function startCapture() {
   if (!urlInput.value.trim()) {
-    errorMsg.value = "请输入要抓取的网页 URL";
+    errorMsg.value = t('wizard.errNoWebUrl');
     return;
   }
   await invoke("clear_captured_tiles");
@@ -323,7 +336,7 @@ async function finishCapture() {
 
   const tiles: TileSource[] = await invoke("get_captured_tiles");
   if (!tiles.length) {
-    errorMsg.value = "未捕获到瓦片 URL，请打开抓取窗口后浏览地图再试";
+    errorMsg.value = t('wizard.noCaptured');
     return;
   }
   if (tiles.length === 1) {
@@ -373,10 +386,10 @@ function onLayerSelect(idx: number) {
                 </div>
                 <div>
                   <h2 class="text-sm font-semibold text-slate-900">
-                    选择数据源
+                    {{ t('wizard.selectSource') }}
                   </h2>
                   <p class="text-xs text-slate-500 mt-0.5">
-                    {{ step === 1 ? "选择来源类型并解析" : "选择要下载的图层" }}
+                    {{ step === 1 ? t('wizard.step1Desc') : t('wizard.step2Desc') }}
                   </p>
                 </div>
               </div>
@@ -467,11 +480,10 @@ function onLayerSelect(idx: number) {
                     </div>
                     <div>
                       <p class="text-sm font-medium text-slate-700">
-                        点击选择 .lrc、.lra 或 .ovmap 文件
+                        {{ t('wizard.filePickerTitle') }}
                       </p>
                       <p class="text-xs text-slate-500 mt-1">
-                        来自 OrbitGIS、EasyEarth、LocaSpaceViewer
-                        等软件导出的图层资源
+                        {{ t('wizard.filePickerDesc') }}
                       </p>
                     </div>
                   </div>
@@ -498,7 +510,7 @@ function onLayerSelect(idx: number) {
                       @keydown.enter="handleNext"
                     />
                     <p class="text-[11px] text-slate-400">
-                      输入 WMTS 服务的能力文档地址，将自动获取图层列表
+                      {{ t('wizard.wmtsHint') }}
                     </p>
                   </div>
                 </div>
@@ -516,7 +528,7 @@ function onLayerSelect(idx: number) {
                     <div>
                       <label
                         class="block text-xs font-medium text-slate-600 mb-1.5"
-                        >瓦片 URL 模板</label
+                        >{{ t('wizard.tmsLabel') }}</label
                       >
                       <UiInput
                         v-model="urlInput"
@@ -528,11 +540,11 @@ function onLayerSelect(idx: number) {
                     <div>
                       <label
                         class="block text-xs font-medium text-slate-600 mb-1.5"
-                        >图层名称（可选）</label
+                        >{{ t('wizard.customNameLabel') }}</label
                       >
                       <UiInput
                         v-model="customName"
-                        placeholder="自定义图层名称"
+                        :placeholder="t('wizard.customNamePlaceholder')"
                         class="w-full"
                       />
                     </div>
@@ -552,7 +564,7 @@ function onLayerSelect(idx: number) {
                   <div v-if="captureStatus === 'idle'" class="space-y-2 pb-1">
                     <label
                       class="block text-xs font-medium text-slate-600 mb-1.5"
-                      >网页 URL</label
+                      >{{ t('wizard.webUrlLabel') }}</label
                     >
                     <UiInput
                       v-model="urlInput"
@@ -561,7 +573,7 @@ function onLayerSelect(idx: number) {
                       @keydown.enter="handleNext"
                     />
                     <p class="text-[11px] text-slate-400">
-                      点击「开始抓取」后将打开浏览器窗口，浏览地图页面以触发瓦片请求，完成后点击「完成抓取」
+                      {{ t('wizard.webHint') }}
                     </p>
                   </div>
                   <!-- 抓取中：实时结果 -->
@@ -570,16 +582,16 @@ function onLayerSelect(idx: number) {
                       class="flex items-center gap-2 text-xs text-emerald-600 font-medium"
                     >
                       <Radio class="w-3.5 h-3.5 animate-pulse" />
-                      <span>正在捕获瓦片请求…</span>
+                      <span>{{ t('wizard.capturing') }}</span>
                       <span class="ml-auto text-slate-400"
-                        >已发现 {{ capturedTiles.length }} 个</span
+                        >{{ t('wizard.capturedCount', { count: capturedTiles.length }) }}</span
                       >
                     </div>
                     <div
                       v-if="capturedTiles.length === 0"
                       class="rounded-lg border border-dashed border-slate-200 p-3 text-[11px] text-slate-400 text-center"
                     >
-                      请在弹出的浏览器窗口中浏览地图，等待瓦片出现在此列表
+                      {{ t('wizard.captureWaiting') }}
                     </div>
                     <ul
                       v-else
@@ -635,7 +647,7 @@ function onLayerSelect(idx: number) {
                         d="M9 5l7 7-7 7"
                       />
                     </svg>
-                    <span>请求配置</span>
+                    <span>{{ t('wizard.requestConfig') }}</span>
                     <span
                       v-if="headerRows.length || scriptRows.length"
                       class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-600 font-semibold"
@@ -660,7 +672,7 @@ function onLayerSelect(idx: number) {
                         <div>
                           <div class="flex items-center justify-between mb-1.5">
                             <span class="text-xs font-medium text-slate-600"
-                              >请求头（HTTP Headers）</span
+                              >{{ t('wizard.httpHeaders') }}</span
                             >
                             <button
                               type="button"
@@ -668,15 +680,14 @@ function onLayerSelect(idx: number) {
                               @click="addHeaderRow"
                             >
                               <span class="text-base leading-none">+</span>
-                              添加
+                              {{ t('wizard.add') }}
                             </button>
                           </div>
                           <div
                             v-if="headerRows.length === 0"
                             class="text-[11px] text-slate-400 border border-dashed border-slate-200 rounded-lg p-2.5 text-center"
                           >
-                            暂无请求头，点击「添加」可设置
-                            Referer、Authorization 等
+                            {{ t('wizard.noHeaders') }}
                           </div>
                           <div
                             v-else
@@ -689,13 +700,13 @@ function onLayerSelect(idx: number) {
                             >
                               <input
                                 v-model="row.key"
-                                placeholder="键（如 Referer）"
+                                :placeholder="t('wizard.headerKey')"
                                 class="flex-1 min-w-0 text-[11px] font-mono bg-transparent outline-none placeholder:text-slate-300 text-slate-700"
                               />
                               <span class="text-slate-300 shrink-0">:</span>
                               <input
                                 v-model="row.value"
-                                placeholder="值"
+                                :placeholder="t('wizard.headerValue')"
                                 class="flex-2 min-w-0 text-[11px] font-mono bg-transparent outline-none placeholder:text-slate-300 text-slate-700"
                               />
                               <button
@@ -726,15 +737,15 @@ function onLayerSelect(idx: number) {
                           <div class="flex items-center justify-between mb-1.5">
                             <div>
                               <span class="text-xs font-medium text-slate-600"
-                                >动态参数脚本</span
+                                >{{ t('wizard.dynamicParams') }}</span
                               >
                               <p class="text-[10px] text-slate-400 mt-0.5">
-                                在 URL 模板中用
+                                {{ t('wizard.dynamicParamsHint') }}
                                 <code
                                   class="font-mono bg-slate-100 px-0.5 rounded"
-                                  >{参数名}</code
+                                  >{{ '{' + t('wizard.paramNameExample') + '}' }}</code
                                 >
-                                引用，脚本为 JS 表达式，下载前自动求值
+                                {{ t('wizard.dynamicParamsHintPost') }}
                               </p>
                             </div>
                             <button
@@ -743,23 +754,14 @@ function onLayerSelect(idx: number) {
                               @click="addScriptRow"
                             >
                               <span class="text-base leading-none">+</span>
-                              添加
+                              {{ t('wizard.add') }}
                             </button>
                           </div>
                           <div
                             v-if="scriptRows.length === 0"
                             class="text-[11px] text-slate-400 border border-dashed border-slate-200 rounded-lg p-2.5 text-center"
                           >
-                            例：名称
-                            <code class="font-mono bg-slate-100 px-0.5 rounded"
-                              >ts</code
-                            >，脚本
-                            <code class="font-mono bg-slate-100 px-0.5 rounded"
-                              >Date.now()</code
-                            >，URL 中用
-                            <code class="font-mono bg-slate-100 px-0.5 rounded"
-                              >{ts}</code
-                            >
+                            {{ t('wizard.dynamicParamsEmpty') }}
                           </div>
                           <div v-else class="space-y-1.5">
                             <div
@@ -777,11 +779,11 @@ function onLayerSelect(idx: number) {
                               >
                                 <span
                                   class="text-[10px] text-slate-400 shrink-0"
-                                  >名称</span
+                                  >{{ t('wizard.paramName') }}</span
                                 >
                                 <input
                                   v-model="row.name"
-                                  placeholder="参数名（如 token）"
+                                  :placeholder="t('wizard.paramNamePlaceholder')"
                                   class="flex-1 min-w-0 text-[11px] font-mono bg-transparent outline-none placeholder:text-slate-300 text-slate-700"
                                 />
                                 <button
@@ -807,7 +809,7 @@ function onLayerSelect(idx: number) {
                               <div class="px-2 py-1.5">
                                 <span
                                   class="text-[10px] text-slate-400 block mb-1"
-                                  >JS 表达式</span
+                                  >{{ t('wizard.jsExpr') }}</span
                                 >
                                 <textarea
                                   v-model="row.script"
@@ -851,13 +853,11 @@ function onLayerSelect(idx: number) {
                 <!-- 左：图层列表 -->
                 <div class="flex-1 min-w-0">
                   <p class="text-sm text-slate-600 mb-3">
-                    {{
-                      sourceType === "web" ? "页面中发现" : "该 WMTS 服务包含"
-                    }}
+                    {{ sourceType === "web" ? t('wizard.webFoundPrefix') : t('wizard.wmtsContainsPrefix') }}
                     <strong class="text-slate-900">{{
                       wmtsLayers.length
                     }}</strong>
-                    个{{ sourceType === "web" ? "瓦片服务" : "图层" }}，请选择：
+                    {{ sourceType === "web" ? t('wizard.webFoundSuffix') : t('wizard.wmtsContainsSuffix') }}
                   </p>
                   <div
                     class="space-y-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200"
@@ -905,7 +905,7 @@ function onLayerSelect(idx: number) {
                     class="flex items-center gap-1.5 text-xs font-medium text-slate-600 mb-2"
                   >
                     <Eye class="w-3.5 h-3.5" />
-                    <span>图层预览</span>
+                    <span>{{ t('wizard.layerPreview') }}</span>
                   </div>
                   <div
                     class="rounded-xl overflow-hidden border border-slate-200 bg-slate-100 relative"
@@ -960,12 +960,12 @@ function onLayerSelect(idx: number) {
                 step = 1;
                 errorMsg = '';
               "
-              >返回</UiButton
+              >{{ t('wizard.back') }}</UiButton
             >
             <div v-else />
             <div class="flex items-center gap-2">
               <UiButton variant="ghost" size="sm" @click="emit('close')"
-                >取消</UiButton
+                >{{ t('wizard.cancel') }}</UiButton
               >
               <UiButton
                 v-if="sourceType !== 'file' || step === 2"
@@ -989,12 +989,12 @@ function onLayerSelect(idx: number) {
                 <Check v-else-if="step === 2" class="size-3.5" />
                 {{
                   step === 2
-                    ? "确认选择"
+                    ? t('wizard.confirm')
                     : sourceType === "web"
                       ? captureStatus === "capturing"
-                        ? "完成抓取"
-                        : "开始抓取"
-                      : "解析"
+                        ? t('wizard.stopCapture')
+                        : t('wizard.startCapture')
+                      : t('wizard.parse')
                 }}
                 <ArrowRight
                   v-if="

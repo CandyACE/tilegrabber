@@ -14,6 +14,7 @@ import {
   Play,
   FolderOpen,
 } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 import ExportDialog from "./ExportDialog.vue";
 import { useTaskDetail } from "~/composables/useTaskDetail";
 import { useExportJobs } from "~/composables/useExportJobs";
@@ -72,6 +73,7 @@ const liveSpeedMb = ref(0); // MB/秒
 const liveClipDone = ref(0);
 const liveClipTotal = ref(0);
 
+const { t } = useI18n();
 const { selectedTaskStatus } = useTaskDetail();
 const { getActiveJobForTask, getHistoryForTask, revealInExplorer } =
   useExportJobs();
@@ -79,11 +81,11 @@ const { getActiveJobForTask, getHistoryForTask, revealInExplorer } =
 const activeExportJob = computed(() => getActiveJobForTask(props.taskId));
 const exportHistory = computed(() => getHistoryForTask(props.taskId));
 
-const exportFormatLabel: Record<string, string> = {
-  mbtiles: "MBTiles",
-  directory: "目录 (z/x/y)",
-  tiff: "GeoTIFF",
-};
+const exportFormatLabel = computed((): Record<string, string> => ({
+  mbtiles: t('taskDetail.exportFormat.mbtiles'),
+  directory: t('taskDetail.exportFormat.directory'),
+  tiff: t('taskDetail.exportFormat.tiff'),
+}));
 
 function fmtExportCount(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -244,19 +246,19 @@ function flyToTask() {
 }
 
 // ─── 样式工具 ──────────────────────────────────────────────────────────────
-const statusMap: Record<string, { label: string; cls: string }> = {
-  pending: { label: "等待中", cls: "bg-slate-100 text-slate-500" },
-  downloading: { label: "下载中", cls: "bg-blue-50 text-blue-700" },
-  processing: { label: "裁剪中", cls: "bg-purple-50 text-purple-700" },
-  paused: { label: "已暂停", cls: "bg-amber-50 text-amber-700" },
-  completed: { label: "已完成", cls: "bg-green-50 text-green-700" },
+const statusMap = computed((): Record<string, { label: string; cls: string }> => ({
+  pending: { label: t('taskDetail.status.pending'), cls: "bg-slate-100 text-slate-500" },
+  downloading: { label: t('taskDetail.status.downloading'), cls: "bg-blue-50 text-blue-700" },
+  processing: { label: t('taskDetail.status.processing'), cls: "bg-purple-50 text-purple-700" },
+  paused: { label: t('taskDetail.status.paused'), cls: "bg-amber-50 text-amber-700" },
+  completed: { label: t('taskDetail.status.completed'), cls: "bg-green-50 text-green-700" },
   completed_with_errors: {
-    label: "完成(含失败)",
+    label: t('taskDetail.status.completed_with_errors'),
     cls: "bg-orange-50 text-orange-700",
   },
-  failed: { label: "失败", cls: "bg-red-50 text-red-700" },
-  cancelled: { label: "已取消", cls: "bg-slate-100 text-slate-500" },
-};
+  failed: { label: t('taskDetail.status.failed'), cls: "bg-red-50 text-red-700" },
+  cancelled: { label: t('taskDetail.status.cancelled'), cls: "bg-slate-100 text-slate-500" },
+}));
 
 const logLevelMap: Record<string, string> = {
   info: "text-slate-500",
@@ -265,7 +267,7 @@ const logLevelMap: Record<string, string> = {
 };
 
 function statusInfo(s: string) {
-  return statusMap[s] ?? { label: s, cls: "bg-slate-100 text-slate-500" };
+  return statusMap.value[s] ?? { label: s, cls: "bg-slate-100 text-slate-500" };
 }
 
 function percent(t: BackendTask) {
@@ -309,12 +311,12 @@ function logTime(iso: string) {
         @click="emit('close')"
       >
         <ArrowLeft class="size-3.5" />
-        <span>返回</span>
+        <span>{{ t('taskDetail.back') }}</span>
       </button>
       <!-- 地图定位 -->
       <button
         v-if="task"
-        title="在地图中定位"
+        :title="t('taskDetail.locateOnMap')"
         class="flex items-center justify-center size-7 rounded-md transition-colors"
         style="color: var(--color-text-secondary)"
         @click="flyToTask"
@@ -354,7 +356,7 @@ function logTime(iso: string) {
         <div class="grid grid-cols-3 gap-2 text-center">
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              已下载
+              {{ t('taskDetail.downloaded') }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -365,7 +367,7 @@ function logTime(iso: string) {
           </div>
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              失败
+              {{ t('taskDetail.failed') }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -376,7 +378,7 @@ function logTime(iso: string) {
           </div>
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              总计
+              {{ t('taskDetail.total') }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -402,7 +404,7 @@ function logTime(iso: string) {
                 ? liveSpeedTiles.toFixed(1)
                 : Math.round(liveSpeedTiles)
             }}
-            瓦片/s
+            {{ t('taskDetail.tilesPerSec') }}
           </span>
           <span>
             {{
@@ -423,10 +425,10 @@ function logTime(iso: string) {
         <div class="flex items-center justify-between text-xs">
           <span class="flex items-center gap-1.5 font-medium text-indigo-600">
             <PackageCheck class="size-3.5" />
-            导出中 —
             {{
-              exportFormatLabel[activeExportJob.format] ??
-              activeExportJob.format
+              t('taskDetail.exporting', {
+                format: exportFormatLabel[activeExportJob.format] ?? activeExportJob.format,
+              })
             }}
           </span>
           <span
@@ -465,7 +467,7 @@ function logTime(iso: string) {
           class="text-xs font-semibold mb-2"
           style="color: var(--color-text-primary)"
         >
-          导出记录
+          {{ t('taskDetail.exportHistory') }}
         </p>
         <div class="space-y-2">
           <div
@@ -499,7 +501,7 @@ function logTime(iso: string) {
               <span
                 v-else-if="rec.status === 'error'"
                 class="text-[11px] text-red-500"
-                >失败</span
+                >{{ t('taskDetail.failed') }}</span
               >
             </div>
             <p
@@ -519,7 +521,7 @@ function logTime(iso: string) {
                 @click="revealInExplorer(rec.destPath)"
               >
                 <FolderOpen class="size-3" />
-                打开位置
+                {{ t('taskDetail.openLocation') }}
               </button>
               <p
                 v-else-if="rec.error"
@@ -535,13 +537,13 @@ function logTime(iso: string) {
       <!-- 元信息 -->
       <dl class="space-y-1.5 text-xs">
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">层级范围</dt>
+          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.zoomRange') }}</dt>
           <dd class="font-mono" style="color: var(--color-text-primary)">
             z{{ task.minZoom }} – z{{ task.maxZoom }}
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">边界框</dt>
+          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.bbox') }}</dt>
           <dd
             class="font-mono text-[10px]"
             style="color: var(--color-text-primary)"
@@ -552,13 +554,13 @@ function logTime(iso: string) {
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">创建时间</dt>
+          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.createdAt') }}</dt>
           <dd style="color: var(--color-text-primary)">
             {{ formatDate(task.createdAt) }}
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">更新时间</dt>
+          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.updatedAt') }}</dt>
           <dd style="color: var(--color-text-primary)">
             {{ formatDate(task.updatedAt) }}
           </dd>
@@ -576,7 +578,7 @@ function logTime(iso: string) {
             <div class="flex items-center justify-between text-xs">
               <span class="flex items-center gap-1.5 text-purple-600 font-medium">
                 <Loader class="size-3.5 animate-spin" />
-                裁剪中
+                {{ t('taskDetail.clipping') }}
               </span>
               <span
                 v-if="liveClipTotal > 0"
@@ -609,7 +611,7 @@ function logTime(iso: string) {
           >
             <Loader v-if="pausing" class="size-3.5 animate-spin" />
             <Pause v-else class="size-3.5" />
-            {{ pausing ? "正在暂停…" : "暂停下载" }}
+            {{ pausing ? t('taskDetail.pausing') : t('taskDetail.pauseDownload') }}
           </button>
         </template>
 
@@ -620,7 +622,7 @@ function logTime(iso: string) {
             @click="resumeTask"
           >
             <Play class="size-3.5" />
-            继续下载
+            {{ t('taskDetail.resumeDownload') }}
           </button>
           <button
             v-if="task.downloadedTiles > 0"
@@ -628,7 +630,7 @@ function logTime(iso: string) {
             @click="openExport"
           >
             <PackageOpen class="size-3.5" />
-            导出瓦片
+            {{ t('taskDetail.exportTiles') }}
           </button>
           <!-- 删除确认 -->
           <div
@@ -636,7 +638,7 @@ function logTime(iso: string) {
             class="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 flex flex-col gap-2"
           >
             <p class="text-xs text-red-600 font-medium">
-              确定删除此任务？瓦片数据将一并清除，此操作不可撤销。
+              {{ t('taskDetail.confirmDelete') }}
             </p>
             <div class="flex gap-2">
               <button
@@ -644,13 +646,13 @@ function logTime(iso: string) {
                 :disabled="deleting"
                 @click="deleteTask"
               >
-                {{ deleting ? "删除中…" : "确认删除" }}
+                {{ deleting ? t('taskDetail.deleting') : t('taskDetail.confirmDeleteBtn') }}
               </button>
               <button
                 class="flex-1 py-1 rounded-md text-xs font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="showDeleteConfirm = false"
               >
-                取消
+                {{ t('taskDetail.cancelDelete') }}
               </button>
             </div>
           </div>
@@ -660,7 +662,7 @@ function logTime(iso: string) {
             @click="showDeleteConfirm = true"
           >
             <Trash2 class="size-3.5" />
-            删除任务
+            {{ t('taskDetail.deleteTask') }}
           </button>
         </template>
 
@@ -672,7 +674,7 @@ function logTime(iso: string) {
             @click="retryFailed"
           >
             <RefreshCw class="size-3.5" />
-            重试 {{ task.failedTiles }} 个失败瓦片
+            {{ t('taskDetail.retryFailed', { count: task.failedTiles }) }}
           </button>
           <button
             v-if="task.downloadedTiles > 0"
@@ -680,7 +682,7 @@ function logTime(iso: string) {
             @click="openExport"
           >
             <PackageOpen class="size-3.5" />
-            导出瓦片
+            {{ t('taskDetail.exportTiles') }}
           </button>
           <!-- 删除确认 -->
           <div
@@ -688,7 +690,7 @@ function logTime(iso: string) {
             class="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 flex flex-col gap-2"
           >
             <p class="text-xs text-red-600 font-medium">
-              确定删除此任务？瓦片数据将一并清除，此操作不可撤销。
+              {{ t('taskDetail.confirmDelete') }}
             </p>
             <div class="flex gap-2">
               <button
@@ -696,13 +698,13 @@ function logTime(iso: string) {
                 :disabled="deleting"
                 @click="deleteTask"
               >
-                {{ deleting ? "删除中…" : "确认删除" }}
+                {{ deleting ? t('taskDetail.deleting') : t('taskDetail.confirmDeleteBtn') }}
               </button>
               <button
                 class="flex-1 py-1 rounded-md text-xs font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="showDeleteConfirm = false"
               >
-                取消
+                {{ t('taskDetail.cancelDelete') }}
               </button>
             </div>
           </div>
@@ -712,7 +714,7 @@ function logTime(iso: string) {
             @click="showDeleteConfirm = true"
           >
             <Trash2 class="size-3.5" />
-            删除任务
+            {{ t('taskDetail.deleteTask') }}
           </button>
         </template>
       </div>

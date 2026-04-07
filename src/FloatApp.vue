@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -14,6 +15,8 @@ interface ProgressPayload {
 const speedMap = ref<Record<string, number>>({});
 
 const totalSpeed = ref(0);
+
+const { t } = useI18n();
 
 function formatSpeed(bps: number): string {
   if (bps <= 0) return "—";
@@ -78,7 +81,7 @@ async function showMain() {
       </svg>
     </div>
     <div class="float-info" data-tauri-drag-region>
-      <span class="float-label" data-tauri-drag-region>下载速度</span>
+      <span class="float-label" data-tauri-drag-region>{{ t('floatWindow.downloadSpeed') }}</span>
       <span class="float-speed" data-tauri-drag-region>{{
         formatSpeed(totalSpeed)
       }}</span>

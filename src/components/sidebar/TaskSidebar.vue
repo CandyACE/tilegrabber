@@ -11,6 +11,7 @@ import { Plus, Inbox, Upload } from "lucide-vue-next";
 import TaskCard from "./TaskCard.vue";
 import type { Task, TaskStatus } from "./TaskCard.vue";
 import { useExportJobs } from "~/composables/useExportJobs";
+import { useI18n } from "vue-i18n";
 
 // ─── Tauri 后端返回的 Task 格式（camelCase） ───────────────────────────────
 interface BackendTask {
@@ -82,14 +83,16 @@ const emit = defineEmits<{
 
 type FilterKey = "all" | TaskStatus;
 
+const { t } = useI18n();
+
 const activeFilter = ref<FilterKey>("all");
 
-const filters: { key: FilterKey; label: string }[] = [
-  { key: "all", label: "全部" },
-  { key: "downloading", label: "进行中" },
-  { key: "completed", label: "完成" },
-  { key: "failed", label: "失败" },
-];
+const filters = computed((): { key: FilterKey; label: string }[] => [
+  { key: "all", label: t('tasks.filterAll') },
+  { key: "downloading", label: t('tasks.filterDownloading') },
+  { key: "completed", label: t('tasks.filterCompleted') },
+  { key: "failed", label: t('tasks.filterFailed') },
+]);
 
 // ─── 真实任务数据 ──────────────────────────────────────────────────────────
 const tasks = ref<Task[]>([]);
@@ -300,13 +303,13 @@ defineExpose({ loadTasks });
           class="text-sm font-semibold"
           style="color: var(--color-text-primary)"
         >
-          下载任务
+          {{ t('tasks.title') }}
         </h2>
         <div class="flex items-center gap-1">
           <button
             class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors hover:bg-slate-100"
             style="color: var(--color-text-secondary)"
-            title="导入任务包"
+            :title="t('tasks.importPkg')"
             @click="handleImport"
           >
             <Upload class="size-3.5" />
@@ -317,7 +320,7 @@ defineExpose({ loadTasks });
             @click="emit('new-task')"
           >
             <Plus class="size-3.5" />
-            创建下载任务
+            {{ t('tasks.createTask') }}
           </button>
         </div>
       </div>
@@ -382,10 +385,10 @@ defineExpose({ loadTasks });
             class="text-sm font-medium mb-1"
             style="color: var(--color-text-secondary)"
           >
-            暂无任务
+            {{ t('tasks.emptyTitle') }}
           </p>
           <p class="text-xs" style="color: var(--color-text-muted)">
-            点击「创建下载任务」按钮开始
+            {{ t('tasks.emptyDesc') }}
           </p>
         </div>
       </div>

@@ -16,6 +16,7 @@ import {
   PackageCheck,
   HardDrive,
 } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 import type { ExportRecord } from "~/composables/useExportJobs";
 
 export type TaskStatus =
@@ -48,6 +49,8 @@ export interface Task {
   boundsNorth?: number;
 }
 
+const { t } = useI18n();
+
 const props = defineProps<{
   task: Task;
   live?: { speed: number; speedMb: number; eta: number | null };
@@ -64,53 +67,53 @@ const emit = defineEmits<{
   export: [id: string];
 }>();
 
-const statusConfig: Record<
+const statusConfig = computed((): Record<
   TaskStatus,
   { label: string; bgColor: string; textColor: string; icon: object }
-> = {
+> => ({
   downloading: {
-    label: "下载中",
+    label: t('taskCard.status.downloading'),
     bgColor: "#EBF2FA",
     textColor: "#0969DA",
     icon: Download,
   },
   paused: {
-    label: "已暂停",
+    label: t('taskCard.status.paused'),
     bgColor: "#FFF8C5",
     textColor: "#9A6700",
     icon: PauseCircle,
   },
   completed: {
-    label: "已完成",
+    label: t('taskCard.status.completed'),
     bgColor: "#DAFBE1",
     textColor: "#1A7F37",
     icon: CheckCircle2,
   },
   completed_with_errors: {
-    label: "完成（含失败）",
+    label: t('taskCard.status.completed_with_errors'),
     bgColor: "#FFF8C5",
     textColor: "#9A6700",
     icon: AlertCircle,
   },
   failed: {
-    label: "失败",
+    label: t('taskCard.status.failed'),
     bgColor: "#FFEBE9",
     textColor: "#CF222E",
     icon: AlertCircle,
   },
   pending: {
-    label: "等待中",
+    label: t('taskCard.status.pending'),
     bgColor: "#F6F8FA",
     textColor: "#57606A",
     icon: Clock,
   },
   processing: {
-    label: "裁剪中",
+    label: t('taskCard.status.processing'),
     bgColor: "#E8DAFF",
     textColor: "#6639BA",
     icon: Download,
   },
-};
+}));
 
 const progressPercent = computed(() => {
   if (!props.task.totalTiles) return 0;
@@ -146,7 +149,7 @@ const formatEta = (secs: number) => {
 
 const sc = computed(
   () =>
-    statusConfig[props.task.status] ?? {
+    statusConfig.value[props.task.status] ?? {
       label: props.task.status,
       bgColor: "#F6F8FA",
       textColor: "#57606A",
@@ -194,10 +197,10 @@ watch(
             );
             color: var(--color-accent);
           "
-          title="此任务数据来自外部文件，请勿移动或删除该 .tgr 文件"
+          :title="t('taskCard.externalTitle')"
         >
           <HardDrive class="size-3" />
-          外部
+          {{ t('taskCard.externalBadge') }}
         </span>
         <span
           class="flex items-center gap-1 px-1.5 py-0.5 rounded-full text-xs font-medium whitespace-nowrap"
@@ -212,7 +215,7 @@ watch(
     <!-- 来源信息行 -->
     <p class="text-xs mb-2 font-mono" style="color: var(--color-text-muted)">
       {{ task.sourceType }} · z{{ task.minZoom }}–z{{ task.maxZoom }} ·
-      {{ task.totalTiles.toLocaleString() }} 块
+      {{ task.totalTiles.toLocaleString() }} {{ t('taskCard.tiles') }}
     </p>
 
     <!-- 进度条 -->
@@ -242,7 +245,7 @@ watch(
         class="text-blue-600"
       >
         {{ live.speed < 1 ? live.speed.toFixed(1) : Math.round(live.speed) }}
-        片/s
+        {{ t('taskDetail.tilesPerSec') }}
       </span>
     </div>
 
@@ -260,7 +263,7 @@ watch(
             : (live.speedMb * 1024).toFixed(0) + " KB/s"
         }}</span>
       </span>
-      <span v-if="live.eta">剩余 {{ formatEta(live.eta) }}</span>
+      <span v-if="live.eta">{{ t('taskCard.remaining', { time: formatEta(live.eta) }) }}</span>
     </div>
 
     <!-- 导出进度条（有活跃导出任务时显示） -->
@@ -271,7 +274,7 @@ watch(
           style="color: var(--color-text-secondary)"
         >
           <PackageCheck class="size-3 text-indigo-500" />
-          导出中
+          {{ t('taskCard.exporting') }}
         </span>
         <span
           v-if="exportJob.total > 0"
@@ -325,7 +328,7 @@ watch(
       >
         <Loader v-if="pausing" class="size-3 animate-spin" />
         <Pause v-else class="size-3" />
-        {{ pausing ? "正在暂停…" : "暂停" }}
+        {{ pausing ? t('taskCard.pausing') : t('taskCard.pause') }}
       </button>
       <!-- 已暂停：继续 + 导出 + 停止 -->
       <button
@@ -334,7 +337,7 @@ watch(
         style="color: var(--color-accent); border-color: var(--color-accent)"
         @click="emit('resume', task.id)"
       >
-        <Play class="size-3" />继续
+        <Play class="size-3" />{{ t('taskCard.resume') }}
       </button>
       <button
         v-if="task.status === 'paused'"
@@ -345,7 +348,7 @@ watch(
         "
         @click="emit('export', task.id)"
       >
-        <PackageOpen class="size-3" />导出
+        <PackageOpen class="size-3" />{{ t('taskCard.export') }}
       </button>
     </div>
 
@@ -360,7 +363,7 @@ watch(
         style="color: #9a6700; border-color: #fff8c5"
         @click="emit('retry', task.id)"
       >
-        <RefreshCw class="size-3" />重试
+        <RefreshCw class="size-3" />{{ t('taskCard.retry') }}
       </button>
       <button
         class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors hover:bg-slate-50"
@@ -370,14 +373,14 @@ watch(
         "
         @click="emit('export', task.id)"
       >
-        <PackageOpen class="size-3" />导出
+        <PackageOpen class="size-3" />{{ t('taskCard.export') }}
       </button>
       <button
         class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors hover:bg-red-50"
         style="color: #cf222e; border-color: #ffebe9"
         @click="emit('delete', task.id)"
       >
-        <Trash2 class="size-3" />删除
+        <Trash2 class="size-3" />{{ t('taskCard.delete') }}
       </button>
     </div>
 
@@ -399,7 +402,7 @@ watch(
         "
         @click="emit('export', task.id)"
       >
-        <PackageOpen class="size-3" />导出
+        <PackageOpen class="size-3" />{{ t('taskCard.export') }}
       </button>
       <button
         class="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors hover:bg-slate-50"
@@ -409,7 +412,7 @@ watch(
         "
         @click="emit('delete', task.id)"
       >
-        <Trash2 class="size-3" />删除
+        <Trash2 class="size-3" />{{ t('taskCard.delete') }}
       </button>
     </div>
   </div>

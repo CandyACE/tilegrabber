@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -24,117 +25,81 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import RulesConfig from "./RulesConfig.vue";
+import { useUpdateState } from "~/composables/useUpdateState";
+
+const { t, locale } = useI18n()
 
 // ─── 类型 ────────────────────────────────────────────────────────────────────
 type Settings = Record<string, string>;
 
-// ─── CPU 核数（用于建议并发数） ────────────────────────────────────────────────
-const cpuCores = navigator.hardwareConcurrency || 4;
-const suggestedConcurrency = Math.max(8, Math.min(32, cpuCores * 2));
-
 // ─── 分组定义 ─────────────────────────────────────────────────────────────────
-const groups = [
+const cpuCores = navigator.hardwareConcurrency || 4
+const suggestedConcurrency = Math.max(8, Math.min(32, cpuCores * 2))
+
+const groups = computed(() => [
   {
-    id: "app",
-    label: "应用",
+    id: 'app',
+    label: t('settings.groups.app'),
     icon: Settings2,
     fields: [
       {
-        key: "app.tiles_dir",
-        label: "瓦片存储目录",
-        type: "path",
-        hint: "瓦片文件的保存位置。留空时自动存入「文档/御图/tiles」（用户目录，始终可写）",
+        key: 'app.tiles_dir',
+        label: t('settings.fields.app_tiles_dir.label'),
+        type: 'path',
+        hint: t('settings.fields.app_tiles_dir.hint'),
       },
       {
-        key: "app.float_window",
-        label: "显示悬浮速度窗口",
-        type: "toggle",
-        hint: "主界面最小化到托盘后，显示可拖拽的悬浮速度窗口；双击可唤起主界面",
+        key: 'app.float_window',
+        label: t('settings.fields.app_float_window.label'),
+        type: 'toggle',
+        hint: t('settings.fields.app_float_window.hint'),
       },
       {
-        key: "app.close_action",
-        label: "点击关闭按钮时",
-        type: "select",
-        hint: "按下窗口关闭按钮（或 Alt+F4）时的行为",
+        key: 'app.close_action',
+        label: t('settings.fields.app_close_action.label'),
+        type: 'select',
+        hint: t('settings.fields.app_close_action.hint'),
         options: [
-          { value: "ask", label: "每次询问" },
-          { value: "tray", label: "最小化到系统托盘" },
-          { value: "quit", label: "直接退出" },
+          { value: 'ask', label: t('settings.fields.app_close_action.optAsk') },
+          { value: 'tray', label: t('settings.fields.app_close_action.optTray') },
+          { value: 'quit', label: t('settings.fields.app_close_action.optQuit') },
+        ],
+      },
+      {
+        key: 'app.language',
+        label: t('settings.fields.app_language.label'),
+        type: 'select',
+        hint: t('settings.fields.app_language.hint'),
+        options: [
+          { value: 'auto', label: t('settings.fields.app_language.optAuto') },
+          { value: 'zh-CN', label: '中文' },
+          { value: 'en', label: 'English' },
         ],
       },
     ],
   },
   {
-    id: "download",
-    label: "下载配置",
+    id: 'download',
+    label: t('settings.groups.download'),
     icon: Download,
     fields: [
-      {
-        key: "download.concurrency",
-        label: "并发数",
-        type: "number",
-        min: 1,
-        max: 64,
-        hint: `同时下载的瓦片线程数（${cpuCores} 核 CPU，建议 ${suggestedConcurrency}+），过高可能触发服务器限流`,
-      },
-      {
-        key: "download.timeout_secs",
-        label: "超时（秒）",
-        type: "number",
-        min: 5,
-        max: 120,
-        hint: "单个瓦片请求的最大等待时间",
-      },
-      {
-        key: "download.max_retries",
-        label: "最大重试次数",
-        type: "number",
-        min: 0,
-        max: 10,
-        hint: "失败后自动重试的最大次数",
-      },
-      {
-        key: "download.retry_delay_ms",
-        label: "重试延迟基数（ms）",
-        type: "number",
-        min: 100,
-        max: 10000,
-        hint: "首次重试等待时间，之后指数增长",
-      },
-      {
-        key: "download.delay_min_ms",
-        label: "请求间隔下限（ms）",
-        type: "number",
-        min: 0,
-        max: 5000,
-        hint: "相邻两次瓦片请求的最小随机延迟",
-      },
-      {
-        key: "download.delay_max_ms",
-        label: "请求间隔上限（ms）",
-        type: "number",
-        min: 0,
-        max: 5000,
-        hint: "相邻两次瓦片请求的最大随机延迟",
-      },
+      { key: 'download.concurrency', label: t('settings.fields.download_concurrency.label'), type: 'number', min: 1, max: 64, hint: t('settings.fields.download_concurrency.hint', { cores: cpuCores, suggested: suggestedConcurrency }) },
+      { key: 'download.timeout_secs', label: t('settings.fields.download_timeout_secs.label'), type: 'number', min: 5, max: 120, hint: t('settings.fields.download_timeout_secs.hint') },
+      { key: 'download.max_retries', label: t('settings.fields.download_max_retries.label'), type: 'number', min: 0, max: 10, hint: t('settings.fields.download_max_retries.hint') },
+      { key: 'download.retry_delay_ms', label: t('settings.fields.download_retry_delay_ms.label'), type: 'number', min: 100, max: 10000, hint: t('settings.fields.download_retry_delay_ms.hint') },
+      { key: 'download.delay_min_ms', label: t('settings.fields.download_delay_min_ms.label'), type: 'number', min: 0, max: 5000, hint: t('settings.fields.download_delay_min_ms.hint') },
+      { key: 'download.delay_max_ms', label: t('settings.fields.download_delay_max_ms.label'), type: 'number', min: 0, max: 5000, hint: t('settings.fields.download_delay_max_ms.hint') },
     ],
   },
   {
-    id: "server",
-    label: "发布服务",
+    id: 'server',
+    label: t('settings.groups.server'),
     icon: Server,
     fields: [
-      {
-        key: "server.default_port",
-        label: "默认端口",
-        type: "number",
-        min: 1024,
-        max: 65535,
-        hint: "瓦片发布服务的默认监听端口",
-      },
+      { key: 'server.default_port', label: t('settings.fields.server_default_port.label'), type: 'number', min: 1024, max: 65535, hint: t('settings.fields.server_default_port.hint') },
     ],
   },
-];
+])
 
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const settings = ref<Settings>({});
@@ -152,6 +117,11 @@ async function loadSettings() {
     // 兼容旧版本空字符串存储
     if (!result["app.close_action"]) result["app.close_action"] = "ask";
     settings.value = result;
+    // Apply saved language setting
+    const lang = result['app.language']
+    if (lang && lang !== 'auto' && lang !== '') {
+      locale.value = lang
+    }
   } catch (e) {
     errorMsg.value = String(e);
   }
@@ -162,6 +132,14 @@ async function saveSettings() {
   errorMsg.value = "";
   try {
     await invoke("set_all_settings", { settings: settings.value });
+    // Apply language change immediately
+    const lang = settings.value['app.language']
+    if (lang && lang !== 'auto' && lang !== '') {
+      locale.value = lang
+    } else if (!lang || lang === 'auto') {
+      const nav = navigator.language || ''
+      locale.value = nav.startsWith('zh') ? 'zh-CN' : 'en'
+    }
     // 即时应用悬浮窗开关
     const floatWin = await WebviewWindow.getByLabel("float");
     if (settings.value["app.float_window"] === "true") {
@@ -239,6 +217,26 @@ interface UpdateCheckResult {
 const updateChecking = ref(false);
 const updateResult = ref<UpdateCheckResult | null>(null);
 const updateError = ref("");
+// 标记结果是否来自后台自动检测
+const updateFromAutoCheck = ref(false);
+
+// 接收后台静默检查结果：面板挂载时若已有结果则直接填充
+const { autoCheckResult, setUpdateResult } = useUpdateState();
+
+onMounted(() => {
+  if (autoCheckResult.value && !updateResult.value) {
+    updateResult.value = autoCheckResult.value;
+    updateFromAutoCheck.value = true;
+  }
+});
+
+// 若后台检查在面板已打开后才返回，也能即时更新
+watch(autoCheckResult, (val) => {
+  if (val && !updateResult.value) {
+    updateResult.value = val;
+    updateFromAutoCheck.value = true;
+  }
+});
 
 // 下载安装状态
 const downloading = ref(false);
@@ -256,8 +254,11 @@ async function checkUpdate() {
   updateChecking.value = true;
   updateResult.value = null;
   updateError.value = "";
+  updateFromAutoCheck.value = false;
   try {
-    updateResult.value = await invoke<UpdateCheckResult>("check_for_update");
+    const result = await invoke<UpdateCheckResult>("check_for_update");
+    updateResult.value = result;
+    setUpdateResult(result);
   } catch (e) {
     updateError.value = String(e);
   } finally {
@@ -311,7 +312,7 @@ function formatBytes(bytes: number): string {
         <Settings2 :size="14" class="text-slate-400 shrink-0" />
         <span
           class="text-xs font-semibold text-slate-600 tracking-wide uppercase"
-          >应用设置</span
+          >{{ t('settings.title') }}</span
         >
         <div class="ml-auto flex items-center gap-1.5">
           <button
@@ -320,7 +321,7 @@ function formatBytes(bytes: number): string {
             title="恢复默认"
           >
             <RotateCcw :size="11" />
-            恢复默认
+            {{ t('settings.resetDefaults') }}
           </button>
           <button
             @click="saveSettings"
@@ -328,7 +329,7 @@ function formatBytes(bytes: number): string {
             class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Save :size="11" />
-            {{ saved ? "已保存" : "保存" }}
+            {{ saved ? t('settings.saved') : t('settings.save') }}
           </button>
         </div>
       </div>
@@ -390,13 +391,13 @@ function formatBytes(bytes: number): string {
                   ).value
                 "
                 type="text"
-                :placeholder="'默认：安装目录/tiles'"
+                :placeholder="t('settings.fields.app_tiles_dir.placeholder')"
                 class="min-w-0 flex-1 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500/60"
               />
               <button
                 @click="pickFolder(field.key)"
                 class="shrink-0 p-1.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition-colors"
-                title="选择目录"
+                :title="t('settings.selectFolder')"
               >
                 <FolderOpen :size="12" />
               </button>
@@ -461,7 +462,7 @@ function formatBytes(bytes: number): string {
         >
           <ShieldAlert :size="13" class="text-slate-400 shrink-0" />
           <span class="text-xs font-semibold text-slate-600"
-            >下载规则（反封禁）</span
+            >{{ t('settings.groups.rules') }}</span
           >
         </div>
         <div class="p-4">
@@ -479,14 +480,14 @@ function formatBytes(bytes: number): string {
           style="border-color: var(--color-border-subtle)"
         >
           <ArrowUpCircle :size="13" class="text-slate-400 shrink-0" />
-          <span class="text-xs font-semibold text-slate-600">自动更新</span>
+          <span class="text-xs font-semibold text-slate-600">{{ t('settings.groups.update') }}</span>
         </div>
 
         <div class="px-4 py-4 flex flex-col gap-3">
           <!-- 版本信息 + 检查按钮 -->
           <div class="flex items-center gap-3">
             <div class="flex-1 text-xs text-slate-500">
-              <span>当前版本：</span>
+              <span>{{ t('settings.update.currentVersion') }}</span>
               <span class="font-mono font-medium text-slate-700">
                 {{ updateResult?.currentVersion ?? "—" }}
               </span>
@@ -500,7 +501,7 @@ function formatBytes(bytes: number): string {
                 :size="12"
                 :class="{ 'animate-spin': updateChecking }"
               />
-              {{ updateChecking ? "检查中…" : "检查更新" }}
+              {{ updateChecking ? t('settings.update.checking') : t('settings.update.checkAgain') }}
             </button>
           </div>
 
@@ -512,11 +513,28 @@ function formatBytes(bytes: number): string {
                 v-if="updateResult.hasUpdate"
                 class="rounded-lg bg-blue-50 border border-blue-200 px-3 py-3 flex flex-col gap-2"
               >
-                <div class="flex items-center gap-2">
-                  <ArrowUpCircle :size="14" class="text-blue-500 shrink-0" />
-                  <span class="text-xs font-semibold text-blue-700"
-                    >发现新版本 v{{ updateResult.latestVersion }}</span
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <ArrowUpCircle :size="14" class="text-blue-500 shrink-0" />
+                    <span class="text-xs font-semibold text-blue-700">
+                      {{ t('settings.update.newVersion', { version: updateResult.latestVersion }) }}
+                    </span>
+                  </div>
+                  <!-- 来源标签 -->
+                  <span
+                    v-if="updateFromAutoCheck"
+                    class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-500 leading-none shrink-0"
                   >
+                    {{ t('settings.update.autoDetected') }}
+                  </span>
+                </div>
+
+                <!-- 更新说明 -->
+                <div
+                  v-if="updateResult.releaseNotes"
+                  class="text-[11px] font-medium text-slate-500 -mb-1"
+                >
+                  {{ t('settings.update.releaseNotes') }}
                 </div>
                 <div
                   v-if="updateResult.releaseNotes"
@@ -531,10 +549,10 @@ function formatBytes(bytes: number): string {
                   >
                     <span>{{
                       downloadPercent < 100
-                        ? `下载中… ${downloadPercent}%`
-                        : "下载完成，正在启动安装程序…"
+                        ? t('settings.update.downloading', { percent: downloadPercent })
+                        : t('settings.update.downloadDone')
                     }}</span>
-                    <span v-if="totalBytes > 0"
+                    <span v-if="totalBytes > 0" class="font-mono text-[10px]"
                       >{{ formatBytes(downloadedBytes) }} /
                       {{ formatBytes(totalBytes) }}</span
                     >
@@ -548,8 +566,11 @@ function formatBytes(bytes: number): string {
                 </div>
 
                 <!-- 下载错误 -->
-                <div v-if="installError" class="text-xs text-red-500">
-                  {{ installError }}
+                <div
+                  v-if="installError"
+                  class="text-xs text-red-600 bg-red-50 rounded px-2 py-1"
+                >
+                  {{ t('settings.update.installError', { error: installError }) }}
                 </div>
 
                 <!-- 操作按钮 -->
@@ -561,7 +582,7 @@ function formatBytes(bytes: number): string {
                     class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 active:bg-blue-700 transition-colors"
                   >
                     <Download :size="12" />
-                    下载并安装
+                    {{ t('settings.update.downloadInstall') }}
                   </button>
                   <!-- 无直链：回退到打开浏览器 -->
                   <button
@@ -574,7 +595,7 @@ function formatBytes(bytes: number): string {
                     class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-colors"
                   >
                     <Download :size="12" />
-                    打开下载页面
+                    {{ t('settings.update.goToDownload') }}
                   </button>
                 </div>
               </div>
@@ -582,29 +603,44 @@ function formatBytes(bytes: number): string {
               <!-- 已是最新 -->
               <div
                 v-else-if="!updateResult.error"
-                class="rounded-lg bg-green-50 border border-green-200 px-3 py-2 flex items-center gap-2"
+                class="rounded-lg bg-green-50 border border-green-200 px-3 py-2 flex items-center justify-between gap-2"
               >
-                <span class="text-xs text-green-700"
-                  >✓ 已是最新版本 v{{
-                    updateResult.latestVersion ?? updateResult.currentVersion
-                  }}</span
+                <div class="flex items-center gap-1.5">
+                  <span class="text-green-600 text-xs">✓</span>
+                  <span class="text-xs text-green-700">
+                    {{ t('settings.update.upToDate', { version: updateResult.latestVersion ?? updateResult.currentVersion }) }}
+                  </span>
+                </div>
+                <span
+                  v-if="updateFromAutoCheck"
+                  class="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-500 leading-none shrink-0"
                 >
+                  {{ t('settings.update.manualCheck') }}
+                </span>
               </div>
 
-              <!-- 错误 / 未配置 -->
+              <!-- 检查出错 -->
               <div
                 v-else
-                class="rounded-lg bg-slate-50 border px-3 py-2 text-xs text-slate-500"
-                style="border-color: var(--color-border-subtle)"
+                class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 flex items-start gap-2"
               >
-                {{ updateResult.error }}
+                <span class="text-amber-500 text-xs mt-px shrink-0">⚠</span>
+                <span class="text-xs text-amber-700">
+                  {{ t('settings.update.checkError', { error: updateResult.error }) }}
+                </span>
               </div>
             </div>
           </Transition>
 
-          <!-- 接口错误 -->
-          <div v-if="updateError" class="text-xs text-red-500">
-            {{ updateError }}
+          <!-- 接口/网络错误 -->
+          <div
+            v-if="updateError"
+            class="rounded-lg bg-red-50 border border-red-200 px-3 py-2 flex items-start gap-2"
+          >
+            <span class="text-red-500 text-xs mt-px shrink-0">✕</span>
+            <span class="text-xs text-red-700">
+              {{ t('settings.update.networkError', { error: updateError }) }}
+            </span>
           </div>
         </div>
       </div>

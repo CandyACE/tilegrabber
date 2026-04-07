@@ -8,6 +8,7 @@ import { ref, computed, watch } from "vue";
 import { Loader, TriangleAlert, CircleX } from "lucide-vue-next";
 import { invoke } from "@tauri-apps/api/core";
 import type { Bounds, CrsType, TileCount } from "~/types/tile-source";
+import { useI18n } from "vue-i18n";
 
 const props = defineProps<{
   bounds: Bounds | null;
@@ -18,6 +19,8 @@ const props = defineProps<{
 // v-model: { min, max }
 const minZoom = defineModel<number>("minZoom", { default: 8 });
 const maxZoom = defineModel<number>("maxZoom", { default: 12 });
+
+const { t } = useI18n();
 
 const maxLimit = computed(() => props.maxZoomLimit ?? 22);
 
@@ -90,7 +93,7 @@ const countWarning = computed(() => {
       <div
         class="flex items-center justify-between text-xs text-(--color-text-secondary)"
       >
-        <span>层级范围</span>
+        <span>{{ t('zoom.levelRange') }}</span>
         <span class="font-mono font-medium text-(--color-text-primary)">
           Z{{ minZoom }} — Z{{ maxZoom }}
         </span>
@@ -110,7 +113,7 @@ const countWarning = computed(() => {
           class="flex-1 accent-(--color-accent)"
           @input="onMinChange(+($event.target as HTMLInputElement).value)"
         />
-        <span class="w-5 text-xs text-(--color-text-secondary)">最小</span>
+        <span class="w-5 text-xs text-(--color-text-secondary)">{{ t('zoom.min') }}</span>
       </div>
 
       <!-- Max zoom -->
@@ -127,7 +130,7 @@ const countWarning = computed(() => {
           class="flex-1 accent-(--color-accent)"
           @input="onMaxChange(+($event.target as HTMLInputElement).value)"
         />
-        <span class="w-5 text-xs text-(--color-text-secondary)">最大</span>
+        <span class="w-5 text-xs text-(--color-text-secondary)">{{ t('zoom.max') }}</span>
       </div>
     </div>
 
@@ -144,12 +147,12 @@ const countWarning = computed(() => {
       }"
     >
       <div v-if="!bounds" class="text-(--color-text-muted)">
-        请先在地图上框选下载区域
+        {{ t('zoom.noArea') }}
       </div>
       <div v-else-if="tileCount" class="flex flex-col gap-1">
         <div class="flex items-center justify-between">
           <span class="flex items-center gap-1">
-            预计瓦片数量
+            {{ t('zoom.estimatedTiles') }}
             <Loader v-if="counting" class="size-3 animate-spin opacity-50" />
           </span>
           <span class="font-mono font-semibold text-sm">
@@ -172,17 +175,17 @@ const countWarning = computed(() => {
           class="mt-1 flex items-center gap-1 text-amber-700"
         >
           <TriangleAlert class="size-3" />
-          瓦片数量较多，下载可能耗时较长
+          {{ t('zoom.warnMany') }}
         </div>
         <div
           v-if="countWarning === 'error'"
           class="mt-1 flex items-center gap-1 text-red-700"
         >
           <CircleX class="size-3" />
-          瓦片数量过大，请缩小范围或降低最大层级
+          {{ t('zoom.errorTooMany') }}
         </div>
       </div>
-      <div v-else class="text-(--color-text-muted)">无法计算瓦片数量</div>
+      <div v-else class="text-(--color-text-muted)">{{ t('zoom.calcFailed') }}</div>
     </div>
   </div>
 </template>

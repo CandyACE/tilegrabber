@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Power,
@@ -31,6 +32,8 @@ interface ServerStatus {
   port: number;
   baseUrl: string;
 }
+
+const { t } = useI18n();
 
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const tasks = ref<Task[]>([]);
@@ -357,7 +360,7 @@ function highlightCode(code: string): string {
           <Server :size="14" class="text-slate-400 shrink-0" />
           <span
             class="font-semibold text-slate-600 text-xs tracking-wide uppercase"
-            >本地发布服务</span
+            >{{ t('publish.title') }}</span
           >
           <!-- 运行状态指示灯 -->
           <div class="ml-auto flex items-center gap-1.5">
@@ -372,7 +375,7 @@ function highlightCode(code: string): string {
               "
             >
               {{
-                serverStatus.running ? `运行中 :${serverStatus.port}` : "已停止"
+                serverStatus.running ? t('publish.running', { port: serverStatus.port }) : t('publish.stopped')
               }}
             </span>
           </div>
@@ -380,7 +383,7 @@ function highlightCode(code: string): string {
 
         <!-- 端口 + 按钮 -->
         <div class="flex items-center gap-2 px-4 py-3">
-          <span class="text-slate-500 text-xs shrink-0">端口</span>
+          <span class="text-slate-500 text-xs shrink-0">{{ t('publish.port') }}</span>
           <input
             v-model.number="port"
             type="number"
@@ -400,7 +403,7 @@ function highlightCode(code: string): string {
             "
           >
             <Power :size="12" />
-            {{ serverStatus.running ? "停止服务" : "启动服务" }}
+            {{ serverStatus.running ? t('publish.stopServer') : t('publish.startServer') }}
           </button>
         </div>
 
@@ -416,12 +419,12 @@ function highlightCode(code: string): string {
         class="flex flex-col items-center justify-center py-10 gap-2 text-slate-400"
       >
         <Layers :size="32" class="opacity-30" />
-        <p class="text-xs">无可发布的任务（需下载完成后才可发布）</p>
+        <p class="text-xs">{{ t('publish.noTasks') }}</p>
       </div>
 
       <template v-else>
         <div class="text-xs text-slate-400 px-0.5">
-          可发布的任务（{{ readyTasks.length }}）
+          {{ t('publish.readyTasks', { count: readyTasks.length }) }}
         </div>
 
         <div
@@ -480,7 +483,7 @@ function highlightCode(code: string): string {
                 @click="copyUrl(tmsUrl(task.id))"
                 :disabled="!serverStatus.running"
                 class="shrink-0 p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                title="复制 XYZ URL"
+                :title="t('publish.copyXyz')"
               >
                 <Check
                   v-if="copied === tmsUrl(task.id)"
@@ -504,7 +507,7 @@ function highlightCode(code: string): string {
                 @click="copyUrl(wmtsUrl(task.id))"
                 :disabled="!serverStatus.running"
                 class="shrink-0 p-1.5 rounded-md hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                title="复制 WMTS 能力文档 URL"
+                :title="t('publish.copyWmts')"
               >
                 <Check
                   v-if="copied === wmtsUrl(task.id)"

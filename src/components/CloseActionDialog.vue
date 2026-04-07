@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 defineProps<{ open: boolean }>();
 const emit = defineEmits<{
@@ -28,13 +31,13 @@ const remember = ref(false);
             class="text-sm font-semibold"
             style="color: var(--color-text-primary, #0f172a)"
           >
-            关闭窗口
+            {{ t('closeDialog.title') }}
           </p>
           <p
             class="text-xs mt-1"
             style="color: var(--color-text-muted, #64748b)"
           >
-            选择关闭窗口时的行为
+            {{ t('closeDialog.subtitle') }}
           </p>
         </div>
 
@@ -59,13 +62,13 @@ const remember = ref(false);
                 class="text-sm font-medium"
                 style="color: var(--color-text-primary, #0f172a)"
               >
-                最小化到系统托盘
+                {{ t('closeDialog.optTrayLabel') }}
               </p>
               <p
                 class="text-xs mt-0.5"
                 style="color: var(--color-text-muted, #64748b)"
               >
-                程序在后台继续运行，可通过托盘图标唤起
+                {{ t('closeDialog.optTrayDesc') }}
               </p>
             </div>
           </label>
@@ -89,13 +92,13 @@ const remember = ref(false);
                 class="text-sm font-medium"
                 style="color: var(--color-text-primary, #0f172a)"
               >
-                完全退出
+                {{ t('closeDialog.optQuitLabel') }}
               </p>
               <p
                 class="text-xs mt-0.5"
                 style="color: var(--color-text-muted, #64748b)"
               >
-                关闭所有任务并退出程序
+                {{ t('closeDialog.optQuitDesc') }}
               </p>
             </div>
           </label>
@@ -109,7 +112,7 @@ const remember = ref(false);
               class="text-xs"
               style="color: var(--color-text-secondary, #334155)"
             >
-              记住我的选择，下次不再询问
+              {{ t('closeDialog.remember') }}
             </span>
           </label>
         </div>
@@ -124,14 +127,14 @@ const remember = ref(false);
             style="color: var(--color-text-muted, #64748b)"
             @click="emit('cancel')"
           >
-            取消
+            {{ t('closeDialog.cancel') }}
           </button>
           <button
             class="px-5 py-2 rounded-lg text-sm font-semibold text-white transition-colors hover:opacity-90 active:opacity-80"
             style="background: var(--color-accent, #3b82f6)"
             @click="emit('confirm', selected, remember)"
           >
-            确认
+            {{ t('closeDialog.confirm') }}
           </button>
         </div>
       </div>

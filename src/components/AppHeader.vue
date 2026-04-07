@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -15,7 +15,11 @@ import {
   X as XIcon,
   ListTodo,
 } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 import logoUrl from "~/assets/logo.png";
+import { useUpdateState } from "~/composables/useUpdateState";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   sidebarOpen: boolean;
@@ -27,14 +31,21 @@ const emit = defineEmits<{
   "nav-change": [key: string];
 }>();
 
-const navItems = [
-  { key: "map", label: "地图", icon: Map },
-  { key: "tasks", label: "任务", icon: ListTodo },
-  { key: "publish", label: "发布", icon: Share2 },
-  { key: "settings", label: "设置", icon: Settings },
-  { key: "help", label: "帮助", icon: HelpCircle },
-  { key: "about", label: "关于", icon: Info },
-] as const;
+const { hasUpdate, clearUpdateBadge } = useUpdateState();
+
+function onNavClick(key: string) {
+  if (key === "settings") clearUpdateBadge();
+  emit("nav-change", key);
+}
+
+const navItems = computed(() => [
+  { key: "map" as const, label: t('nav.map'), icon: Map },
+  { key: "tasks" as const, label: t('nav.tasks'), icon: ListTodo },
+  { key: "publish" as const, label: t('nav.publish'), icon: Share2 },
+  { key: "settings" as const, label: t('nav.settings'), icon: Settings },
+  { key: "help" as const, label: t('nav.help'), icon: HelpCircle },
+  { key: "about" as const, label: t('nav.about'), icon: Info },
+]);
 
 function toggleSidebar() {
   emit("update:sidebarOpen", !props.sidebarOpen);
@@ -98,7 +109,7 @@ async function closeWindow() {
     <div class="flex items-center gap-2 px-3 shrink-0">
       <button
         class="p-1.5 rounded-md transition-colors hover:bg-slate-100 active:bg-slate-200"
-        :title="sidebarOpen ? '收起侧边栏' : '展开侧边栏'"
+        :title="sidebarOpen ? t('header.collapseSidebar') : t('header.expandSidebar')"
         @click="toggleSidebar"
       >
         <PanelLeft class="size-4 text-slate-500" />
@@ -117,7 +128,7 @@ async function closeWindow() {
           class="text-sm font-semibold tracking-tight"
           style="color: var(--color-text-primary)"
         >
-          御图
+          {{ t('appName') }}
         </span>
       </div>
     </div>
@@ -134,16 +145,22 @@ async function closeWindow() {
       <button
         v-for="item in navItems"
         :key="item.key"
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+        class="relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
         :class="
           activeNav === item.key
             ? 'text-blue-600 bg-blue-50'
             : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
         "
-        @click="emit('nav-change', item.key)"
+        @click="onNavClick(item.key)"
       >
         <component :is="item.icon" class="size-4" />
         {{ item.label }}
+        <!-- 更新可用时，在「设置」按钮右上角显示红点 -->
+        <span
+          v-if="item.key === 'settings' && hasUpdate"
+          class="absolute top-0.5 right-0.5 size-2 rounded-full bg-red-500"
+          :title="t('header.updateAvailable')"
+        />
       </button>
     </nav>
 
@@ -169,7 +186,7 @@ async function closeWindow() {
           class="size-1.5 rounded-full inline-block"
           :class="serverRunning ? 'bg-green-500 animate-pulse' : 'bg-slate-400'"
         />
-        {{ serverRunning ? "API 运行中" : "API 已停止" }}
+        {{ serverRunning ? t('header.apiRunning') : t('header.apiStopped') }}
       </div>
       <span
         class="text-xs font-mono mr-3"
@@ -180,7 +197,7 @@ async function closeWindow() {
       <!-- 最小化 -->
       <button
         class="flex items-center justify-center w-11 h-11 text-slate-500 hover:bg-slate-100 transition-colors"
-        title="最小化"
+        :title="t('header.minimize')"
         @click="minimize"
       >
         <Minus class="size-3.5" />
@@ -188,7 +205,7 @@ async function closeWindow() {
       <!-- 最大化 / 还原 -->
       <button
         class="flex items-center justify-center w-11 h-11 text-slate-500 hover:bg-slate-100 transition-colors"
-        :title="isMaximized ? '还原' : '最大化'"
+        :title="isMaximized ? t('header.restore') : t('header.maximize')"
         @click="toggleMaximize"
       >
         <Square class="size-3.5" />
@@ -196,7 +213,7 @@ async function closeWindow() {
       <!-- 关闭 -->
       <button
         class="flex items-center justify-center w-11 h-11 text-slate-500 hover:bg-red-500 hover:text-white transition-colors"
-        title="关闭"
+        :title="t('header.close')"
         @click="closeWindow"
       >
         <XIcon class="size-3.5" />

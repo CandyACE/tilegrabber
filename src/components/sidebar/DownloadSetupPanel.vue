@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { useI18n } from "vue-i18n";
 import {
   Globe,
   Link,
@@ -19,6 +20,8 @@ import { invoke } from "@tauri-apps/api/core";
 import ZoomPicker from "./ZoomPicker.vue";
 import UiInput from "@/components/ui/input/Input.vue";
 import type { TileSource, Bounds, CrsType } from "~/types/tile-source";
+
+const { t } = useI18n();
 
 // ─── Props & Emits ────────────────────────────────────────────────────────────
 
@@ -64,12 +67,12 @@ const importError = ref("");
 async function triggerImport() {
   importError.value = "";
   const path = await openDialog({
-    title: "导入区域文件",
+    title: t('downloadSetup.importAreaTitle'),
     multiple: false,
     directory: false,
     filters: [
       {
-        name: "区域文件 (KML, KMZ, GeoJSON)",
+        name: t('downloadSetup.importAreaFilter'),
         extensions: ["kml", "kmz", "geojson", "json"],
       },
     ],
@@ -112,10 +115,10 @@ const kindIcon = computed(() => {
 
 const crsLabel = computed(() => {
   const labels: Record<string, string> = {
-    WEB_MERCATOR: "EPSG:3857",
-    WGS84: "EPSG:4326",
-    TERRAIN: "地形高程",
-    UNKNOWN: "未知",
+    WEB_MERCATOR: t('downloadSetup.crsLabels.WEB_MERCATOR'),
+    WGS84: t('downloadSetup.crsLabels.WGS84'),
+    TERRAIN: t('downloadSetup.crsLabels.TERRAIN'),
+    UNKNOWN: t('downloadSetup.crsLabels.UNKNOWN'),
   };
   return labels[props.source.crs ?? ""] ?? "—";
 });
@@ -138,7 +141,7 @@ const crsLabel = computed(() => {
     >
       <button
         class="p-1 rounded hover:bg-slate-100 transition-colors"
-        title="返回任务列表"
+        :title="t('downloadSetup.returnToList')"
         @click="emit('close')"
       >
         <ChevronLeft class="size-4 text-slate-500" />
@@ -147,7 +150,7 @@ const crsLabel = computed(() => {
         class="text-sm font-semibold"
         style="color: var(--color-text-primary)"
       >
-        新建下载任务
+        {{ t('downloadSetup.title') }}
       </span>
     </div>
 
@@ -160,9 +163,9 @@ const crsLabel = computed(() => {
           class="text-xs font-medium uppercase tracking-wider mb-1.5"
           style="color: var(--color-text-muted)"
         >
-          任务名称
+          {{ t('downloadSetup.taskName') }}
         </div>
-        <UiInput v-model="taskName" placeholder="输入任务名称" class="w-full" />
+        <UiInput v-model="taskName" :placeholder="t('downloadSetup.taskNamePlaceholder')" class="w-full" />
       </div>
 
       <!-- ① 数据源信息 -->
@@ -171,7 +174,7 @@ const crsLabel = computed(() => {
           class="text-xs font-medium uppercase tracking-wider mb-2"
           style="color: var(--color-text-muted)"
         >
-          数据源
+          {{ t('downloadSetup.dataSource') }}
         </div>
         <div
           class="rounded-lg border p-3"
@@ -223,7 +226,7 @@ const crsLabel = computed(() => {
           class="text-xs font-medium uppercase tracking-wider mb-2"
           style="color: var(--color-text-muted)"
         >
-          1 · 绘制下载范围
+          {{ t('downloadSetup.drawArea') }}
         </div>
 
         <!-- 绘制模式选择 -->
@@ -238,7 +241,7 @@ const crsLabel = computed(() => {
             @click="setDrawMode('rectangle')"
           >
             <Square class="size-3.5" />
-            矩形
+            {{ t('downloadSetup.drawRectangle') }}
           </button>
           <button
             class="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium border transition-colors"
@@ -250,7 +253,7 @@ const crsLabel = computed(() => {
             @click="setDrawMode('polygon')"
           >
             <Hexagon class="size-3.5" />
-            多边形
+            {{ t('downloadSetup.drawPolygon') }}
           </button>
           <button
             class="flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium border border-slate-200 text-slate-500 hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
@@ -258,7 +261,7 @@ const crsLabel = computed(() => {
             @click="triggerImport"
           >
             <FolderOpen class="size-3.5" />
-            导入
+            {{ t('downloadSetup.importFile') }}
           </button>
         </div>
 
@@ -272,8 +275,8 @@ const crsLabel = computed(() => {
           <p class="text-xs mb-2" style="color: var(--color-text-muted)">
             {{
               drawMode === "rectangle"
-                ? "在地图上拖拽选框，确定要下载的地理范围。"
-                : "在地图上依次点击顶点，双击完成多边形绘制。"
+                ? t('downloadSetup.rectPrompt')
+                : t('downloadSetup.polyPrompt')
             }}
           </p>
           <button
@@ -288,10 +291,10 @@ const crsLabel = computed(() => {
             <BoxSelect class="size-4" />
             {{
               drawActive
-                ? "点击取消绘制"
+                ? t('downloadSetup.cancelDraw')
                 : drawMode === "rectangle"
-                  ? "开始框选"
-                  : "开始绘制"
+                  ? t('downloadSetup.startRect')
+                  : t('downloadSetup.startPoly')
             }}
           </button>
         </template>
@@ -301,14 +304,14 @@ const crsLabel = computed(() => {
           <div class="rounded-lg border-2 border-green-300 bg-green-50 p-3">
             <div class="flex items-center justify-between mb-2">
               <span class="text-xs font-semibold text-green-700"
-                >✓ 已选择区域</span
+                >{{ t('downloadSetup.areaSelected') }}</span
               >
               <button
                 class="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 transition-colors"
                 @click="emit('clear-bounds')"
               >
                 <Trash2 class="size-3" />
-                清除
+                {{ t('downloadSetup.clearArea') }}
               </button>
             </div>
             <div class="grid grid-cols-2 gap-1 text-xs font-mono text-gray-600">
@@ -327,7 +330,7 @@ const crsLabel = computed(() => {
           class="text-xs font-medium uppercase tracking-wider mb-2"
           style="color: var(--color-text-muted)"
         >
-          2 · 选择下载级别
+          {{ t('downloadSetup.zoomLevel') }}
         </div>
         <ZoomPicker
           v-model:min-zoom="minZoom"
@@ -343,7 +346,7 @@ const crsLabel = computed(() => {
           class="text-xs font-medium uppercase tracking-wider mb-2"
           style="color: var(--color-text-muted)"
         >
-          3 · 下载选项
+          {{ t('downloadSetup.downloadOptions') }}
         </div>
         <div
           class="flex items-center justify-between gap-3 rounded-lg border p-3"
@@ -356,10 +359,10 @@ const crsLabel = computed(() => {
             <Scissors class="size-3.5 shrink-0 text-slate-400" />
             <div>
               <div class="text-xs font-medium text-slate-700">
-                严格裁剪至选框范围
+                {{ t('downloadSetup.clipOption') }}
               </div>
               <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
-                导出时将边缘瓦片精确裁剪至选框，避免溢出区域数据
+                {{ t('downloadSetup.clipDesc') }}
               </div>
             </div>
           </div>
@@ -403,14 +406,14 @@ const crsLabel = computed(() => {
         "
       >
         <Download class="size-4" />
-        开始下载
+        {{ t('downloadSetup.startDownload') }}
       </button>
       <button
         class="w-full text-sm py-1 transition-colors"
         style="color: var(--color-text-muted)"
         @click="emit('close')"
       >
-        取消
+        {{ t('downloadSetup.cancel') }}
       </button>
     </div>
   </div>
