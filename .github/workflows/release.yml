@@ -85,6 +85,27 @@ jobs:
       - name: 安装前端依赖
         run: npm ci
 
+      # ── 同步版本号 ───────────────────────────────────────────────────────────
+      # 将 src-tauri/Cargo.toml 的 version 更新为当前 tag（去掉 v 前缀）
+      # 保证 CARGO_PKG_VERSION 与发布 tag 一致，自动更新版本比较才能正常工作
+      # 仅当 RELEASE_TAG 符合 semver 格式时才执行（跳过裸分支名触发的构建）
+      - name: 同步版本号到 Cargo.toml
+        shell: bash
+        run: |
+          python3 - << 'EOF'
+          import re, os, sys
+          tag = os.environ['RELEASE_TAG']
+          ver = tag.lstrip('v')
+          if not re.match(r'^\d+\.\d+\.\d+', ver):
+              print(f'RELEASE_TAG "{tag}" 不是 semver 格式，跳过版本号同步')
+              sys.exit(0)
+          path = 'src-tauri/Cargo.toml'
+          content = open(path).read()
+          content = re.sub(r'^version = "[^"]*"', f'version = "{ver}"', content, count=1, flags=re.M)
+          open(path, 'w').write(content)
+          print(f'Cargo.toml version → {ver}')
+          EOF
+
       # ── 打包 ─────────────────────────────────────────────────────────────────
       - name: 打包应用 (tauri-action)
         uses: tauri-apps/tauri-action@v0
@@ -123,9 +144,6 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
 
     steps:
-      - name: 等待所有产物上传完成（60 秒缓冲）
-        run: sleep 60
-
       - name: 检出代码（用于读取 CHANGELOG.md）
         uses: actions/checkout@v4
 
@@ -158,33 +176,61 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "::group::获取 Release 资产列表"
-          # /releases/tags/{tag} 不包含草稿 Release，需从列表中按 tag 查找
-          RELEASE_JSON=$(gh api "repos/$REPO/releases" \
-            | jq --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | .[0]')
-          if [ "$(echo "$RELEASE_JSON" | jq -r '.id // empty')" = "" ]; then
-            echo "未找到 tag=$TAG 对应的 Release，请确认 build job 已完成" >&2
+          # ── 等待 Release 出现（最长 3 分钟）─────────────────────────
+          echo "::group::等待 Release 创建"
+          RELEASE_ID=""
+          for i in $(seq 1 18); do
+            RELEASE_ID=$(gh api "repos/$REPO/releases" \
+              | jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | .[0].id // empty')
+            if [ -n "$RELEASE_ID" ]; then
+              echo "Release 已找到 (id=$RELEASE_ID)"
+              break
+            fi
+            echo "等待 Release 创建… ($i/18，每 10 秒)"
+            sleep 10
+          done
+          if [ -z "$RELEASE_ID" ]; then
+            echo "超时：未找到 tag=$TAG 对应的 Release" >&2
             exit 1
           fi
-          echo "$RELEASE_JSON" | jq '.assets[].name'
           echo "::endgroup::"
 
-          # ── 各平台安装包 URL ──────────────────────────────────────
-          WIN_URL=$(echo "$RELEASE_JSON" | jq -r '
-            [.assets[] | select(.name | test("-setup\\.exe$"))]
-            | sort_by(.name) | last | .browser_download_url // ""')
+          # ── 等待所有平台产物上传完成（最长 10 分钟）─────────────────
+          # 判断依据：Windows(.exe) + macOS arm64(.dmg) + Linux(.AppImage) 均已出现
+          echo "::group::等待构建产物上传"
+          ELAPSED=0
+          MAX_WAIT=600
+          INTERVAL=20
+          WIN_URL="" MACOS_ARM_URL="" LINUX_URL=""
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            RELEASE_JSON=$(gh api "repos/$REPO/releases/$RELEASE_ID")
+            WIN_URL=$(echo "$RELEASE_JSON" | jq -r \
+              '[.assets[] | select(.name | test("-setup\\.exe$"))] | sort_by(.name) | last | .browser_download_url // ""')
+            MACOS_ARM_URL=$(echo "$RELEASE_JSON" | jq -r \
+              '[.assets[] | select(.name | test("_aarch64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
+            LINUX_URL=$(echo "$RELEASE_JSON" | jq -r \
+              '[.assets[] | select(.name | test("\\.AppImage$"))] | sort_by(.name) | last | .browser_download_url // ""')
 
-          MACOS_ARM_URL=$(echo "$RELEASE_JSON" | jq -r '
-            [.assets[] | select(.name | test("_aarch64\\.dmg$"))]
-            | sort_by(.name) | last | .browser_download_url // ""')
+            echo "Windows  : ${WIN_URL:-(等待中)}"
+            echo "macOS arm: ${MACOS_ARM_URL:-(等待中)}"
+            echo "Linux    : ${LINUX_URL:-(等待中)}"
 
-          MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r '
-            [.assets[] | select(.name | test("_x64\\.dmg$"))]
-            | sort_by(.name) | last | .browser_download_url // ""')
+            if [ -n "$WIN_URL" ] && [ -n "$MACOS_ARM_URL" ] && [ -n "$LINUX_URL" ]; then
+              echo "所有产物上传完成！"
+              break
+            fi
+            ELAPSED=$((ELAPSED + INTERVAL))
+            echo "--- 等待中 (${ELAPSED}s / ${MAX_WAIT}s) ---"
+            sleep $INTERVAL
+          done
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "::warning::等待超时，将使用当前已上传的产物生成 latest.json（部分平台可能缺失）"
+          fi
+          echo "::endgroup::"
 
-          LINUX_URL=$(echo "$RELEASE_JSON" | jq -r '
-            [.assets[] | select(.name | test("\\.AppImage$"))]
-            | sort_by(.name) | last | .browser_download_url // ""')
+          # ── 补充 macOS x64 URL（可选平台）───────────────────────────
+          MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("_x64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
 
           # changelog 来自上一步从 CHANGELOG.md 提取的内容
           CHANGELOG_NOTES='${{ steps.changelog.outputs.notes }}'

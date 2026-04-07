@@ -25,8 +25,10 @@ use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 
 /// latest.json 地址。
-/// 优先使用编译时环境变量 TILEGRABBER_UPDATE_URL（CI 流水线注入），
-/// 否则回退到 GitHub Releases 上的固定 latest.json 地址。
+/// 优先使用编译时环境变量 TILEGRABBER_UPDATE_URL，来源有两个（优先级从高到低）：
+///   1. src-tauri/update_url 文件（本地开发时手动维护）
+///   2. 进程环境变量（CI 通过 step env 注入，如 GitHub Actions）
+/// 否则回退到 OSS 上的固定地址。
 /// 格式：https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 const UPDATE_CHECK_URL: &str = match option_env!("TILEGRABBER_UPDATE_URL") {
     Some(url) => url,

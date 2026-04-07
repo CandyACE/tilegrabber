@@ -10,4 +10,5 @@ npm-debug.log*
 # Tauri
 src-tauri/target/
 src-tauri/gen/
+src-tauri/update_url
 build_*.txt

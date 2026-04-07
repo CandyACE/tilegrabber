@@ -11,6 +11,7 @@ pub mod types;
 
 use tauri::Manager;
 use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
+use tauri::Emitter;
 use commands::math::{calculate_tile_count, generate_tile_grid};
 use commands::source::{parse_area_file, parse_source_file, parse_tms_url, parse_wmts_url, validate_tile_url};
 use commands::web_capture::{
@@ -101,6 +102,17 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // 启动后静默检查更新（延迟 12 秒，避免干扰应用启动）
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+                if let Ok(result) = check_for_update().await {
+                    if result.has_update {
+                        let _ = app_handle.emit("update-available", &result);
+                    }
+                }
+            });
 
             Ok(())
         })
