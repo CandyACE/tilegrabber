@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, defineAsyncComponent } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -19,31 +19,27 @@ import TilePreviewLayer from "~/components/map/TilePreviewLayer.vue";
 import BoundsRectOverlay from "~/components/map/BoundsRectOverlay.vue";
 import AreaDraw from "~/components/map/AreaDraw.vue";
 import TileGrid from "~/components/map/TileGrid.vue";
-import NewTaskWizard from "~/components/wizard/NewTaskWizard.vue";
 import TaskDetail from "~/components/sidebar/TaskDetail.vue";
 import TaskBoundsOverlay from "~/components/map/TaskBoundsOverlay.vue";
 import LocalTaskTileLayer from "~/components/map/LocalTaskTileLayer.vue";
 import DownloadProgressLayer from "~/components/map/DownloadProgressLayer.vue";
 import ClipProgressLayer from "~/components/map/ClipProgressLayer.vue";
-import PublishPanel from "~/components/sidebar/PublishPanel.vue";
-import SettingsPanel from "~/components/sidebar/SettingsPanel.vue";
-import HelpPanel from "~/components/sidebar/HelpPanel.vue";
-import AboutPanel from "~/components/sidebar/AboutPanel.vue";
 import SplashScreen from "~/components/SplashScreen.vue";
 import DisclaimerDialog from "~/components/DisclaimerDialog.vue";
 import CloseActionDialog from "~/components/CloseActionDialog.vue";
 
+// 非首屏面板：懒加载，首次点击时才解析，减少启动 JS 解析量
+const PublishPanel = defineAsyncComponent(() => import("~/components/sidebar/PublishPanel.vue"));
+const SettingsPanel = defineAsyncComponent(() => import("~/components/sidebar/SettingsPanel.vue"));
+const HelpPanel = defineAsyncComponent(() => import("~/components/sidebar/HelpPanel.vue"));
+const AboutPanel = defineAsyncComponent(() => import("~/components/sidebar/AboutPanel.vue"));
+const NewTaskWizard = defineAsyncComponent(() => import("~/components/wizard/NewTaskWizard.vue"));
+
+// ─── 启动时缓存设置（单次 IPC，供 onMounted 和 onSplashDone 共用） ──────────
+let cachedSettings: Record<string, string> = {};
+
 // ─── 免责声明 ──────────────────────────────────────────────────────────────
 const showDisclaimer = ref(false);
-
-async function checkDisclaimer() {
-  const agreed = await invoke<string | null>("get_setting", {
-    key: "app.disclaimer_agreed",
-  });
-  if (agreed !== "true") {
-    showDisclaimer.value = true;
-  }
-}
 
 async function onDisclaimerAgree() {
   showDisclaimer.value = false;
@@ -75,10 +71,7 @@ async function handleCloseRequest(event?: { preventDefault: () => void }) {
   }
 }
 
-async function applyFloatWindowSetting() {
-  const enabled = await invoke<string | null>("get_setting", {
-    key: "app.float_window",
-  });
+async function applyFloatWindowSetting(enabled: string | undefined) {
   const floatWin = await WebviewWindow.getByLabel("float");
   if (enabled === "true") {
     await floatWin?.show();
@@ -118,22 +111,22 @@ const appVisible = ref(false);
 let unlistenClose: (() => void) | null = null;
 
 onMounted(async () => {
-  // Apply saved language setting before UI renders
+  // 单次 IPC 获取所有设置：语言立即应用，其余缓存供 onSplashDone 使用
   try {
-    const saved = await invoke<Record<string, string>>("get_all_settings");
-    const lang = saved["app.language"];
+    cachedSettings = await invoke<Record<string, string>>("get_all_settings");
+    const lang = cachedSettings["app.language"];
     if (lang && lang !== "auto" && lang !== "") {
       i18n.global.locale.value = lang as "zh-CN" | "en";
     }
   } catch {
     // ignore - fallback to navigator.language detection already done in i18n.ts
   }
-  // 拦截窗口关闭请求（包括 OS 标题栏 X 按钮 / Alt+F4）
-  unlistenClose = await getCurrentWindow().onCloseRequested((event) => {
-    handleCloseRequest(event);
-  });
-  // 初始化后台更新检查监听器（Rust 端延迟 12 秒静默检查）
-  await initUpdateListener();
+  // 并行：注册关闭事件监听 + 后台更新检查监听（互不依赖）
+  const [unlistenFn] = await Promise.all([
+    getCurrentWindow().onCloseRequested((event) => handleCloseRequest(event)),
+    initUpdateListener(),
+  ]);
+  unlistenClose = unlistenFn;
 });
 
 onUnmounted(() => {
@@ -146,9 +139,11 @@ async function onSplashDone() {
   // 不额外延迟，避免透明 DOM 仍覆盖 titlebar 导致短时间无法拖动窗口
   appVisible.value = true;
   showSplash.value = false;
-  // splash 结束后应用悬浮窗设置、检查免责声明
-  await applyFloatWindowSetting();
-  await checkDisclaimer();
+  // 使用已缓存设置，无需额外 IPC 调用
+  await applyFloatWindowSetting(cachedSettings["app.float_window"]);
+  if (cachedSettings["app.disclaimer_agreed"] !== "true") {
+    showDisclaimer.value = true;
+  }
 }
 
 // ─── 布局 & 导航 ────────────────────────────────────────────────────────────
