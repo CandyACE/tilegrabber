@@ -176,9 +176,7 @@ pub async fn check_for_update() -> Result<UpdateCheckResult, String> {
         { None::<String> }
     };
 
-    let release_notes = release.body.as_deref().map(|s| {
-        if s.len() > 500 { format!("{}…", &s[..500]) } else { s.to_string() }
-    });
+    let release_notes = release.body.clone();
 
     Ok(UpdateCheckResult {
         current_version,
