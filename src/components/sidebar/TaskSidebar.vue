@@ -357,8 +357,8 @@ defineExpose({ loadTasks });
       </div>
 
       <!-- 任务列表 -->
-      <div class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
-        <template v-if="filteredTasks.length > 0">
+      <div class="flex-1 overflow-y-auto px-3 py-2">
+        <TransitionGroup name="task-list" tag="div" class="relative space-y-2">
           <TaskCard
             v-for="task in filteredTasks"
             :key="task.id"
@@ -373,11 +373,11 @@ defineExpose({ loadTasks });
             @export="handleExport"
             @open="handleOpen"
           />
-        </template>
+        </TransitionGroup>
 
         <!-- 空状态 -->
         <div
-          v-else
+          v-if="filteredTasks.length === 0"
           class="flex flex-col items-center justify-center py-12 text-center"
         >
           <Inbox class="size-10 mb-3 text-slate-300" />
@@ -395,3 +395,25 @@ defineExpose({ loadTasks });
     </div>
   </aside>
 </template>
+
+<style scoped>
+.task-list-enter-active,
+.task-list-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.task-list-enter-from {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.task-list-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+}
+.task-list-leave-active {
+  position: absolute;
+  width: calc(100% - 1.5rem);
+}
+.task-list-move {
+  transition: transform 0.25s ease;
+}
+</style>

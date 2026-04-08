@@ -195,8 +195,8 @@ defineExpose({ loadLayers });
       </div>
 
       <!-- 图层列表 -->
-      <div class="flex-1 overflow-y-auto px-3 py-2 space-y-2">
-        <template v-if="layers.length > 0">
+      <div class="flex-1 overflow-y-auto px-3 py-2">
+        <TransitionGroup name="layer-list" tag="div" class="relative space-y-2">
           <div
             v-for="layer in layers"
             :key="layer.id"
@@ -305,11 +305,11 @@ defineExpose({ loadLayers });
               </div>
             </div>
           </div>
-        </template>
+        </TransitionGroup>
 
         <!-- 空状态 -->
         <div
-          v-else
+          v-if="layers.length === 0"
           class="flex flex-col items-center justify-center py-12 text-center"
         >
           <Layers class="size-10 mb-3 text-slate-300" />
@@ -327,3 +327,25 @@ defineExpose({ loadLayers });
     </div>
   </aside>
 </template>
+
+<style scoped>
+.layer-list-enter-active,
+.layer-list-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.layer-list-enter-from {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.layer-list-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+}
+.layer-list-leave-active {
+  position: absolute;
+  width: calc(100% - 1.5rem);
+}
+.layer-list-move {
+  transition: transform 0.25s ease;
+}
+</style>

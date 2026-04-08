@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted, defineAsyncComponent } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -27,20 +27,11 @@ import ClipProgressLayer from "~/components/map/ClipProgressLayer.vue";
 import SplashScreen from "~/components/SplashScreen.vue";
 import DisclaimerDialog from "~/components/DisclaimerDialog.vue";
 import CloseActionDialog from "~/components/CloseActionDialog.vue";
-
-import PanelLoading from "~/components/ui/PanelLoading.vue";
-
-// 非首屏面板：懒加载，首次点击时才解析，减少启动 JS 解析量
-const asyncOpts = (loader: () => Promise<unknown>) => ({
-  loader,
-  loadingComponent: PanelLoading,
-  delay: 150, // 150ms 内加载完不显示 loading，避免闪烁
-});
-const PublishPanel = defineAsyncComponent(asyncOpts(() => import("~/components/sidebar/PublishPanel.vue")));
-const SettingsPanel = defineAsyncComponent(asyncOpts(() => import("~/components/sidebar/SettingsPanel.vue")));
-const HelpPanel = defineAsyncComponent(asyncOpts(() => import("~/components/sidebar/HelpPanel.vue")));
-const AboutPanel = defineAsyncComponent(asyncOpts(() => import("~/components/sidebar/AboutPanel.vue")));
-const NewTaskWizard = defineAsyncComponent(asyncOpts(() => import("~/components/wizard/NewTaskWizard.vue")));
+import PublishPanel from "~/components/sidebar/PublishPanel.vue";
+import SettingsPanel from "~/components/sidebar/SettingsPanel.vue";
+import HelpPanel from "~/components/sidebar/HelpPanel.vue";
+import AboutPanel from "~/components/sidebar/AboutPanel.vue";
+import NewTaskWizard from "~/components/wizard/NewTaskWizard.vue";
 
 // ─── 启动时缓存设置（单次 IPC，供 onMounted 和 onSplashDone 共用） ──────────
 let cachedSettings: Record<string, string> = {};

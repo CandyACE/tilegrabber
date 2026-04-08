@@ -56,7 +56,7 @@ jobs:
       - name: 配置 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "lts/*"
           cache: "npm"
 
       # ── Rust ─────────────────────────────────────────────────────────────────
@@ -97,13 +97,13 @@ jobs:
           tag = os.environ['RELEASE_TAG']
           ver = tag.lstrip('v')
           if not re.match(r'^\d+\.\d+\.\d+', ver):
-              print(f'RELEASE_TAG "{tag}" 不是 semver 格式，跳过版本号同步')
+              print(f'RELEASE_TAG "{tag}" is not semver format, skipping version sync')
               sys.exit(0)
           path = 'src-tauri/Cargo.toml'
           content = open(path, encoding='utf-8').read()
           content = re.sub(r'^version = "[^"]*"', f'version = "{ver}"', content, count=1, flags=re.M)
           open(path, 'w', encoding='utf-8').write(content)
-          print(f'Cargo.toml version → {ver}')
+          print(f'Cargo.toml version -> {ver}')
           EOF
 
       # ── 打包 ─────────────────────────────────────────────────────────────────
