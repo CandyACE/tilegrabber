@@ -11,6 +11,7 @@
 
 pub mod handlers;
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use axum::{Router, routing::get};
@@ -19,12 +20,31 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::storage::app_db::AppDb;
 
+// ─── 服务统计 ────────────────────────────────────────────────────────────────
+
+/// 单个任务的服务请求统计
+#[derive(Debug, Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceStats {
+    pub tms_requests: u64,
+    pub wmts_requests: u64,
+    pub wms_requests: u64,
+    pub ogc_requests: u64,
+    pub arcgis_requests: u64,
+    /// Unix 时间戳（秒），最近一次请求时间
+    pub last_request_at: Option<i64>,
+}
+
+/// 任务 ID → 服务统计的共享映射（Arc 包装以便在 axum 和 Tauri 之间共享）
+pub type StatsMap = Arc<Mutex<HashMap<String, ServiceStats>>>;
+
 // ─── 共享应用状态 ────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct ServerAppState {
     pub app_db: AppDb,
     pub base_url: String, // e.g. "http://localhost:8765"
+    pub stats: StatsMap,
 }
 
 // ─── 服务控制 ————————————────————────────────────────────————────────————————
@@ -57,6 +77,7 @@ pub async fn start_server(
     state: TileServerState,
     port: u16,
     app_db: AppDb,
+    stats: StatsMap,
 ) -> Result<u16, String> {
     // 若已在运行，先停止
     {
@@ -72,6 +93,7 @@ pub async fn start_server(
     let app_state = ServerAppState {
         app_db,
         base_url: base_url.clone(),
+        stats,
     };
 
     let cors = CorsLayer::new()
@@ -90,10 +112,23 @@ pub async fn start_server(
             "/wmts/:task_id",
             get(handlers::wmts_dispatch),
         )
+        // WMS 端点（OGC WMS 1.1.1）
+        .route(
+            "/wms/:task_id",
+            get(handlers::wms_dispatch),
+        )
+        // OGC API Tiles 端点
+        .route("/ogc-tiles/:task_id", get(handlers::ogc_tiles_collection))
+        .route("/ogc-tiles/:task_id/tiles/WebMercatorQuad", get(handlers::ogc_tiles_tileset))
+        .route("/ogc-tiles/:task_id/tiles/WebMercatorQuad/:z/:row/:col", get(handlers::ogc_tiles_tile))
+        // ArcGIS REST API 兼容端点
+        .route("/arcgis/rest/services/:task_id/MapServer", get(handlers::arcgis_mapserver))
+        .route("/arcgis/rest/services/:task_id/MapServer/tile/:z/:row/:col", get(handlers::arcgis_tile))
         // REST API
         .route("/api/tasks", get(handlers::api_tasks))
         .route("/api/tasks/:id", get(handlers::api_task_get))
         .route("/api/tasks/:id/logs", get(handlers::api_task_logs))
+        .route("/api/stats", get(handlers::api_stats))
         .route("/api/info", get(handlers::api_info))
         .layer(cors)
         .with_state(app_state);

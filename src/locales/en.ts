@@ -172,7 +172,7 @@ export default {
 
   help: {
     title: 'Help Documentation',
-    appDesc: 'Cross-platform map tile download tool supporting TMS / WMTS / .lrc / .lra data sources, with resume download, anti-ban features, MBTiles export, and local tile publish server.',
+    appDesc: 'Cross-platform map tile download tool supporting TMS / WMTS / .lrc / .lra data sources, with resume download, anti-ban features, MBTiles export, and a local tile publish server (XYZ / WMTS / WMS / OGC API Tiles / ArcGIS REST).',
     version: '御图 v{version} · Built with Tauri v2 + MapLibre GL JS v4',
     sections: [
       {
@@ -216,8 +216,15 @@ export default {
         title: 'Local Publish Server',
         items: [
           { q: 'How to start the publish server?', a: 'Click the "Publish" navigation at the top, set the port number, and click "Start Server". Only fully downloaded tasks appear in the publish list.' },
-          { q: 'TMS Endpoint', a: 'http://localhost:{port}/tiles/{task_id}/{z}/{x}/{y}  —  Can be used directly in Leaflet / OpenLayers.' },
-          { q: 'WMTS Capabilities Document', a: 'http://localhost:{port}/wmts/{task_id}?SERVICE=WMTS&REQUEST=GetCapabilities  —  Can be loaded directly by QGIS and other GIS software.' },
+          { q: 'Which protocols are supported?', a: 'Each task is simultaneously served via five standard protocols: XYZ (TMS), WMTS 1.0.0, WMS 1.1.1, OGC API Tiles, and ArcGIS REST API. Switch between them using the protocol buttons in the panel.' },
+          { q: 'XYZ (TMS) Endpoint', a: 'http://localhost:{port}/tiles/{task_id}/{z}/{x}/{y}  —  Ready to use with Leaflet, MapLibre GL JS, OpenLayers, etc.' },
+          { q: 'WMTS Capabilities Document', a: 'http://localhost:{port}/wmts/{task_id}?SERVICE=WMTS&REQUEST=GetCapabilities  —  Loadable directly by QGIS, ArcGIS, Cesium, and other GIS tools.' },
+          { q: 'WMS Service', a: 'GetCapabilities: http://localhost:{port}/wms/{task_id}?SERVICE=WMS&REQUEST=GetCapabilities  —  Supports EPSG:4326 and EPSG:3857 projections. GetMap requests dynamically composite tile images on the fly.' },
+          { q: 'OGC API Tiles', a: 'http://localhost:{port}/ogc/{task_id}/tiles/WebMercatorQuad/{z}/{y}/{x}  —  Compatible with MapLibre GL JS and other modern clients via a REST-style tile API.' },
+          { q: 'ArcGIS REST API', a: 'http://localhost:{port}/arcgis/rest/services/{task_id}/MapServer  —  Compatible with the Esri ecosystem. Mount directly in ArcGIS Online, Esri Leaflet, or the ArcGIS API for JavaScript.' },
+          { q: 'LAN (Local Network) Access', a: 'When the server starts, the "Access Address" dropdown lists all detected LAN IP addresses. Selecting one instantly updates all service URLs and code examples in the panel so other devices can connect.' },
+          { q: 'Built-in Code Examples', a: 'Expand the "Code Example" section for any task to view ready-to-use integration code for Cesium.js, Leaflet.js, or MapLibre GL JS — copy with one click.' },
+          { q: 'Request Statistics', a: 'The panel shows live request counts per protocol (XYZ / WMTS / WMS) and the last request time at the bottom of each task row, making it easy to monitor usage.' },
           { q: 'Using TMS in QGIS', a: 'Open "Data Source Manager → XYZ Tiles", create a new connection, enter the TMS URL, replacing {z}/{x}/{y} with {0}/{1}/{2}.' },
         ],
       },
@@ -334,6 +341,21 @@ export default {
     readyTasks: 'Publishable tasks ({count})',
     copyXyz: 'Copy XYZ URL',
     copyWmts: 'Copy WMTS URL',
+    copyWms: 'Copy WMS URL',
+    copyOgc: 'Copy OGC Tiles URL',
+    copyArcgis: 'Copy ArcGIS REST URL',
+    accessAddr: 'Access address',
+    codeExample: 'Code Example',
+    copy: 'Copy',
+    copied: 'Copied',
+    copyCode: 'Copy code',
+    stats: {
+      title: 'Requests',
+      noRequests: 'No requests yet',
+      justNow: 'Just now',
+      minutesAgo: '{n} min ago',
+      hoursAgo: '{n} hr ago',
+    },
   },
 
   progress: {

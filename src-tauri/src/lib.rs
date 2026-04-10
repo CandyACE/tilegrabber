@@ -24,13 +24,14 @@ use commands::task::{
     get_task_logs, get_task_thumbnail, import_task, list_tasks, pause_download, resume_download,
     retry_failed, reveal_in_explorer, start_download, ExportState,
 };
-use commands::server::{get_server_status, start_tile_server, stop_tile_server};
+use commands::server::{get_server_status, get_service_stats, start_tile_server, stop_tile_server};
 use commands::settings::{get_all_settings, get_setting, set_all_settings, set_setting};
 use commands::tile_proxy::fetch_tile;
 use commands::updater::{check_for_update, download_and_install_update, open_release_url};
 use commands::layer::{create_layer, list_layers, delete_layer, reorder_layers, rename_layer};
 use download::engine::DownloadEngine;
 use server::{TileServer, TileServerState};
+use server::StatsMap;
 use storage::app_db::AppDb;
 
 /// 退出整个应用程序
@@ -73,6 +74,10 @@ pub fn run() {
             // 初始化瓦片发布服务状态
             let tile_server: TileServerState = std::sync::Arc::new(std::sync::Mutex::new(TileServer::new()));
             app.manage(tile_server);
+
+            // 初始化服务请求统计（在 axum 服务器和 Tauri 命令之间共享）
+            let stats_map: StatsMap = std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            app.manage(stats_map);
 
             // 初始化网页抓取会话状态
             app.manage(std::sync::Arc::new(CaptureSession::new()));
@@ -163,6 +168,7 @@ pub fn run() {
             start_tile_server,
             stop_tile_server,
             get_server_status,
+            get_service_stats,
             // 设置
             get_setting,
             set_setting,

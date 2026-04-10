@@ -4,6 +4,26 @@
 
 ---
 
+## [v0.4.3] - 2026-04-09
+
+### 新增
+
+- **发布页面 — 多协议支持**：内置 HTTP 服务器现同时提供五种标准服务协议
+  - **WMS 1.1.1**（OGC Web Map Service）：支持 `GetCapabilities` 和 `GetMap`，兼容 EPSG:4326 / EPSG:3857，实时合成瓦片图像
+  - **OGC API Tiles**：新一代 OGC REST API，兼容 MapLibre GL JS 等现代客户端
+  - **ArcGIS REST API**（MapServer 兼容）：可直接挂载至 ArcGIS Online、Esri Leaflet 等 Esri 生态
+- **局域网地址切换**：服务启动后自动检测所有本机 IP，「访问地址」下拉选择后，所有协议 URL 及内置代码示例同步更新
+- **内置代码示例**：每个发布任务内嵌示例代码，支持 Cesium.js / Leaflet.js / MapLibre GL JS 三种框架 × 五种协议（TMS / WMTS / WMS / OGC / ArcGIS）共 15 种组合，一键复制
+- **请求统计**：实时显示各任务的累计请求数（含 XYZ / WMTS / WMS / OGC / ArcGIS 五种协议之和）及最后请求时间
+
+### 优化
+
+- 发布页面协议切换按钮从 2 个（TMS / WMTS）扩展为 5 个（TMS / WMTS / WMS / OGC / ESRI）
+- 「示例代码」区域不再受服务运行状态影响，始终可展开查看
+- 内置帮助文档「本地发布服务」章节扩充至 11 条，覆盖所有新增协议及功能
+
+---
+
 ## [v0.4.2] - 2026-04-08
 
 ### 优化

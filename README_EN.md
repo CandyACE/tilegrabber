@@ -59,8 +59,15 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 | **GeoTIFF / BigTIFF** | Georeferenced raster image; supports files larger than 4 GB |
 
 ### Publishing
-- Built-in HTTP server to publish local tiles as **TMS** or **WMTS** endpoints for other applications
-- Polygon boundary clipping support
+- Built-in HTTP server to publish local tiles via multiple standard protocols:
+  - **XYZ (TMS)** — Standard tile URL template (`{z}/{x}/{y}`)
+  - **WMTS 1.0.0** — OGC Web Map Tile Service; compatible with Cesium, ArcGIS, QGIS, etc.
+  - **WMS 1.1.1** — OGC Web Map Service; supports GetCapabilities and GetMap (EPSG:4326 / EPSG:3857)
+  - **OGC API Tiles** — Next-generation OGC REST API; compatible with MapLibre GL JS and modern clients
+  - **ArcGIS REST API** — Compatible with the Esri ecosystem (ArcGIS Online, Esri Leaflet, etc.)
+- LAN access: auto-detects local IP addresses; select an address from the dropdown and all service URLs update instantly
+- Per-protocol request statistics (XYZ / WMTS / WMS live request counts)
+- Built-in code examples for Cesium.js, Leaflet.js, and MapLibre GL JS
 
 ### Other
 - Automatic update checks with one-click download and install

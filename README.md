@@ -59,8 +59,15 @@
 | **GeoTIFF / BigTIFF** | 地理参考栅格图像，支持超大体积（> 4 GB）  |
 
 ### 发布服务
-- 内置 HTTP 服务器，将本地瓦片以 **TMS** 或 **WMTS** 格式对外发布
-- 支持多边形边界裁剪
+- 内置 HTTP 服务器，将本地瓦片以多种标准格式对外发布：
+  - **XYZ (TMS)**：标准瓦片 URL 模板（`{z}/{x}/{y}`）
+  - **WMTS 1.0.0**：OGC Web Map Tile Service，兼容 Cesium、ArcGIS、QGIS 等
+  - **WMS 1.1.1**：OGC Web Map Service，支持 GetCapabilities 和 GetMap（EPSG:4326 / EPSG:3857）
+  - **OGC API Tiles**：新一代 OGC REST API，兼容 MapLibre GL JS 等现代客户端
+  - **ArcGIS REST API**：兼容 Esri 生态（ArcGIS Online、Esri Leaflet 等）
+- 局域网访问：自动检测本机 IP，下拉切换访问地址，所有服务 URL 同步更新
+- 各协议请求量统计（XYZ / WMTS / WMS 请求次数实时显示）
+- 内置代码示例，支持 Cesium.js / Leaflet.js / MapLibre GL JS 三种框架
 
 ### 其他
 - 自动更新检查，一键下载安装最新版本

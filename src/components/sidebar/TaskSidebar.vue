@@ -88,10 +88,10 @@ const { t } = useI18n();
 const activeFilter = ref<FilterKey>("all");
 
 const filters = computed((): { key: FilterKey; label: string }[] => [
-  { key: "all", label: t('tasks.filterAll') },
-  { key: "downloading", label: t('tasks.filterDownloading') },
-  { key: "completed", label: t('tasks.filterCompleted') },
-  { key: "failed", label: t('tasks.filterFailed') },
+  { key: "all", label: t("tasks.filterAll") },
+  { key: "downloading", label: t("tasks.filterDownloading") },
+  { key: "completed", label: t("tasks.filterCompleted") },
+  { key: "failed", label: t("tasks.filterFailed") },
 ]);
 
 // ─── 真实任务数据 ──────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ defineExpose({ loadTasks });
 
 <template>
   <aside
-    class="flex flex-col shrink-0 overflow-hidden transition-all duration-200 ease-in-out border-r"
+    class="flex flex-col shrink-0 overflow-hidden transition-all duration-200 ease-in-out border-r h-full"
     :style="{
       width: sidebarWidth,
       background: 'var(--color-app-bg)',
@@ -303,7 +303,7 @@ defineExpose({ loadTasks });
           class="text-sm font-semibold"
           style="color: var(--color-text-primary)"
         >
-          {{ t('tasks.title') }}
+          {{ t("tasks.title") }}
         </h2>
         <div class="flex items-center gap-1">
           <button
@@ -320,7 +320,7 @@ defineExpose({ loadTasks });
             @click="emit('new-task')"
           >
             <Plus class="size-3.5" />
-            {{ t('tasks.createTask') }}
+            {{ t("tasks.createTask") }}
           </button>
         </div>
       </div>
@@ -385,10 +385,10 @@ defineExpose({ loadTasks });
             class="text-sm font-medium mb-1"
             style="color: var(--color-text-secondary)"
           >
-            {{ t('tasks.emptyTitle') }}
+            {{ t("tasks.emptyTitle") }}
           </p>
           <p class="text-xs" style="color: var(--color-text-muted)">
-            {{ t('tasks.emptyDesc') }}
+            {{ t("tasks.emptyDesc") }}
           </p>
         </div>
       </div>
@@ -399,7 +399,9 @@ defineExpose({ loadTasks });
 <style scoped>
 .task-list-enter-active,
 .task-list-leave-active {
-  transition: opacity 0.22s ease, transform 0.22s ease;
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
 }
 .task-list-enter-from {
   opacity: 0;

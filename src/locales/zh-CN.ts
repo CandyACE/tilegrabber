@@ -172,7 +172,7 @@ export default {
 
   help: {
     title: '帮助文档',
-    appDesc: '跨平台地图瓦片下载工具，支持 TMS / WMTS / .lrc / .lra 多种数据源，提供断点续传、反封禁下载、MBTiles 导出和本地瓦片发布服务。',
+    appDesc: '跨平台地图瓦片下载工具，支持 TMS / WMTS / .lrc / .lra 多种数据源，提供断点续传、反封禁下载、MBTiles 导出和本地瓦片发布服务（XYZ / WMTS / WMS / OGC API Tiles / ArcGIS REST）。',
     version: '御图 v{version} · 基于 Tauri v2 + MapLibre GL JS v4',
     sections: [
       {
@@ -216,8 +216,15 @@ export default {
         title: '本地发布服务',
         items: [
           { q: '如何启动发布服务？', a: '点击顶部「发布」导航，设置端口号后点击「启动服务」。只有已完成下载的任务才会出现在发布列表中。' },
-          { q: 'TMS 端点', a: 'http://localhost:{port}/tiles/{task_id}/{z}/{x}/{y}  —  可直接在 Leaflet / OpenLayers 中使用。' },
-          { q: 'WMTS 能力文档', a: 'http://localhost:{port}/wmts/{task_id}?SERVICE=WMTS&REQUEST=GetCapabilities  —  QGIS 等 GIS 软件可直接加载。' },
+          { q: '支持哪些协议？', a: '同一任务同时支持五种标准协议：XYZ (TMS)、WMTS 1.0.0、WMS 1.1.1、OGC API Tiles 和 ArcGIS REST API。切换协议只需点击面板中的协议按钮。' },
+          { q: 'XYZ (TMS) 端点', a: 'http://localhost:{port}/tiles/{task_id}/{z}/{x}/{y}  —  可直接在 Leaflet / MapLibre GL JS / OpenLayers 中使用。' },
+          { q: 'WMTS 能力文档', a: 'http://localhost:{port}/wmts/{task_id}?SERVICE=WMTS&REQUEST=GetCapabilities  —  QGIS、ArcGIS、Cesium 等 GIS 软件可直接加载。' },
+          { q: 'WMS 服务', a: 'GetCapabilities：http://localhost:{port}/wms/{task_id}?SERVICE=WMS&REQUEST=GetCapabilities  —  支持 EPSG:4326 和 EPSG:3857 投影，GetMap 请求会实时合成瓦片图像。' },
+          { q: 'OGC API Tiles', a: 'http://localhost:{port}/ogc/{task_id}/tiles/WebMercatorQuad/{z}/{y}/{x}  —  兼容 MapLibre GL JS 等现代客户端，支持 REST 风格的瓦片访问。' },
+          { q: 'ArcGIS REST API', a: 'http://localhost:{port}/arcgis/rest/services/{task_id}/MapServer  —  兼容 Esri 生态，可在 ArcGIS Online、Esri Leaflet、ArcGIS API for JavaScript 中直接挂载。' },
+          { q: '局域网访问', a: '服务启动后，「访问地址」下拉菜单会列出所有本机 IP，切换后面板中所有 URL 和代码示例会同步更新，方便其他设备直接访问。' },
+          { q: '内置代码示例', a: '点击任意任务的「示例代码」展开区域，可切换 Cesium.js / Leaflet.js / MapLibre GL JS 三种框架查看完整接入代码，一键复制。' },
+          { q: '请求统计', a: '面板底部实时显示各协议的请求次数（XYZ / WMTS / WMS）及最近请求时间，方便监控服务使用情况。' },
           { q: '在 QGIS 中使用 TMS', a: '打开「数据源管理 → XYZ Tiles」，新建连接，输入 TMS URL，将 {z}/{x}/{y} 替换为 {0}/{1}/{2}。' },
         ],
       },
@@ -334,6 +341,21 @@ export default {
     readyTasks: '可发布的任务（{count}）',
     copyXyz: '复制 XYZ URL',
     copyWmts: '复制 WMTS URL',
+    copyWms: '复制 WMS URL',
+    copyOgc: '复制 OGC Tiles URL',
+    copyArcgis: '复制 ArcGIS REST URL',
+    accessAddr: '访问地址',
+    codeExample: '示例代码',
+    copy: '复制',
+    copied: '已复制',
+    copyCode: '复制代码',
+    stats: {
+      title: '请求数',
+      noRequests: '暂无请求',
+      justNow: '刚刚',
+      minutesAgo: '{n} 分钟前',
+      hoursAgo: '{n} 小时前',
+    },
   },
 
   progress: {
