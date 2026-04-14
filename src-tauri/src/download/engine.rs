@@ -201,6 +201,20 @@ async fn run_download(
         }
     };
 
+    // MBTiles 文件数据源：走独立的复制路径
+    if source.kind == crate::types::SourceKind::MbtileFile {
+        let tile_store_path = match task.tile_store_path.as_deref() {
+            Some(p) => p.to_owned(),
+            None => {
+                app_db.add_log(Some(&task_id), "error", "任务缺少瓦片存储路径").ok();
+                app_db.update_task_status(&task_id, "failed").ok();
+                return;
+            }
+        };
+        run_mbtiles_import(task_id, app_db, app, source.url_template, tile_store_path, ctrl_rx).await;
+        return;
+    }
+
     // 3. 打开瓦片存储（路径在任务创建时已持久化到 DB）
     let tile_store_path = match task.tile_store_path.as_deref() {
         Some(p) => p.to_owned(),
@@ -293,7 +307,12 @@ async fn run_download(
     }
 
     // 7. 创建 HTTP 客户端
-    let client = match worker::build_client(&source.headers) {
+    let proxy_url = if rules.proxy_enabled && !rules.proxy_url.is_empty() {
+        Some(rules.proxy_url.clone())
+    } else {
+        None
+    };
+    let client = match worker::build_client_with_proxy(&source.headers, proxy_url.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("[engine] cannot build http client: {}", e);
@@ -305,6 +324,8 @@ async fn run_download(
 
     // 速率限制：每瓦片最小间隔（由规则计算得出，0 = 不限速）
     let tile_delay_ms = rules.per_tile_delay_ms();
+    let delay_min_ms = rules.delay_min_ms;
+    let delay_max_ms = rules.delay_max_ms;
 
     // 立即发送初始进度事件，前端立刻将任务状态改为 "downloading"
     let init_prog = tile_store.get_progress().unwrap_or_default();
@@ -440,8 +461,8 @@ async fn run_download(
                 if *ctrl.borrow() == CtrlSignal::Cancel {
                     return (tile, Err::<Vec<u8>, anyhow::Error>(anyhow::anyhow!("cancelled")));
                 }
-                // 瓦片间随机微延迟（防封禁）
-                throttle::random_delay(0, 8).await;
+                // 瓦片间随机微延迟（防封禁，使用用户配置的延迟范围）
+                throttle::random_delay(delay_min_ms, delay_max_ms).await;
                 // 速率限制额外延迟
                 if tile_delay_ms > 0 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(tile_delay_ms)).await;
@@ -685,6 +706,32 @@ async fn run_download(
         final_status, progress.downloaded, progress.failed, progress.total
     );
     app_db.add_log(Some(&task_id), "info", &summary).ok();
+
+    // 下载完成后发送系统通知（仅在非取消状态且通知设置已启用时）
+    let notify_enabled = app_db
+        .get_setting("app.download_notification")
+        .ok()
+        .flatten()
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    if notify_enabled && final_status != "cancelled" {
+        use tauri_plugin_notification::NotificationExt;
+        let body = if progress.failed > 0 {
+            format!(
+                "已下载 {} 个瓦片，失败 {} 个",
+                progress.downloaded, progress.failed
+            )
+        } else {
+            format!("已成功下载 {} 个瓦片", progress.downloaded)
+        };
+        app.notification()
+            .builder()
+            .title(&task.name)
+            .body(&body)
+            .show()
+            .ok();
+    }
+
     let _ = app.emit(
         "tilegrab-progress",
         ProgressPayload {
@@ -924,4 +971,119 @@ fn post_clip_tiles(
     )?;
 
     Ok(())
+}
+
+// ─── MBTiles 文件数据源复制 ───────────────────────────────────────────────────
+
+async fn run_mbtiles_import(
+    task_id: String,
+    app_db: AppDb,
+    app: AppHandle,
+    mbtiles_path: String,
+    tile_store_path: String,
+    ctrl_rx: watch::Receiver<CtrlSignal>,
+) {
+    app_db.update_task_status(&task_id, "downloading").ok();
+
+    let result = tokio::task::spawn_blocking({
+        let task_id = task_id.clone();
+        let app_db = app_db.clone();
+        let app = app.clone();
+        move || -> anyhow::Result<()> {
+            use rusqlite::{Connection, OpenFlags};
+
+            let src = Connection::open_with_flags(
+                &mbtiles_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?;
+
+            let total: i64 = src.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get(0))?;
+            app_db.update_task_total(&task_id, total).ok();
+
+            app.emit("tilegrab-progress", ProgressPayload {
+                task_id: task_id.clone(), total, downloaded: 0, failed: 0,
+                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "downloading".into(),
+            })?;
+
+            let mut stmt = src.prepare(
+                "SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles",
+            )?;
+
+            if let Some(parent) = std::path::Path::new(&tile_store_path).parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let tile_store = TileStore::open(std::path::Path::new(&tile_store_path), &task_id)?;
+            let mut downloaded: i64 = 0;
+            let mut failed: i64 = 0;
+            let mut rows = stmt.query([])?;
+
+            while let Some(row) = rows.next()? {
+                let signal = ctrl_rx.borrow().clone();
+                match signal {
+                    CtrlSignal::Cancel => {
+                        app_db.update_task_progress(&task_id, downloaded, failed).ok();
+                        app_db.update_task_status(&task_id, "cancelled").ok();
+                        app.emit("tilegrab-progress", ProgressPayload {
+                            task_id: task_id.clone(), total, downloaded, failed,
+                            speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "cancelled".into(),
+                        })?;
+                        return Ok(());
+                    }
+                    CtrlSignal::Pause => {
+                        for _ in 0..300 {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            if *ctrl_rx.borrow() != CtrlSignal::Pause { break; }
+                        }
+                        continue;
+                    }
+                    CtrlSignal::Run => {}
+                }
+
+                let z: u8 = row.get::<_, i32>(0)? as u8;
+                let x: u32 = row.get::<_, i32>(1)? as u32;
+                let tms_y: u32 = row.get::<_, i32>(2)? as u32;
+                let tile_data: Vec<u8> = row.get(3)?;
+                let y = (1u32 << z).wrapping_sub(1).wrapping_sub(tms_y);
+
+                match tile_store.save_tile(&crate::tile_math::TileCoord { z, x, y }, &tile_data) {
+                    Ok(_) => downloaded += 1,
+                    Err(e) => { eprintln!("[mbtiles-import] {e}"); failed += 1; }
+                }
+
+                if (downloaded + failed) % 100 == 0 {
+                    app.emit("tilegrab-progress", ProgressPayload {
+                        task_id: task_id.clone(), total, downloaded, failed,
+                        speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "downloading".into(),
+                    })?;
+                }
+            }
+
+            let final_status = if failed == 0 { "completed" } else { "completed_with_errors" };
+            app_db.update_task_status(&task_id, final_status).ok();
+            app_db.update_task_progress(&task_id, downloaded, failed).ok();
+            app.emit("tilegrab-progress", ProgressPayload {
+                task_id: task_id.clone(), total, downloaded, failed,
+                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: final_status.into(),
+            })?;
+
+            Ok(())
+        }
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            eprintln!("[engine] mbtiles import error: {e}");
+            app_db.add_log(Some(&task_id), "error", &format!("MBTiles 导入失败: {e}")).ok();
+            app_db.update_task_status(&task_id, "failed").ok();
+            app.emit("tilegrab-progress", ProgressPayload {
+                task_id: task_id.clone(), total: 0, downloaded: 0, failed: 0,
+                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "failed".into(),
+            }).ok();
+        }
+        Err(e) => {
+            eprintln!("[engine] spawn_blocking panicked: {e}");
+            app_db.update_task_status(&task_id, "failed").ok();
+        }
+    }
 }

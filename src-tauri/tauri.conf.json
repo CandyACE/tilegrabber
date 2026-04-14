@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "御图",
+  "productName": "TileGrabber",
   "identifier": "com.tilegrabber.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -57,7 +57,9 @@
       "nsis": {
         "sidebarImage": "installer-assets/sidebar.bmp",
         "headerImage": "installer-assets/header.bmp",
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "languages": ["SimpChinese", "English"],
+        "displayLanguageSelector": false
       }
     }
   }

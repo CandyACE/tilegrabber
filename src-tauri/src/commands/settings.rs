@@ -46,11 +46,37 @@ pub fn default_settings() -> HashMap<&'static str, &'static str> {
         ("app.close_action", "ask"),
         // 是否开启悬浮速度窗口
         ("app.float_window", "false"),
+        // 下载完成后是否发送系统通知
+        ("app.download_notification", "true"),
+        // ── 网络代理 ────────────────────────────────────────────────────────
+        // 是否启用代理
+        ("network.proxy_enabled", "false"),
+        // 代理服务器地址（如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）
+        ("network.proxy_url", ""),
     ]
     .into()
 }
 
 // ─── Tauri 命令 ──────────────────────────────────────────────────────────────
+
+/// 从 AppDb 读取当前生效的代理 URL（未启用或未设置则返回 None）
+pub fn get_active_proxy_url(app_db: &AppDb) -> Option<String> {
+    let enabled = app_db
+        .get_setting("network.proxy_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !enabled {
+        return None;
+    }
+    let url = app_db
+        .get_setting("network.proxy_url")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if url.is_empty() { None } else { Some(url) }
+}
 
 /// 读取单个设置（若不存在返回默认值，若默认值也无返回 null）
 #[tauri::command]

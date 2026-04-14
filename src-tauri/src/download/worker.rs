@@ -21,6 +21,14 @@ use super::throttle;
 
 /// 构建带通用 Headers 的 reqwest 客户端
 pub fn build_client(extra_headers: &HashMap<String, String>) -> Result<Client> {
+    build_client_with_proxy(extra_headers, None)
+}
+
+/// 构建带通用 Headers 和可选 HTTP/HTTPS 代理的 reqwest 客户端
+pub fn build_client_with_proxy(
+    extra_headers: &HashMap<String, String>,
+    proxy_url: Option<&str>,
+) -> Result<Client> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(15))
         .connect_timeout(Duration::from_secs(6))
@@ -33,6 +41,11 @@ pub fn build_client(extra_headers: &HashMap<String, String>) -> Result<Client> {
         .brotli(true)
         .deflate(true)
         .http2_adaptive_window(true);
+
+    if let Some(url) = proxy_url.filter(|u| !u.is_empty()) {
+        let proxy = reqwest::Proxy::all(url).context("代理 URL 格式无效")?;
+        builder = builder.proxy(proxy);
+    }
 
     if !extra_headers.is_empty() {
         let mut headers = reqwest::header::HeaderMap::new();

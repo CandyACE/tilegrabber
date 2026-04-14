@@ -58,6 +58,7 @@ const KIND_LABELS: Record<string, string> = {
   tms: "TMS",
   webcapture: "Web截图",
   threedtiles: "3D Tiles",
+  mbtilefile: "MBTiles",
 };
 
 function parseSource(sourceConfig: string): SourceInfo | null {

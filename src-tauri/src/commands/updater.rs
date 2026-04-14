@@ -1,20 +1,20 @@
 //! TileGrabber — 自动更新检查命令
 //!
 //! 功能：
-//!   1. check_for_update   — 从 OSS 的 latest.json 检查版本，返回当前平台的下载直链
+//!   1. check_for_update   — 从 GitHub Releases 的 latest.json 检查版本，返回当前平台的下载直链
 //!   2. download_and_install_update — 下载安装包并启动安装程序，然后退出应用
 //!      下载进度通过 Tauri 事件 `update-download-progress` 推送到前端
 //!
-//! OSS latest.json 格式：
+//! latest.json 格式（由 CI 自动生成并上传到 GitHub Releases）：
 //! ```json
 //! {
 //!   "tag_name": "v1.2.0",
-//!   "html_url": "https://your-bucket.oss-cn-hangzhou.aliyuncs.com/tilegrabber/releases/v1.2.0/",
+//!   "html_url": "https://github.com/CandyACE/tilegrabber/releases/tag/v1.2.0",
 //!   "body": "## 更新内容\n- 修复了某某问题",
 //!   "assets": {
-//!     "windows": "https://...TileGrabber_1.2.0_x64-setup.exe",
-//!     "macos":   "https://...TileGrabber_1.2.0_x64.dmg",
-//!     "linux":   "https://...TileGrabber_1.2.0_amd64.AppImage"
+//!     "windows": "https://github.com/CandyACE/tilegrabber/releases/download/v1.2.0/TileGrabber_1.2.0_x64-setup.exe",
+//!     "macos":   "https://github.com/CandyACE/tilegrabber/releases/download/v1.2.0/TileGrabber_1.2.0_aarch64.dmg",
+//!     "linux":   "https://github.com/CandyACE/tilegrabber/releases/download/v1.2.0/TileGrabber_1.2.0_amd64.AppImage"
 //!   }
 //! }
 //! ```
@@ -28,11 +28,11 @@ use tokio::io::AsyncWriteExt;
 /// 优先使用编译时环境变量 TILEGRABBER_UPDATE_URL，来源有两个（优先级从高到低）：
 ///   1. src-tauri/update_url 文件（本地开发时手动维护）
 ///   2. 进程环境变量（CI 通过 step env 注入，如 GitHub Actions）
-/// 否则回退到 OSS 上的固定地址。
+/// 否则回退到 GitHub Releases 的固定地址。
 /// 格式：https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 const UPDATE_CHECK_URL: &str = match option_env!("TILEGRABBER_UPDATE_URL") {
     Some(url) => url,
-    None => "http://oss.emapgis.com/soft/tiledownload/latest.json",
+    None => "https://github.com/CandyACE/tilegrabber/releases/latest/download/latest.json",
 };
 
 // ─── 公共类型 ─────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ pub struct UpdateCheckResult {
     pub has_update: bool,
     /// 更新说明页 URL（可选，浏览器打开）
     pub release_url: Option<String>,
-    /// 当前平台的安装包 OSS 直链
+    /// 当前平台的安装包下载直链
     pub download_url: Option<String>,
     pub release_notes: Option<String>,
     pub error: Option<String>,
@@ -62,11 +62,11 @@ pub struct DownloadProgress {
     pub percent: u8,
 }
 
-// ─── 私有：OSS JSON 反序列化 ──────────────────────────────────────────────────
+// ─── 私有：latest.json 反序列化 ──────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Default)]
 #[allow(dead_code)]
-struct OssAssets {
+struct ReleaseAssets {
     windows: Option<String>,
     /// macOS ARM64（Apple Silicon），也是 macos 字段的主下载地址
     macos: Option<String>,
@@ -76,12 +76,12 @@ struct OssAssets {
 }
 
 #[derive(Debug, Deserialize)]
-struct OssRelease {
+struct LatestRelease {
     tag_name: String,
     html_url: Option<String>,
     body: Option<String>,
     #[serde(default)]
-    assets: OssAssets,
+    assets: ReleaseAssets,
 }
 
 // ─── Tauri 命令 ──────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ pub async fn check_for_update() -> Result<UpdateCheckResult, String> {
         }
     };
 
-    let release: OssRelease = match serde_json::from_str(&body_text) {
+    let release: LatestRelease = match serde_json::from_str(&body_text) {
         Ok(r) => r,
         Err(e) => {
             return Ok(UpdateCheckResult {

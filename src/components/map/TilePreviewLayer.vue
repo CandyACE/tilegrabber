@@ -22,10 +22,15 @@ const BOUNDS_LINE_ID = "tile-preview-bounds-line";
 
 // 自定义协议名：通过 Rust 代理携带自定义 headers 的瓦片请求
 const TILE_PROTO = "tilegrab-preview";
+// MBTiles 专用协议：从本地 .mbtiles 文件读取瓦片
+const MBTILES_PROTO = "mbtiles-tile";
 
 // 当前注入的 headers（供协议处理器读取）
 let currentHeaders: Record<string, string> = {};
+// 当前 MBTiles 文件路径（供协议处理器读取）
+let currentMbtilesPath: string = "";
 let protoRegistered = false;
+let mbtilesProtoRegistered = false;
 
 /** 注册一次自定义协议处理器 */
 function ensureProtocol() {
@@ -47,43 +52,70 @@ function ensureProtocol() {
   });
 }
 
+/** 注册 MBTiles 瓦片协议处理器（一次性） */
+function ensureMbtilesProtocol() {
+  if (mbtilesProtoRegistered) return;
+  mbtilesProtoRegistered = true;
+  maplibregl.addProtocol(MBTILES_PROTO, async (params) => {
+    // URL 格式：mbtiles-tile://tile/{z}/{x}/{y}
+    const parts = params.url.replace(`${MBTILES_PROTO}://tile/`, "").split("/");
+    const z = parseInt(parts[0], 10);
+    const x = parseInt(parts[1], 10);
+    const y = parseInt(parts[2], 10);
+    try {
+      const bytes = await invoke<number[]>("fetch_mbtiles_tile", {
+        path: currentMbtilesPath,
+        z,
+        x,
+        y,
+      });
+      return { data: new Uint8Array(bytes).buffer };
+    } catch {
+      // 该瓦片不存在时返回空（不报错，避免控制台污染）
+      return { data: new Uint8Array(0).buffer };
+    }
+  });
+}
+
 // ─── 添加 / 更新预览图层 ──────────────────────────────────────────────────────
 
 function addPreviewLayer(map: MaplibreMap, src: TileSource) {
   try {
     removePreviewLayer(map);
 
-    // 展开 {s} 子域名为多个 URL
     let tileUrls: string[];
-    if (src.subdomains.length > 0) {
-      tileUrls = src.subdomains.map((s) =>
-        src.url_template.replace(/\{s\}/g, s),
-      );
-    } else {
-      tileUrls = [src.url_template];
-    }
-
-    // CRS 判断
     const scheme = src.north_to_south ? "xyz" : "tms";
+
+    if (src.kind === "mbtilefile") {
+      // MBTiles：本地文件，通过自定义协议读取
+      currentMbtilesPath = src.url_template;
+      ensureMbtilesProtocol();
+      tileUrls = [`${MBTILES_PROTO}://tile/{z}/{x}/{y}`];
+    } else {
+      // 展开 {s} 子域名为多个 URL
+      if (src.subdomains.length > 0) {
+        tileUrls = src.subdomains.map((s) =>
+          src.url_template.replace(/\{s\}/g, s),
+        );
+      } else {
+        tileUrls = [src.url_template];
+      }
+
+      // 所有 HTTP 请求统一走 Rust 后端代理，避免 WebView 请求被防火墙/CSP 拦截
+      currentHeaders = { ...(src.headers ?? {}) };
+      ensureProtocol();
+      tileUrls = tileUrls.map((u) =>
+        u.replace(/^https?:\/\//, `${TILE_PROTO}://`),
+      );
+    }
 
     console.log("[TilePreviewLayer] Adding preview layer:", {
       name: src.name,
+      kind: src.kind,
       urls: tileUrls.slice(0, 2),
       scheme,
-      tileSize: src.tile_size,
-      bounds: src.bounds,
-      headers: Object.keys(src.headers ?? {}),
     });
 
-    // 所有请求统一走 Rust 后端代理，避免 WebView 请求被防火墙/CSP 拦截
-    currentHeaders = { ...(src.headers ?? {}) };
-    ensureProtocol();
-    // 将 https:// 或 http:// 替换为自定义协议前缀
-    tileUrls = tileUrls.map((u) =>
-      u.replace(/^https?:\/\//, `${TILE_PROTO}://`),
-    );
-
-    // 添加 raster 数据源
     map.addSource(SOURCE_ID, {
       type: "raster",
       tiles: tileUrls,
@@ -94,7 +126,6 @@ function addPreviewLayer(map: MaplibreMap, src: TileSource) {
       attribution: src.attribution ?? "",
     });
 
-    // 添加渲染图层（置于道路标注下方）
     const labelLayerId = getFirstLabelLayerId(map);
     map.addLayer(
       {
@@ -106,10 +137,7 @@ function addPreviewLayer(map: MaplibreMap, src: TileSource) {
       labelLayerId,
     );
 
-    // 添加范围框
     addBoundsOverlay(map, src);
-
-    // 飞到范围
     fitToBounds(map, src);
   } catch (err) {
     console.error("[TilePreviewLayer] Failed to add preview layer:", err, src);

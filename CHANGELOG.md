@@ -4,6 +4,24 @@
 
 ---
 
+## [v0.5.0] - 2026-04-10
+
+### 新增
+
+- **MBTiles 导入**：支持将本地 `.mbtiles` 文件导入为下载任务，导入完成后可直接导出为其他格式
+
+### 修复
+
+- **CI 安装包名称**：将 `productName` 改为 `TileGrabber`，避免中文在 CI 环境（US locale）被截断导致安装包文件名缺少前缀
+- **latest.json 下载地址 404**：修复 CI 工作流中 `latest.json` 生成时序问题——现在先发布 Release，再重新获取资产 URL（真实 tag slug），再生成并上传 `latest.json`，避免草稿状态的 `untagged-*` URL 被写入
+
+### 修复（内部）
+
+- MBTiles 导入完成后任务的 `total_tiles` / `downloaded_tiles` 未写入数据库，导致导出按钮不显示
+- MBTiles 导入使用了 `"running"` 状态字符串，而进度面板只识别 `"downloading"`，导致进度条不显示
+
+---
+
 ## [v0.4.3] - 2026-04-09
 
 ### 新增

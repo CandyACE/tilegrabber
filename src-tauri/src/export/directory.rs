@@ -38,6 +38,8 @@ pub fn export_directory<F>(
     bounds: [f64; 4],
     polygon: Option<&[[f64; 2]]>,
     crs: &CrsType,
+    jpeg_quality: Option<u8>,
+    png_level: Option<u8>,
     mut progress_cb: F,
 ) -> Result<u64>
 where
@@ -131,7 +133,14 @@ where
             } else {
                 std::borrow::Cow::Borrowed(data.as_slice())
             };
-            let actual_ext = if need_clip && write_data.as_ref().starts_with(b"\x89PNG") {
+            // 重编码（调整 JPEG 品质 / PNG 压缩级别）
+            let write_data = if jpeg_quality.is_some() || png_level.is_some() {
+                crate::export::try_reencode_tile(write_data.as_ref(), jpeg_quality, png_level)
+                    .into_owned().into()
+            } else {
+                write_data
+            };
+            let actual_ext = if write_data.as_ref().starts_with(b"\x89PNG") {
                 "png"
             } else {
                 ext

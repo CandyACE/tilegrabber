@@ -13,7 +13,7 @@ use tauri::Manager;
 use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
 use tauri::Emitter;
 use commands::math::{calculate_tile_count, generate_tile_grid};
-use commands::source::{parse_area_file, parse_source_file, parse_tms_url, parse_wmts_url, validate_tile_url};
+use commands::source::{fetch_mbtiles_tile, parse_area_file, parse_mbtiles_source, parse_source_file, parse_tms_url, parse_wmts_url, validate_tile_url};
 use commands::web_capture::{
     clear_captured_tiles, close_capture_window, get_captured_tiles, open_capture_window,
     CaptureSession,
@@ -21,8 +21,8 @@ use commands::web_capture::{
 use commands::task::{
     cancel_download, create_task, delete_task, export_directory, export_geotiff, export_mbtiles,
     export_task, get_download_progress_geojson, get_export_jobs, get_stored_tile, get_task,
-    get_task_logs, get_task_thumbnail, import_task, list_tasks, pause_download, resume_download,
-    retry_failed, reveal_in_explorer, start_download, ExportState,
+    get_task_logs, get_task_thumbnail, import_mbtiles, import_task, list_tasks, pause_download,
+    resume_download, retry_failed, reveal_in_explorer, start_download, ExportState,
 };
 use commands::server::{get_server_status, get_service_stats, start_tile_server, stop_tile_server};
 use commands::settings::{get_all_settings, get_setting, set_all_settings, set_setting};
@@ -54,6 +54,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // 初始化应用数据目录
@@ -128,6 +129,8 @@ pub fn run() {
             parse_tms_url,
             parse_wmts_url,
             validate_tile_url,
+            parse_mbtiles_source,
+            fetch_mbtiles_tile,
             // 网页抓取
             open_capture_window,
             get_captured_tiles,
@@ -160,6 +163,7 @@ pub fn run() {
             // 任务包导入/导出
             export_task,
             import_task,
+            import_mbtiles,
             // 下载进度可视化
             get_download_progress_geojson,
             // 瓦片代理

@@ -26,6 +26,14 @@ pub struct DownloadRules {
     pub max_tiles_per_sec: u32,
     /// 批次间额外停顿时间（毫秒，0 = 使用 throttle 默认值）
     pub burst_pause_ms: u32,
+    /// 瓦片间随机延迟下界（毫秒）
+    pub delay_min_ms: u64,
+    /// 瓦片间随机延迟上界（毫秒）
+    pub delay_max_ms: u64,
+    /// 是否启用代理
+    pub proxy_enabled: bool,
+    /// HTTP/HTTPS 代理 URL（如 http://127.0.0.1:7890）
+    pub proxy_url: String,
 }
 
 impl Default for DownloadRules {
@@ -36,6 +44,10 @@ impl Default for DownloadRules {
             time_window_end: 8,
             max_tiles_per_sec: 0,
             burst_pause_ms: 0,
+            delay_min_ms: 0,
+            delay_max_ms: 150,
+            proxy_enabled: false,
+            proxy_url: String::new(),
         }
     }
 }
@@ -58,6 +70,10 @@ impl DownloadRules {
         let time_window_end: u8 = get("rules.time_window_end", "8").parse().unwrap_or(8);
         let max_tiles_per_sec: u32 = get("rules.max_tiles_per_sec", "0").parse().unwrap_or(0);
         let burst_pause_ms: u32 = get("rules.burst_pause_ms", "0").parse().unwrap_or(0);
+        let delay_min_ms: u64 = get("download.delay_min_ms", "0").parse().unwrap_or(0);
+        let delay_max_ms: u64 = get("download.delay_max_ms", "150").parse().unwrap_or(150);
+        let proxy_enabled = get("network.proxy_enabled", "false") == "true";
+        let proxy_url = get("network.proxy_url", "");
 
         DownloadRules {
             time_window_enabled,
@@ -65,6 +81,10 @@ impl DownloadRules {
             time_window_end,
             max_tiles_per_sec,
             burst_pause_ms,
+            delay_min_ms,
+            delay_max_ms,
+            proxy_enabled,
+            proxy_url,
         }
     }
 

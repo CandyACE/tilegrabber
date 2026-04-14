@@ -10,7 +10,7 @@ export interface Bounds {
 }
 
 export interface TileSource {
-  kind: "lrc" | "lra" | "ovmap" | "wmts" | "tms" | "webcapture" | "threedtiles";
+  kind: "lrc" | "lra" | "ovmap" | "wmts" | "tms" | "webcapture" | "threedtiles" | "mbtilefile";
   name: string;
   url_template: string;
   url_param_order: string[];

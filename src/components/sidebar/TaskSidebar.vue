@@ -11,6 +11,7 @@ import { Plus, Inbox, Upload } from "lucide-vue-next";
 import TaskCard from "./TaskCard.vue";
 import type { Task, TaskStatus } from "./TaskCard.vue";
 import { useExportJobs } from "~/composables/useExportJobs";
+import { useToast } from "~/composables/useToast";
 import { useI18n } from "vue-i18n";
 
 // ─── Tauri 后端返回的 Task 格式（camelCase） ───────────────────────────────
@@ -84,6 +85,7 @@ const emit = defineEmits<{
 type FilterKey = "all" | TaskStatus;
 
 const { t } = useI18n();
+const { addToast } = useToast();
 
 const activeFilter = ref<FilterKey>("all");
 
@@ -146,6 +148,20 @@ onMounted(async () => {
         )
       ) {
         loadTasks();
+        // 应用内 Toast 通知
+        const taskName =
+          tasks.value.find((t) => t.id === p.task_id)?.name ?? p.task_id;
+        if (p.status === "completed") {
+          addToast(t("tasks.toast.completed", { name: taskName }), "success");
+        } else if (p.status === "completed_with_errors") {
+          addToast(
+            t("tasks.toast.completedWithErrors", { name: taskName }),
+            "warning",
+            t("tasks.toast.completedWithErrorsHint"),
+          );
+        } else if (p.status === "failed") {
+          addToast(t("tasks.toast.failed", { name: taskName }), "error");
+        }
       }
     },
   );

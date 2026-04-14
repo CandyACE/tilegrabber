@@ -32,6 +32,7 @@ import SettingsPanel from "~/components/sidebar/SettingsPanel.vue";
 import HelpPanel from "~/components/sidebar/HelpPanel.vue";
 import AboutPanel from "~/components/sidebar/AboutPanel.vue";
 import NewTaskWizard from "~/components/wizard/NewTaskWizard.vue";
+import ToastContainer from "~/components/ToastContainer.vue";
 
 // ─── 启动时缓存设置（单次 IPC，供 onMounted 和 onSplashDone 共用） ──────────
 let cachedSettings: Record<string, string> = {};
@@ -613,6 +614,7 @@ function handleDetailDeleted() {
       </main>
     </div>
   </div>
+  <ToastContainer />
 </template>
 
 <style scoped>

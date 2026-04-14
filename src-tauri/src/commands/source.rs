@@ -7,8 +7,11 @@
 //! - `validate_tile_url`   — 探测单个瓦片 URL 是否可访问
 
 use tauri::command;
+use tauri::State;
 
+use crate::commands::settings::get_active_proxy_url;
 use crate::parser::{lra, lrc, ovmap, wmts};
+use crate::storage::app_db::AppDb;
 use crate::types::TileSource;
 
 /// 解析本地 .lrc 或 .lra 文件
@@ -42,14 +45,21 @@ pub async fn parse_tms_url(url: String, name: Option<String>) -> Result<TileSour
 ///
 /// 由于需要网络请求，此命令为 async 且耗时较长。
 #[command]
-pub async fn parse_wmts_url(url: String) -> Result<Vec<TileSource>, String> {
+pub async fn parse_wmts_url(url: String, app_db: State<'_, AppDb>) -> Result<Vec<TileSource>, String> {
     // 构建 GetCapabilities 请求 URL
     let caps_url = build_capabilities_url(&url);
+    let proxy_url = get_active_proxy_url(app_db.inner());
 
     // 发起 HTTP 请求
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent("TileGrabber/0.1")
+        .user_agent("TileGrabber/0.1");
+    if let Some(p) = proxy_url.as_deref() {
+        if let Ok(proxy) = reqwest::Proxy::all(p) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?;
 
@@ -87,7 +97,7 @@ pub async fn parse_wmts_url(url: String) -> Result<Vec<TileSource>, String> {
 
 /// 验证瓦片 URL 是否可访问（探测 z=0/x=0/y=0 瓦片）
 #[command]
-pub async fn validate_tile_url(url_template: String) -> Result<bool, String> {
+pub async fn validate_tile_url(url_template: String, app_db: State<'_, AppDb>) -> Result<bool, String> {
     // 替换占位符为 z=1, x=0, y=0 的实际坐标
     let test_url = url_template
         .replace("{z}", "1")
@@ -99,10 +109,17 @@ pub async fn validate_tile_url(url_template: String) -> Result<bool, String> {
     if !test_url.starts_with("http://") && !test_url.starts_with("https://") {
         return Ok(false);
     }
+    let proxy_url = get_active_proxy_url(app_db.inner());
 
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
-        .user_agent("TileGrabber/0.1")
+        .user_agent("TileGrabber/0.1");
+    if let Some(p) = proxy_url.as_deref() {
+        if let Ok(proxy) = reqwest::Proxy::all(p) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?;
 
@@ -140,6 +157,102 @@ pub async fn parse_area_file(
 ) -> Result<crate::parser::area_file::ParsedArea, String> {
     crate::parser::area_file::parse_area_file(std::path::Path::new(&path))
         .map_err(|e| e.to_string())
+}
+
+/// 解析 MBTiles 文件元数据，返回统一 TileSource
+///
+/// 读取 `metadata` 表中的 name / bounds / minzoom / maxzoom / format。
+/// `url_template` 字段用于存储文件路径，供下载引擎使用。
+#[command]
+pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
+    use crate::types::{Bounds, CrsType, SourceKind};
+    tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("无法打开 MBTiles 文件: {e}"))?;
+
+        // 读取 metadata 表
+        let mut meta = std::collections::HashMap::<String, String>::new();
+        {
+            let mut stmt = conn
+                .prepare("SELECT name, value FROM metadata")
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<_> = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .map_err(|e| e.to_string())?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (k, v) in rows {
+                meta.insert(k, v);
+            }
+        }
+
+        let name = meta.get("name").cloned().unwrap_or_else(|| {
+            std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("MBTiles")
+                .to_string()
+        });
+
+        let (west, south, east, north) = if let Some(s) = meta.get("bounds") {
+            let p: Vec<f64> = s.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+            if p.len() == 4 {
+                (p[0], p[1], p[2], p[3])
+            } else {
+                (-180.0, -85.0511, 180.0, 85.0511)
+            }
+        } else {
+            (-180.0, -85.0511, 180.0, 85.0511)
+        };
+
+        let min_zoom: u8 = meta.get("minzoom").and_then(|s| s.parse().ok()).unwrap_or(0);
+        let max_zoom: u8 = meta.get("maxzoom").and_then(|s| s.parse().ok()).unwrap_or(18);
+        let format = meta.get("format").cloned().unwrap_or_else(|| "png".into());
+
+        Ok(TileSource {
+            kind: SourceKind::MbtileFile,
+            name,
+            url_template: path,
+            bounds: Bounds { west, south, east, north },
+            min_zoom,
+            max_zoom,
+            format,
+            north_to_south: true,
+            crs: CrsType::WebMercator,
+            ..Default::default()
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 从 MBTiles 文件读取单张瓦片（用于向导预览）
+///
+/// MBTiles 使用 TMS Y 轴（y=0 在南），传入 XYZ y 后自动转换。
+#[command]
+pub async fn fetch_mbtiles_tile(path: String, z: i64, x: i64, y: i64) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("无法打开文件: {e}"))?;
+
+        let tms_y = (1i64 << z) - 1 - y;
+        let data: Vec<u8> = conn
+            .query_row(
+                "SELECT tile_data FROM tiles WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3",
+                rusqlite::params![z, x, tms_y],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("瓦片不存在: {e}"))?;
+        Ok(data)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────

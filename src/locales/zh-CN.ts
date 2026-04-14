@@ -64,6 +64,7 @@ export default {
       app: '应用',
       download: '下载配置',
       server: '发布服务',
+      network: '网络代理',
       rules: '下载规则（反封禁）',
       update: '自动更新',
     },
@@ -77,6 +78,10 @@ export default {
       app_float_window: {
         label: '显示悬浮速度窗口',
         hint: '主界面最小化到托盘后，显示可拖拽的悬浮速度窗口；双击可唤起主界面',
+      },
+      app_download_notification: {
+        label: '下载完成后发送系统通知',
+        hint: '任务下载完成（或带错误完成）时，通过操作系统通知栏弹出提示',
       },
       app_close_action: {
         label: '点击关闭按钮时',
@@ -119,6 +124,15 @@ export default {
       server_default_port: {
         label: '默认端口',
         hint: '瓦片发布服务的默认监听端口',
+      },
+      network_proxy_enabled: {
+        label: '启用代理',
+        hint: '下载请求通过指定代理发送',
+      },
+      network_proxy_url: {
+        label: '代理地址',
+        hint: '支持 http、https、socks5 协议，例如 http://127.0.0.1:7890',
+        placeholder: 'http://127.0.0.1:7890',
       },
     },
 
@@ -243,7 +257,13 @@ export default {
     title: '下载任务',
     createTask: '创建下载任务',
     importPkg: '导入任务包',
-    filterAll: '全部',
+    importMbtiles: '导入 MBTiles',
+    toast: {
+      completed: '「{name}」下载完成',
+      completedWithErrors: '「{name}」完成（含失败）',
+      completedWithErrorsHint: '部分瓦片下载失败，可在任务详情中查看',
+      failed: '「{name}」下载失败',
+    },
     filterDownloading: '进行中',
     filterCompleted: '完成',
     filterFailed: '失败',
@@ -397,6 +417,10 @@ export default {
     clipOption: '严格裁剪至任务选框范围',
     clipTiffDesc: '将输出像素精确裁剪至任务选框经纬度边界',
     clipDefaultDesc: '仅导出完全位于任务选框内的瓦片，排除边缘相交瓦片',
+    reEncodeLabel: '图像重编码（压缩/品质）',
+    reEncodeDesc: '重新编码瓦片以调整文件大小，会增加导出耗时',
+    jpegQuality: 'JPEG 品质',
+    pngLevel: 'PNG 压缩级别',
     startExport: '开始导出',
     cancel: '取消',
     exporting: '导出中…',
@@ -479,6 +503,8 @@ export default {
     sourceTmsDesc: '输入瓦片 URL 模板',
     sourceWeb: '网页抓取',
     sourceWebDesc: '拦截浏览器实际请求',
+    sourceMbtiles: 'MBTiles 文件',
+    sourceMbtilesDesc: '导入本地 .mbtiles 离线包',
     selectFileTitle: '选择图层资源文件',
     selectFileFilter: '图层资源',
     urlPlaceholder: '输入 URL',
@@ -505,6 +531,8 @@ export default {
     preview: '预览',
     filePickerTitle: '点击选择 .lrc、.lra 或 .ovmap 文件',
     filePickerDesc: '来自 OrbitGIS、EasyEarth、LocaSpaceViewer 等软件导出的图层资源',
+    mbtilesPickerTitle: '点击选择 .mbtiles 文件',
+    mbtilesPickerDesc: '将 MBTiles 离线包作为数据源导入，瓦片将写入任务存储',
     wmtsHint: '输入 WMTS 服务的能力文档地址，将自动获取图层列表',
     tmsLabel: '瓦片 URL 模板',
     customNameLabel: '图层名称（可选）',

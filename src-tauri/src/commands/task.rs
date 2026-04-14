@@ -270,6 +270,8 @@ pub async fn export_mbtiles(
     task_id: String,
     dest_path: String,
     clip_to_bounds: bool,
+    jpeg_quality: Option<u8>,
+    png_level: Option<u8>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
     app: AppHandle,
@@ -323,6 +325,8 @@ pub async fn export_mbtiles(
             clip_to_bounds,
             polygon.as_deref(),
             &crs,
+            jpeg_quality,
+            png_level,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
                     if let Some(j) = map.get_mut(&jid) { j.done = done; j.total = total; }
@@ -357,6 +361,8 @@ pub async fn export_directory(
     task_id: String,
     dest_dir: String,
     clip_to_bounds: bool,
+    jpeg_quality: Option<u8>,
+    png_level: Option<u8>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
     app: AppHandle,
@@ -407,6 +413,8 @@ pub async fn export_directory(
             bounds,
             polygon.as_deref(),
             &crs,
+            jpeg_quality,
+            png_level,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
                     if let Some(j) = map.get_mut(&jid) { j.done = done; j.total = total; }
@@ -894,6 +902,291 @@ pub async fn export_task(
     store.reset_failed().map_err(|e| e.to_string())?;
 
     Ok(())
+}
+
+// ─── MBTiles 反导入 ───────────────────────────────────────────────────────────
+
+/// 将标准 MBTiles 文件反导入为 TileGrabber 任务（状态置为 completed）。
+///
+/// - 读取 MBTiles metadata（bounds / minzoom / maxzoom / format / name）
+/// - 逐批复制瓦片（TMS y 翻转回 XYZ y）到新建的 `.tiles` 存储
+/// - 为所有瓦片写入 download_state = 'downloaded'，使任务可直接导出
+/// - 以 ExportJob 机制跟踪进度；完成时 emit `mbtiles-import-done` 事件
+///
+/// 返回 job_id，前端轮询 `get_export_jobs` 查看进度。
+#[tauri::command]
+pub async fn import_mbtiles(
+    src_path: String,
+    task_name: Option<String>,
+    app_db: State<'_, AppDb>,
+    export_state: State<'_, ExportState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    use std::collections::HashMap;
+    use std::io::Read;
+    use rusqlite::{Connection, OpenFlags};
+
+    // 验证 SQLite 文件头
+    let mut header = [0u8; 4];
+    {
+        let mut f = std::fs::File::open(&src_path)
+            .map_err(|e| format!("无法打开文件: {}", e))?;
+        f.read_exact(&mut header)
+            .map_err(|_| "文件太小或无法读取".to_string())?;
+    }
+    if header[0..4] != [0x53, 0x51, 0x4C, 0x69] {
+        return Err("不是有效的 MBTiles 文件（非 SQLite 格式）".to_string());
+    }
+
+    // 读取 MBTiles metadata
+    let mbtiles_meta: HashMap<String, String> = {
+        let conn = Connection::open_with_flags(
+            &src_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .map_err(|e| format!("无法打开 MBTiles: {}", e))?;
+        let mut stmt = conn
+            .prepare("SELECT name, value FROM metadata")
+            .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, String)> = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+        rows
+    }.into_iter().collect();
+
+    // 解析 bounds
+    let bounds_str = mbtiles_meta
+        .get("bounds")
+        .cloned()
+        .unwrap_or_else(|| "-180,-85.05,180,85.05".to_string());
+    let bp: Vec<f64> = bounds_str
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if bp.len() < 4 {
+        return Err("MBTiles bounds 格式无效".to_string());
+    }
+    let (bounds_west, bounds_south, bounds_east, bounds_north) = (bp[0], bp[1], bp[2], bp[3]);
+
+    let min_zoom: u8 = mbtiles_meta.get("minzoom").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let max_zoom: u8 = mbtiles_meta.get("maxzoom").and_then(|v| v.parse().ok()).unwrap_or(18);
+    let format = mbtiles_meta.get("format").cloned().unwrap_or_else(|| "png".to_string());
+    let name = task_name.unwrap_or_else(|| {
+        mbtiles_meta
+            .get("name")
+            .cloned()
+            .unwrap_or_else(|| "Imported MBTiles".to_string())
+    });
+
+    // 构造任务记录
+    let task_id = Uuid::new_v4().to_string();
+    let tiles_dir = get_tiles_dir(&app, app_db.inner())?;
+    std::fs::create_dir_all(&tiles_dir).map_err(|e| e.to_string())?;
+    let tile_store_path = tiles_dir.join(format!("{}.tiles", task_id));
+    let tile_path_str = tile_store_path.to_string_lossy().to_string();
+
+    let source_config = serde_json::json!({
+        "kind": "Tms",
+        "name": name,
+        "url_template": "",
+        "url_param_order": [],
+        "subdomains": [],
+        "format": format,
+        "crs": "WebMercator",
+        "north_to_south": true,
+        "headers": {},
+        "extra_params": {},
+    })
+    .to_string();
+
+    let new_task = NewTask {
+        name: name.clone(),
+        source_config,
+        bounds_west,
+        bounds_east,
+        bounds_south,
+        bounds_north,
+        min_zoom,
+        max_zoom,
+        clip_to_bounds: false,
+        polygon_wgs84: None,
+    };
+
+    app_db
+        .create_task(&task_id, &new_task, &tile_path_str)
+        .map_err(|e| e.to_string())?;
+    app_db
+        .update_task_status(&task_id, "processing")
+        .map_err(|e| e.to_string())?;
+
+    // 创建进度跟踪 Job
+    let job_id = Uuid::new_v4().to_string();
+    let job = ExportJob {
+        job_id: job_id.clone(),
+        task_id: task_id.clone(),
+        format: "mbtiles_import".into(),
+        dest_path: tile_path_str.clone(),
+        done: 0,
+        total: 0,
+        status: "running".into(),
+        error: None,
+    };
+    export_state.lock().unwrap().insert(job_id.clone(), job);
+
+    // 后台执行：大文件拷贝放在 spawn_blocking 中
+    let state_arc = export_state.inner().clone();
+    let app_clone = app.clone();
+    let db_clone = app_db.inner().clone();
+    let jid = job_id.clone();
+    let tid = task_id.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let result = mbtiles_import_blocking(&src_path, &tile_path_str, |done, total| {
+            if let Ok(mut map) = state_arc.lock() {
+                if let Some(j) = map.get_mut(&jid) {
+                    j.done = done;
+                    j.total = total;
+                }
+            }
+        });
+
+        match result {
+            Ok(total) => {
+                db_clone.update_task_total(&tid, total as i64).ok();
+                db_clone.update_task_progress(&tid, total as i64, 0).ok();
+                db_clone.update_task_status(&tid, "completed").ok();
+                if let Ok(mut map) = state_arc.lock() {
+                    if let Some(j) = map.get_mut(&jid) {
+                        j.status = "done".into();
+                        j.done = total;
+                        j.total = total;
+                    }
+                }
+                let _ = app_clone.emit("mbtiles-import-done", &tid);
+            }
+            Err(e) => {
+                db_clone.update_task_status(&tid, "failed").ok();
+                if let Ok(mut map) = state_arc.lock() {
+                    if let Some(j) = map.get_mut(&jid) {
+                        j.status = "error".into();
+                        j.error = Some(e.to_string());
+                    }
+                }
+                let _ = app_clone.emit("mbtiles-import-error", e.to_string());
+            }
+        }
+    });
+
+    Ok(job_id)
+}
+
+/// 实际执行 MBTiles → .tiles 拷贝（在 spawn_blocking 内运行）
+fn mbtiles_import_blocking<F>(
+    src_path: &str,
+    dst_path: &str,
+    mut progress_cb: F,
+) -> anyhow::Result<u64>
+where
+    F: FnMut(u64, u64),
+{
+    use rusqlite::{params, Connection, OpenFlags};
+
+    let src = Connection::open_with_flags(src_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    src.execute_batch("PRAGMA cache_size=-65536; PRAGMA mmap_size=268435456;")?;
+
+    let dst = Connection::open(dst_path)?;
+    dst.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=OFF;
+         PRAGMA cache_size=-200000;
+         PRAGMA mmap_size=268435456;
+         PRAGMA temp_store=MEMORY;",
+    )?;
+    dst.execute_batch(
+        "CREATE TABLE IF NOT EXISTS metadata (
+             name  TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS tiles (
+             zoom_level  INTEGER NOT NULL,
+             tile_column INTEGER NOT NULL,
+             tile_row    INTEGER NOT NULL,
+             tile_data   BLOB    NOT NULL,
+             PRIMARY KEY (zoom_level, tile_column, tile_row)
+         );
+         CREATE TABLE IF NOT EXISTS download_state (
+             zoom_level  INTEGER NOT NULL,
+             tile_column INTEGER NOT NULL,
+             tile_row    INTEGER NOT NULL,
+             status      TEXT    NOT NULL DEFAULT 'downloaded',
+             PRIMARY KEY (zoom_level, tile_column, tile_row)
+         );",
+    )?;
+
+    let total: u64 = src.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))?
+        as u64;
+    if total == 0 {
+        return Ok(0);
+    }
+    progress_cb(0, total);
+
+    const BATCH: i64 = 2000;
+    let mut offset: i64 = 0;
+    let mut done: u64 = 0;
+
+    loop {
+        // 分批读取 MBTiles（避免一次性把整个 DB 装入内存）
+        let batch: Vec<(i64, i64, i64, Vec<u8>)> = {
+            let mut stmt = src.prepare(
+                "SELECT zoom_level, tile_column, tile_row, tile_data
+                 FROM tiles
+                 ORDER BY zoom_level, tile_column, tile_row
+                 LIMIT ?1 OFFSET ?2",
+            )?;
+            let rows: Vec<(i64, i64, i64, Vec<u8>)> = stmt.query_map(params![BATCH, offset], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                ))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+            rows
+        };
+
+        if batch.is_empty() {
+            break;
+        }
+
+        let tx = dst.unchecked_transaction()?;
+        for (z, x, tms_y, data) in &batch {
+            // MBTiles 使用 TMS 坐标（y 从南往北），转换为 XYZ（y 从北往南）
+            let xyz_y = (1i64 << z) - 1 - tms_y;
+            tx.execute(
+                "INSERT OR REPLACE INTO tiles
+                 (zoom_level, tile_column, tile_row, tile_data)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![z, x, xyz_y, data],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO download_state
+                 (zoom_level, tile_column, tile_row, status)
+                 VALUES (?1, ?2, ?3, 'downloaded')",
+                params![z, x, xyz_y],
+            )?;
+        }
+        tx.commit()?;
+
+        done += batch.len() as u64;
+        offset += batch.len() as i64;
+        progress_cb(done, total);
+    }
+
+    Ok(done)
 }
 
 /// 从 .tgr 文件导入任务（状态置为 paused，可在本机继续下载）

@@ -64,6 +64,7 @@ export default {
       app: 'Application',
       download: 'Download',
       server: 'Publish Server',
+      network: 'Network Proxy',
       rules: 'Download Rules (Anti-ban)',
       update: 'Auto Update',
     },
@@ -77,6 +78,10 @@ export default {
       app_float_window: {
         label: 'Show Floating Speed Window',
         hint: 'When the main window is minimized to tray, show a draggable floating speed indicator. Double-click to restore the main window.',
+      },
+      app_download_notification: {
+        label: 'System Notification on Download Completion',
+        hint: 'Send an OS notification when a task finishes downloading (or completes with errors).',
       },
       app_close_action: {
         label: 'When clicking the Close button',
@@ -119,6 +124,15 @@ export default {
       server_default_port: {
         label: 'Default Port',
         hint: 'Default listening port for the tile publish server',
+      },
+      network_proxy_enabled: {
+        label: 'Enable Proxy',
+        hint: 'Route download requests through the specified proxy',
+      },
+      network_proxy_url: {
+        label: 'Proxy URL',
+        hint: 'Supports http, https, socks5 — e.g. http://127.0.0.1:7890',
+        placeholder: 'http://127.0.0.1:7890',
       },
     },
 
@@ -243,7 +257,13 @@ export default {
     title: 'Download Tasks',
     createTask: 'New Download Task',
     importPkg: 'Import Package',
-    filterAll: 'All',
+    importMbtiles: 'Import MBTiles',
+    toast: {
+      completed: '"{name}" download complete',
+      completedWithErrors: '"{name}" finished with errors',
+      completedWithErrorsHint: 'Some tiles failed — check task details',
+      failed: '"{name}" download failed',
+    },
     filterDownloading: 'Active',
     filterCompleted: 'Done',
     filterFailed: 'Failed',
@@ -397,6 +417,10 @@ export default {
     clipOption: 'Strictly clip to task bounding box',
     clipTiffDesc: 'Clip output pixels precisely to task bounding box coordinates',
     clipDefaultDesc: 'Only export tiles fully within the task bounding box, excluding edge-intersecting tiles',
+    reEncodeLabel: 'Re-encode images (compression/quality)',
+    reEncodeDesc: 'Re-encode tiles to adjust file size — increases export time',
+    jpegQuality: 'JPEG Quality',
+    pngLevel: 'PNG Level',
     startExport: 'Start Export',
     cancel: 'Cancel',
     exporting: 'Exporting…',
@@ -479,6 +503,8 @@ export default {
     sourceTmsDesc: 'Enter tile URL template',
     sourceWeb: 'Web Capture',
     sourceWebDesc: 'Intercept actual browser requests',
+    sourceMbtiles: 'MBTiles File',
+    sourceMbtilesDesc: 'Import local .mbtiles offline package',
     selectFileTitle: 'Select Layer Resource File',
     selectFileFilter: 'Layer Resources',
     urlPlaceholder: 'Enter URL',
@@ -505,6 +531,8 @@ export default {
     preview: 'Preview',
     filePickerTitle: 'Click to select .lrc, .lra or .ovmap file',
     filePickerDesc: 'Layer resources exported from OrbitGIS, EasyEarth, LocaSpaceViewer, etc.',
+    mbtilesPickerTitle: 'Click to select .mbtiles file',
+    mbtilesPickerDesc: 'Import MBTiles offline package as data source — tiles will be written to the task store',
     wmtsHint: 'Enter the WMTS service capabilities URL to automatically retrieve the layer list',
     tmsLabel: 'Tile URL Template',
     customNameLabel: 'Layer Name (optional)',

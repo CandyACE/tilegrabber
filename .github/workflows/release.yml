@@ -18,7 +18,28 @@ env:
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
+  # ── 清理旧草稿 Release（防止 untagged-* 问题）────────────────────────────────
+  # 在所有平台并行构建之前，先删除同名 tag 已有的草稿 Release，
+  # 这样 tauri-action 可以重新创建，避免产生 untagged-{sha} 的 Release。
+  prepare:
+    name: 清理旧 Release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    steps:
+      - name: 删除旧草稿 Release（如存在）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.RELEASE_TAG }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release delete "$TAG" --repo "$REPO" --yes 2>/dev/null \
+            && echo "已删除旧 Release $TAG" \
+            || echo "无旧 Release，跳过"
+
   build:
+    needs: prepare
+    # 仅在 tag push（refs/tags/v*）或 workflow_dispatch 且明确填写了 tag 时才构建
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     strategy:
       fail-fast: false
       matrix:
@@ -140,8 +161,8 @@ jobs:
     name: 发布 Release · 生成自动更新清单
     needs: build
     runs-on: ubuntu-latest
-    # 只在 tag 触发时（或 workflow_dispatch 指定了 tag）才发布
-    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+    # 只在有合法 semver tag 时才发布（build job 已过滤，这里保持一致）
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
 
     steps:
       - name: 检出代码（用于读取 CHANGELOG.md）
@@ -228,25 +249,40 @@ jobs:
           fi
           echo "::endgroup::"
 
-          # ── 补充 macOS x64 URL（可选平台）───────────────────────────
-          MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r \
-            '[.assets[] | select(.name | test("_x64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
-
           # changelog 来自上一步从 CHANGELOG.md 提取的内容
           CHANGELOG_NOTES='${{ steps.changelog.outputs.notes }}'
-
-          echo "Windows  : $WIN_URL"
-          echo "macOS arm: $MACOS_ARM_URL"
-          echo "macOS x64: $MACOS_X64_URL"
-          echo "Linux    : $LINUX_URL"
 
           # ── 组合 Release 正文（更新日志 + 下载说明）──────────────
           DOWNLOAD_TABLE=$(echo "$RELEASE_JSON" | jq -r '.body // ""')
           FULL_BODY=$(printf '%s\n\n---\n\n%s' "$CHANGELOG_NOTES" "$DOWNLOAD_TABLE")
 
-          # ── 生成 latest.json ──────────────────────────────────────
-          # body 字段只保留更新日志（不含下载表格，供应用内「新版本」弹窗展示）
-          # macos 字段优先用 arm64，若没有则回退到 x64
+          # ── 先发布（移除草稿状态）────────────────────────────────────
+          # 草稿 Release 的资产下载链接格式为 untagged-{sha}，发布后才会变成真实 tag 路径
+          # 必须先发布再获取 URL，否则 latest.json 中的下载地址会是 404
+          gh release edit "$TAG" --draft=false --repo "$REPO"
+          echo "Release $TAG 已发布（draft=false）"
+
+          # 等待 GitHub CDN 更新（确保资产 URL 已切换为真实 tag 路径）
+          sleep 5
+
+          # ── 重新获取资产 URL（现在是真实 tag 路径，不再是 untagged-*）─
+          RELEASE_JSON=$(gh api "repos/$REPO/releases/$RELEASE_ID")
+          WIN_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("-setup\\.exe$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          MACOS_ARM_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("_aarch64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          LINUX_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("\\.AppImage$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("_x64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
+
+          echo "发布后资产 URL："
+          echo "Windows  : $WIN_URL"
+          echo "macOS arm: $MACOS_ARM_URL"
+          echo "macOS x64: $MACOS_X64_URL"
+          echo "Linux    : $LINUX_URL"
+
+          # ── 重新生成 latest.json（使用真实 tag URL）──────────────
           MACOS_URL="$MACOS_ARM_URL"
           if [ -z "$MACOS_URL" ]; then
             MACOS_URL="$MACOS_X64_URL"
@@ -272,7 +308,7 @@ jobs:
               }
             }' > latest.json
 
-          echo "::group::生成的 latest.json"
+          echo "::group::生成的 latest.json（发布后）"
           cat latest.json
           echo "::endgroup::"
 
@@ -282,6 +318,4 @@ jobs:
           # ── 更新 Release 正文（写入更新日志 + 下载说明）──────────
           gh release edit "$TAG" --notes "$FULL_BODY" --repo "$REPO"
 
-          # ── 发布（移除草稿状态）────────────────────────────────────
-          gh release edit "$TAG" --draft=false --repo "$REPO"
           echo "Release $TAG 发布成功！"

@@ -14,6 +14,7 @@ import {
   Layers,
   Map,
   Scissors,
+  Gauge,
 } from "lucide-vue-next";
 import { useExportJobs } from "~/composables/useExportJobs";
 
@@ -47,6 +48,9 @@ const format = ref<ExportFormat>("mbtiles");
 const destPath = ref("");
 const clipToBounds = ref(false);
 const tiffZoom = ref(0);
+const reEncodeEnabled = ref(false);
+const jpegQuality = ref(85);
+const pngLevel = ref(6);
 const starting = ref(false);
 const startError = ref<string | null>(null);
 
@@ -60,6 +64,9 @@ watch(
       format.value = "mbtiles";
       destPath.value = "";
       clipToBounds.value = false;
+      reEncodeEnabled.value = false;
+      jpegQuality.value = 85;
+      pngLevel.value = 6;
       tiffZoom.value = props.task.maxZoom;
       starting.value = false;
       startError.value = null;
@@ -115,12 +122,16 @@ async function doExport() {
         taskId: props.task.id,
         destPath: destPath.value,
         clipToBounds: clipToBounds.value,
+        jpegQuality: reEncodeEnabled.value ? jpegQuality.value : null,
+        pngLevel: reEncodeEnabled.value ? pngLevel.value : null,
       });
     } else if (format.value === "directory") {
       jobId = await invoke<string>("export_directory", {
         taskId: props.task.id,
         destDir: destPath.value,
         clipToBounds: clipToBounds.value,
+        jpegQuality: reEncodeEnabled.value ? jpegQuality.value : null,
+        pngLevel: reEncodeEnabled.value ? pngLevel.value : null,
       });
     } else {
       jobId = await invoke<string>("export_geotiff", {
@@ -472,6 +483,81 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     ›
                   </button>
                 </div>
+              </div>
+            </Transition>
+
+            <!-- 图像重编码（压缩/品质）选项（仅 mbtiles / directory） -->
+            <Transition name="tiff-row">
+              <div
+                v-if="format !== 'tiff'"
+                class="rounded-xl border overflow-hidden"
+                style="border-color: var(--color-border-subtle)"
+              >
+                <!-- 标题行 -->
+                <div
+                  class="flex items-center justify-between gap-3 px-3 py-3"
+                  style="background: var(--color-surface-raised)"
+                >
+                  <div class="flex items-center gap-2 min-w-0">
+                    <Gauge class="size-3.5 shrink-0 text-slate-400" />
+                    <div>
+                      <div class="text-xs font-medium text-slate-700">
+                        {{ t('export.reEncodeLabel') }}
+                      </div>
+                      <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
+                        {{ t('export.reEncodeDesc') }}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="reEncodeEnabled"
+                    class="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus-visible:outline-none"
+                    :class="reEncodeEnabled ? 'bg-blue-600' : 'bg-slate-200'"
+                    @click="reEncodeEnabled = !reEncodeEnabled"
+                  >
+                    <span
+                      class="pointer-events-none inline-block size-4 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200"
+                      :class="reEncodeEnabled ? 'translate-x-4' : 'translate-x-0'"
+                    />
+                  </button>
+                </div>
+                <!-- 滑块展开区 -->
+                <Transition name="tiff-row">
+                  <div
+                    v-if="reEncodeEnabled"
+                    class="px-3 pb-3 pt-2 space-y-3 border-t"
+                    style="border-color: var(--color-border-subtle); background: var(--color-surface-raised)"
+                  >
+                    <!-- JPEG 品质 -->
+                    <div class="flex items-center gap-3">
+                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{ t('export.jpegQuality') }}</span>
+                      <input
+                        v-model.number="jpegQuality"
+                        type="range"
+                        min="1"
+                        max="100"
+                        step="1"
+                        class="flex-1 accent-blue-600"
+                      />
+                      <span class="text-xs font-mono text-slate-700 w-8 text-right">{{ jpegQuality }}</span>
+                    </div>
+                    <!-- PNG 级别 -->
+                    <div class="flex items-center gap-3">
+                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{ t('export.pngLevel') }}</span>
+                      <input
+                        v-model.number="pngLevel"
+                        type="range"
+                        min="0"
+                        max="9"
+                        step="1"
+                        class="flex-1 accent-blue-600"
+                      />
+                      <span class="text-xs font-mono text-slate-700 w-8 text-right">{{ pngLevel }}</span>
+                    </div>
+                  </div>
+                </Transition>
               </div>
             </Transition>
 

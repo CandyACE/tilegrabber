@@ -7,6 +7,7 @@ import {
   Globe,
   Link,
   Scan,
+  Database,
   PlusCircle,
   X,
   Check,
@@ -28,7 +29,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-type SourceType = "file" | "wmts" | "tms" | "web";
+type SourceType = "file" | "wmts" | "tms" | "web" | "mbtiles";
 type Step = 1 | 2;
 type CaptureStatus = "idle" | "capturing";
 
@@ -126,6 +127,12 @@ const sourceTypeOptions = computed(() => [
     icon: Scan,
     label: t('wizard.sourceWeb'),
     desc: t('wizard.sourceWebDesc'),
+  },
+  {
+    value: "mbtiles" as const,
+    icon: Database,
+    label: t('wizard.sourceMbtiles'),
+    desc: t('wizard.sourceMbtilesDesc'),
   },
 ] as const)
 
@@ -242,7 +249,8 @@ async function handleNext() {
       else if (sourceType.value === "web") {
         if (captureStatus.value === "idle") await startCapture();
         else await finishCapture();
-      } else await parseTms();
+      } else if (sourceType.value === "mbtiles") await pickAndParseMbtiles();
+      else await parseTms();
     } finally {
       isLoading.value = false;
     }
@@ -306,6 +314,20 @@ async function parseTms() {
     name: customName.value || null,
   });
   emit("confirm", applyRequestConfig(result));
+}
+
+async function pickAndParseMbtiles() {
+  const selected = await open({
+    multiple: false,
+    title: t('wizard.mbtilesPickerTitle'),
+    filters: [{ name: "MBTiles", extensions: ["mbtiles"] }],
+  });
+  if (!selected) return;
+  const filePath = typeof selected === "string" ? selected : selected[0];
+  const result: TileSource = await invoke("parse_mbtiles_source", {
+    path: filePath,
+  });
+  emit("confirm", result);
 }
 
 /** 开始抓取：打开 WebView 窗口，开始轮询捕获结果 */
@@ -407,7 +429,7 @@ function onLayerSelect(idx: number) {
             <!-- 步骤 1 -->
             <template v-if="step === 1">
               <!-- 类型选择器 -->
-              <div class="grid grid-cols-3 gap-2.5 mb-5">
+              <div class="grid grid-cols-3 gap-2.5 mb-5 [&>*:nth-child(n+4)]:col-span-1 [&>*:nth-child(4)]:col-start-2">
                 <button
                   v-for="opt in sourceTypeOptions"
                   :key="opt.value"
@@ -619,11 +641,40 @@ function onLayerSelect(idx: number) {
                 </div>
               </div>
 
+              <!-- MBTiles -->
+              <div
+                class="grid transition-[grid-template-rows] duration-300 ease-out"
+                :style="{
+                  gridTemplateRows: sourceType === 'mbtiles' ? '1fr' : '0fr',
+                }"
+              >
+                <div class="overflow-hidden">
+                  <div
+                    class="border-2 border-dashed border-slate-200 rounded-xl p-8 flex flex-col items-center gap-3 text-center hover:border-blue-400 hover:bg-blue-50/40 transition-all duration-200 cursor-pointer"
+                    @click="sourceType === 'mbtiles' && handleNext()"
+                  >
+                    <div
+                      class="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center"
+                    >
+                      <Database class="w-5 h-5 text-slate-500" />
+                    </div>
+                    <div>
+                      <p class="text-sm font-medium text-slate-700">
+                        {{ t('wizard.mbtilesPickerTitle') }}
+                      </p>
+                      <p class="text-xs text-slate-500 mt-1">
+                        {{ t('wizard.mbtilesPickerDesc') }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- ── 请求配置（仅 wmts / tms / web 显示）────────────────────── -->
               <div
                 class="grid transition-[grid-template-rows] duration-300 ease-out mt-3"
                 :style="{
-                  gridTemplateRows: sourceType !== 'file' ? '1fr' : '0fr',
+                  gridTemplateRows: (sourceType !== 'file' && sourceType !== 'mbtiles') ? '1fr' : '0fr',
                 }"
               >
                 <div class="overflow-hidden">

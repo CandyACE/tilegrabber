@@ -63,6 +63,8 @@ pub enum SourceKind {
     ThreeDTiles,
     /// 来自 .ovmap 文件 (OviO Map 二进制格式)
     Ovmap,
+    /// 来自 .mbtiles 文件（SQLite，离线包）
+    MbtileFile,
 }
 
 // ─── 统一 TileSource ─────────────────────────────────────────────────────────

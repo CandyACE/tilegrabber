@@ -10,6 +10,7 @@ import {
   Settings2,
   Download,
   Server,
+  Globe,
   ShieldAlert,
   RefreshCw,
   ArrowUpCircle,
@@ -55,6 +56,12 @@ const groups = computed(() => [
         hint: t('settings.fields.app_float_window.hint'),
       },
       {
+        key: 'app.download_notification',
+        label: t('settings.fields.app_download_notification.label'),
+        type: 'toggle',
+        hint: t('settings.fields.app_download_notification.hint'),
+      },
+      {
         key: 'app.close_action',
         label: t('settings.fields.app_close_action.label'),
         type: 'select',
@@ -97,6 +104,15 @@ const groups = computed(() => [
     icon: Server,
     fields: [
       { key: 'server.default_port', label: t('settings.fields.server_default_port.label'), type: 'number', min: 1024, max: 65535, hint: t('settings.fields.server_default_port.hint') },
+    ],
+  },
+  {
+    id: 'network',
+    label: t('settings.groups.network'),
+    icon: Globe,
+    fields: [
+      { key: 'network.proxy_enabled', label: t('settings.fields.network_proxy_enabled.label'), type: 'toggle', hint: t('settings.fields.network_proxy_enabled.hint') },
+      { key: 'network.proxy_url', label: t('settings.fields.network_proxy_url.label'), type: 'text', hint: t('settings.fields.network_proxy_url.hint'), placeholder: t('settings.fields.network_proxy_url.placeholder') },
     ],
   },
 ])
@@ -414,6 +430,16 @@ function formatBytes(bytes: number): string {
               :min="(field as { min?: number }).min"
               :max="(field as { max?: number }).max"
               class="w-20 shrink-0 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500/60"
+            />
+
+            <!-- 文本输入 -->
+            <input
+              v-else-if="field.type === 'text'"
+              :value="settings[field.key] ?? ''"
+              @input="settings[field.key] = ($event.target as HTMLInputElement).value"
+              type="text"
+              :placeholder="(field as { placeholder?: string }).placeholder ?? ''"
+              class="w-48 shrink-0 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500/60"
             />
 
             <!-- 下拉选择 -->
