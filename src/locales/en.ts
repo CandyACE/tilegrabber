@@ -192,9 +192,18 @@ export default {
       {
         title: 'Quick Start',
         items: [
-          { q: 'How to create a download task?', a: 'Click the "New Task" button in the map toolbar. In the wizard, select a map source (.lrc / .lra / .ovmap local file, WMTS URL, or TMS/XYZ URL). After previewing, draw the target area on the map, set the zoom level range, and click "Start Download".' },
-          { q: 'How to draw a download area on the map?', a: 'After entering the wizard preview step, click the "Rectangle" or "Polygon" drawing tool in the map toolbar. Rectangle: drag to select; Polygon: click each vertex, double-click or click the start point to close. The area will be precisely clipped to the polygon boundary. After releasing, adjust the zoom range below and preview the tile count.' },
-          { q: 'How to check download progress?', a: 'Active download tasks show a real-time progress bar and speed in the left task list. Click any task card to expand the detail panel, showing real-time speed (tiles/sec and MB/sec), ETA, downloaded/failed tile count, and run logs.' },
+          { q: 'How to create a download task?', a: 'Click the "Tasks" tab in the top navigation bar, then click "New Download Task" in the left panel. In the wizard, select a map source (.lrc / .lra / .ovmap local file, WMTS URL, or TMS/XYZ URL). After previewing, draw the target area on the map, set the zoom level range, and click "Start Download".' },
+          { q: 'How to draw a download area on the map?', a: 'After selecting a map source in the wizard, the left panel shows "Rectangle" and "Polygon" drawing mode options. Select a mode, then click the draw button in the top-left corner of the map to activate drawing. Rectangle: drag to select; Polygon: click each vertex, double-click or click the start point to close. The area will be precisely clipped to the polygon boundary. After drawing, adjust the zoom range and preview the tile count in the left panel.' },
+          { q: 'How to check download progress?', a: 'Active download tasks show a real-time progress bar and speed in the left task list. Click the detail button on a task card to open the task detail panel, showing real-time speed (tiles/sec and MB/sec), ETA, downloaded/failed tile count, and run logs.' },
+        ],
+      },
+      {
+        title: 'Map Layer Management',
+        items: [
+          { q: 'What are layers?', a: 'When the "Map" tab is active, the left panel shows a list of saved layers. A layer is a saved map source configuration that can be quickly previewed or used as a download task source — without re-entering URLs or re-importing files each time.' },
+          { q: 'How to add a layer?', a: 'Click "Add Layer" in the left panel of the Map tab, select a data source through the wizard, and save. Layers are persisted and remain available after restarting the application.' },
+          { q: 'How to preview a layer?', a: 'Click a layer in the layer list to overlay its tiles on the map for a preview. Click the same layer again or switch to another tab to cancel the preview.' },
+          { q: 'How to create a download task from a layer?', a: 'Click the download icon on a layer card. The app will switch to map view and enter download configuration mode using that layer\'s source. Draw the area and start the download.' },
         ],
       },
       {
@@ -213,8 +222,8 @@ export default {
           { q: 'Pause and Resume', a: 'Click the "Pause" / "Resume Download" button in the task detail panel. Already-downloaded tiles are preserved. Resuming continues from where it left off without re-downloading.' },
           { q: 'Retry Failed Tiles', a: 'After download completes with failures, the detail panel shows a "Retry N Failed Tiles" button that re-requests only the failed items.' },
           { q: 'Delete Task', a: 'Click "Delete Task" in the task detail panel. The deletion will only proceed after confirming the secondary confirmation prompt. Note: the corresponding tile storage files will also be deleted and cannot be recovered.' },
-          { q: 'Locate Task on Map', a: 'Click the locate button in the detail panel header to fly the map to the task download boundary.' },
-          { q: 'Export / Import Task Package (.tgr)', a: 'The "Export" button at the top of the task list packages the task together with all downloaded tiles as a .tgr file (SQLite format, extremely fast zero-copy). The "Import" button loads a .tgr file shared by others — the program reads it directly, so do not move or delete the file. External .tgr task cards have a special identifier, and you can optionally delete the file when removing the task.' },
+          { q: 'Locate Task on Map', a: 'Click the locate button in the detail panel header to fly the map to the task download boundary, with downloaded tiles overlaid on the map.' },
+          { q: 'Export / Import Task Package (.tgr)', a: 'Click the "Export" button on a task card to package that task together with all downloaded tiles as a .tgr file (SQLite format, extremely fast zero-copy). The "Import" button at the top of the task list loads a .tgr file shared by others — the program reads it directly, so do not move or delete the file. External .tgr task cards have a special identifier, and you can optionally delete the file when removing the task.' },
         ],
       },
       {
@@ -264,6 +273,7 @@ export default {
       completedWithErrorsHint: 'Some tiles failed — check task details',
       failed: '"{name}" download failed',
     },
+    filterAll: 'All',
     filterDownloading: 'Active',
     filterCompleted: 'Done',
     filterFailed: 'Failed',
@@ -417,6 +427,11 @@ export default {
     clipOption: 'Strictly clip to task bounding box',
     clipTiffDesc: 'Clip output pixels precisely to task bounding box coordinates',
     clipDefaultDesc: 'Only export tiles fully within the task bounding box, excluding edge-intersecting tiles',
+    tiffCompression: 'Compression',
+    tiffCompressionDesc: 'LZW is lossless compression, recommended for most use cases',
+    tiffCompressionLzw: 'LZW (lossless, recommended)',
+    tiffCompressionDeflate: 'Deflate (lossless, higher ratio)',
+    tiffCompressionNone: 'None (uncompressed)',
     reEncodeLabel: 'Re-encode images (compression/quality)',
     reEncodeDesc: 'Re-encode tiles to adjust file size — increases export time',
     jpegQuality: 'JPEG Quality',

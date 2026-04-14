@@ -450,6 +450,7 @@ pub async fn export_geotiff(
     dest_path: String,
     zoom: u8,
     clip_to_bounds: bool,
+    tiff_compression: Option<String>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
     app: AppHandle,
@@ -502,6 +503,7 @@ pub async fn export_geotiff(
         let app_clone2 = app_clone.clone();
         let jid2 = jid.clone();
         let dp2 = dp.clone();
+        let compression_str = tiff_compression.as_deref().unwrap_or("lzw").to_string();
         let result = crate::export::geotiff::export_geotiff(
             std::path::Path::new(&src_path),
             std::path::Path::new(&dest_path),
@@ -510,6 +512,7 @@ pub async fn export_geotiff(
             clip_to_bounds,
             polygon,
             &crs,
+            &compression_str,
             move |done, total| {
                 if let Ok(mut map) = state_clone2.lock() {
                     if let Some(j) = map.get_mut(&jid2) { j.done = done; j.total = total; }

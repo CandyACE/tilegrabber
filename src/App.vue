@@ -150,10 +150,19 @@ const sidebarOpen = ref(true);
 const activeNav = ref("map");
 
 function onNavChange(key: string) {
+  const prevNav = activeNav.value;
   // 再次点击同一项则切回地图视图
   activeNav.value = activeNav.value === key ? "map" : key;
   if (["publish", "settings", "help", "about", "tasks", "map"].includes(key))
     sidebarOpen.value = true;
+  // 离开地图 tab 时清除图层预览
+  if (prevNav === "map" && activeNav.value !== "map") {
+    selectedLayerSource.value = null;
+  }
+  // 离开任务 tab 时关闭任务详情
+  if (prevNav === "tasks" && activeNav.value !== "tasks") {
+    closeTask();
+  }
 }
 
 // ─── 向导 ──────────────────────────────────────────────────────────────────

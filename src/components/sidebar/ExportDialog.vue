@@ -48,6 +48,7 @@ const format = ref<ExportFormat>("mbtiles");
 const destPath = ref("");
 const clipToBounds = ref(false);
 const tiffZoom = ref(0);
+const tiffCompression = ref("lzw");
 const reEncodeEnabled = ref(false);
 const jpegQuality = ref(85);
 const pngLevel = ref(6);
@@ -68,6 +69,7 @@ watch(
       jpegQuality.value = 85;
       pngLevel.value = 6;
       tiffZoom.value = props.task.maxZoom;
+      tiffCompression.value = "lzw";
       starting.value = false;
       startError.value = null;
     }
@@ -139,6 +141,7 @@ async function doExport() {
         destPath: destPath.value,
         zoom: tiffZoom.value,
         clipToBounds: clipToBounds.value,
+        tiffCompression: tiffCompression.value,
       });
     }
     registerJob(jobId, props.task.id, format.value, destPath.value);
@@ -483,6 +486,40 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     ›
                   </button>
                 </div>
+              </div>
+            </Transition>
+
+            <!-- GeoTIFF 压缩选项 -->
+            <Transition name="tiff-row">
+              <div
+                v-if="format === 'tiff'"
+                class="flex items-center justify-between gap-3 rounded-xl border p-3"
+                style="
+                  border-color: var(--color-border-subtle);
+                  background: var(--color-surface-raised);
+                "
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <Gauge class="size-3.5 shrink-0 text-slate-400" />
+                  <div>
+                    <div class="text-xs font-medium text-slate-700">
+                      {{ t('export.tiffCompression') }}
+                    </div>
+                    <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
+                      {{ t('export.tiffCompressionDesc') }}
+                    </div>
+                  </div>
+                </div>
+                <select
+                  v-model="tiffCompression"
+                  :disabled="starting"
+                  class="text-xs rounded-lg border px-2 py-1.5 bg-white text-slate-700 cursor-pointer disabled:opacity-50 shrink-0"
+                  style="border-color: var(--color-border-subtle)"
+                >
+                  <option value="lzw">{{ t('export.tiffCompressionLzw') }}</option>
+                  <option value="deflate">{{ t('export.tiffCompressionDeflate') }}</option>
+                  <option value="none">{{ t('export.tiffCompressionNone') }}</option>
+                </select>
               </div>
             </Transition>
 

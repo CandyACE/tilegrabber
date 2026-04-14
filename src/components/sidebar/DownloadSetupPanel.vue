@@ -324,23 +324,7 @@ const crsLabel = computed(() => {
         </template>
       </div>
 
-      <!-- ③ 缩放级别 -->
-      <div>
-        <div
-          class="text-xs font-medium uppercase tracking-wider mb-2"
-          style="color: var(--color-text-muted)"
-        >
-          {{ t('downloadSetup.zoomLevel') }}
-        </div>
-        <ZoomPicker
-          v-model:min-zoom="minZoom"
-          v-model:max-zoom="maxZoom"
-          :bounds="bounds"
-          :crs="crs"
-        />
-      </div>
-
-      <!-- ④ 裁剪设置 -->
+      <!-- ③ 裁剪设置 -->
       <div>
         <div
           class="text-xs font-medium uppercase tracking-wider mb-2"
@@ -380,6 +364,22 @@ const crsLabel = computed(() => {
             />
           </button>
         </div>
+      </div>
+
+      <!-- ④ 缩放级别 -->
+      <div>
+        <div
+          class="text-xs font-medium uppercase tracking-wider mb-2"
+          style="color: var(--color-text-muted)"
+        >
+          {{ t('downloadSetup.zoomLevel') }}
+        </div>
+        <ZoomPicker
+          v-model:min-zoom="minZoom"
+          v-model:max-zoom="maxZoom"
+          :bounds="bounds"
+          :crs="crs"
+        />
       </div>
     </div>
 

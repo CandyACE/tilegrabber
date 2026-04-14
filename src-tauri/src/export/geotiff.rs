@@ -17,6 +17,7 @@ use image::RgbaImage;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use tiff::encoder::colortype::RGBA8;
+use tiff::encoder::compression::{Deflate, DeflateLevel, Lzw};
 use tiff::encoder::TiffEncoder;
 use tiff::tags::Tag;
 
@@ -74,6 +75,7 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     clip_to_bounds: bool,
     polygon: Option<Vec<[f64; 2]>>,
     crs: &CrsType,
+    compression: &str,
     progress_cb: F,
 ) -> Result<u64> {
     let [west, south, east, north] = bounds;
@@ -176,154 +178,132 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     // GDAL 1.6+ / QGIS / ArcGIS 10.x+ 均支持读取。
     let file = std::fs::File::create(dest_path).context("创建 GeoTIFF 文件失败")?;
     let mut encoder = TiffEncoder::new_big(std::io::BufWriter::new(file))?;
-    let mut image_enc = encoder.new_image::<RGBA8>(out_w, out_h)?;
 
-    let lon_scale = (geo_east - geo_west) / out_w as f64;
-    let lat_scale = (geo_north - geo_south) / out_h as f64;
-    image_enc
-        .encoder()
-        .write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), [lon_scale, lat_scale, 0.0_f64].as_slice())?;
-    image_enc
-        .encoder()
-        .write_tag(Tag::Unknown(TAG_MODEL_TIEPOINT), [0.0_f64, 0.0, 0.0, geo_west, geo_north, 0.0].as_slice())?;
-    let geo_keys: Vec<u16> = vec![
-        1, 1, 0, 3,
-        1024, 0, 1, 2,    // GTModelTypeGeoKey = 2 (Geographic CRS)
-        1025, 0, 1, 1,    // GTRasterTypeGeoKey = 1 (PixelIsArea)
-        2048, 0, 1, 4326, // GeographicTypeGeoKey = 4326 (WGS84)
-    ];
-    image_enc
-        .encoder()
-        .write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), geo_keys.as_slice())?;
+    macro_rules! run_encode {
+        ($image_enc:expr) => {{
+            let mut image_enc = $image_enc;
+            let lon_scale = (geo_east - geo_west) / out_w as f64;
+            let lat_scale = (geo_north - geo_south) / out_h as f64;
+            image_enc
+                .encoder()
+                .write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), [lon_scale, lat_scale, 0.0_f64].as_slice())?;
+            image_enc
+                .encoder()
+                .write_tag(Tag::Unknown(TAG_MODEL_TIEPOINT), [0.0_f64, 0.0, 0.0, geo_west, geo_north, 0.0].as_slice())?;
+            let geo_keys: Vec<u16> = vec![
+                1, 1, 0, 3,
+                1024, 0, 1, 2,
+                1025, 0, 1, 1,
+                2048, 0, 1, 4326,
+            ];
+            image_enc
+                .encoder()
+                .write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), geo_keys.as_slice())?;
 
-    // ── 分条带流式写入像素数据 ───────────────────────────────────────────────
-    // 每次仅将当前条带所需的瓦片行加载进内存
-    let mut stmt = src.prepare(
-        "SELECT tile_column, tile_data FROM tiles WHERE zoom_level = ?1 AND tile_row = ?2",
-    )?;
+            let mut stmt = src.prepare(
+                "SELECT tile_column, tile_data FROM tiles WHERE zoom_level = ?1 AND tile_row = ?2",
+            )?;
+            let mut abs_out_row: u32 = 0;
+            let mut cached_tile_y: Option<u32> = None;
+            let mut tile_row_cache: HashMap<u32, RgbaImage> = HashMap::new();
+            let mut read_count: u64 = 0;
+            let total_ty_rows = rows as u64;
 
-    let mut abs_out_row: u32 = 0; // 已写入的输出像素行数
-    let mut cached_tile_y: Option<u32> = None; // 当前缓存的 DB tile_row
-    let mut tile_row_cache: HashMap<u32, RgbaImage> = HashMap::new();
-    let mut read_count: u64 = 0;
-    let total_ty_rows = rows as u64;
+            loop {
+                let sample_count = image_enc.next_strip_sample_count();
+                if sample_count == 0 { break; }
+                let sample_count = sample_count as usize;
+                let strip_rows = (sample_count / (out_w as usize * 4)) as u32;
+                let mut strip_buf = vec![0u8; sample_count];
 
-    loop {
-        let sample_count = image_enc.next_strip_sample_count();
-        if sample_count == 0 {
-            break;
-        }
-        let sample_count = sample_count as usize;
-        // strip_rows = (rows_per_strip，等于 sample_count / (out_w * 4))
-        let strip_rows = (sample_count / (out_w as usize * 4)) as u32;
+                for row_in_strip in 0..strip_rows {
+                    let global_px_row = out_y0 + abs_out_row + row_in_strip;
+                    let tile_row_idx = global_px_row / TILE_SIZE;
+                    let tile_inner_y = global_px_row % TILE_SIZE;
+                    let actual_tile_y = y_min + tile_row_idx;
 
-        let mut strip_buf = vec![0u8; sample_count];
+                    if cached_tile_y != Some(actual_tile_y) {
+                        tile_row_cache.clear();
+                        let loaded: Vec<(u32, Vec<u8>)> = stmt
+                            .query_map(rusqlite::params![zoom as i64, actual_tile_y as i64], |r| {
+                                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Vec<u8>>(1)?))
+                            })?
+                            .filter_map(|r| r.ok())
+                            .collect();
+                        let decoded: Vec<(u32, Option<RgbaImage>)> = loaded
+                            .into_par_iter()
+                            .map(|(tx, data)| {
+                                let img = image::load_from_memory(&data).map(|i| i.to_rgba8()).ok();
+                                (tx, img)
+                            })
+                            .collect();
+                        let mut count = 0u64;
+                        for (tx, img_opt) in decoded {
+                            if let Some(img) = img_opt {
+                                tile_row_cache.insert(tx, img);
+                                count += 1;
+                            }
+                        }
+                        read_count += count;
+                        cached_tile_y = Some(actual_tile_y);
+                        let done_rows = (actual_tile_y - y_min + 1) as u64;
+                        progress_cb(done_rows, total_ty_rows);
+                    }
 
-        for row_in_strip in 0..strip_rows {
-            // 当前行在完整画布中的像素行号
-            let global_px_row = out_y0 + abs_out_row + row_in_strip;
-            let tile_row_idx = global_px_row / TILE_SIZE; // 距瓦片网格顶部第几行瓦片
-            let tile_inner_y = global_px_row % TILE_SIZE; // 在该瓦片中的行偏移
-            let actual_tile_y = y_min + tile_row_idx; // 数据库中的 tile_row 值
+                    let row_offset = row_in_strip as usize * out_w as usize * 4;
+                    for col_tile_idx in 0..cols {
+                        let actual_tx = x_min + col_tile_idx;
+                        let tile_abs_col_start = col_tile_idx * TILE_SIZE;
+                        let tile_abs_col_end = tile_abs_col_start + TILE_SIZE;
+                        let region_col_left = tile_abs_col_start.max(out_x0);
+                        let region_col_right = tile_abs_col_end.min(out_x0 + out_w);
+                        if region_col_left >= region_col_right { continue; }
+                        let tile_src_x = region_col_left - tile_abs_col_start;
+                        let dst_col = region_col_left - out_x0;
+                        let copy_w = (region_col_right - region_col_left) as usize;
+                        if let Some(tile_img) = tile_row_cache.get(&actual_tx) {
+                            if tile_inner_y < tile_img.height()
+                                && tile_src_x + copy_w as u32 <= tile_img.width()
+                            {
+                                let raw = tile_img.as_raw();
+                                let row_start = tire_row_byte_offset(tile_img.width(), tile_inner_y);
+                                let src_start = row_start + tile_src_x as usize * 4;
+                                let dst_start = row_offset + dst_col as usize * 4;
+                                strip_buf[dst_start..dst_start + copy_w * 4]
+                                    .copy_from_slice(&raw[src_start..src_start + copy_w * 4]);
+                            }
+                        }
+                    }
 
-            // 按需加载该行的所有列瓦片（并行解码）
-            if cached_tile_y != Some(actual_tile_y) {
-                tile_row_cache.clear();
-                let loaded: Vec<(u32, Vec<u8>)> = stmt
-                    .query_map(rusqlite::params![zoom as i64, actual_tile_y as i64], |r| {
-                        Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Vec<u8>>(1)?))
-                    })?
-                    .filter_map(|r| r.ok())
-                    .collect();
-                // 并行解码
-                let decoded: Vec<(u32, Option<RgbaImage>)> = loaded
-                    .into_par_iter()
-                    .map(|(tx, data)| {
-                        let img = image::load_from_memory(&data).map(|i| i.to_rgba8()).ok();
-                        (tx, img)
-                    })
-                    .collect();
-                let mut count = 0u64;
-                for (tx, img_opt) in decoded {
-                    if let Some(img) = img_opt {
-                        tile_row_cache.insert(tx, img);
-                        count += 1;
+                    if let Some(poly) = &polygon {
+                        let row_abs = abs_out_row + row_in_strip;
+                        let row_lat = if merc_per_out_px > 0.0 {
+                            merc_inv(merc_n_out - (row_abs as f64 + 0.5) * merc_per_out_px)
+                        } else {
+                            geo_north - (row_abs as f64 + 0.5) * lat_scale
+                        };
+                        apply_polygon_mask_to_row(
+                            &mut strip_buf, out_w, row_offset,
+                            geo_west, lon_scale, row_lat, poly,
+                        );
                     }
                 }
-                read_count += count;
-                cached_tile_y = Some(actual_tile_y);
-                // 报告进度：当前已处理的瓦片行数
-                let done_rows = (actual_tile_y - y_min + 1) as u64;
-                progress_cb(done_rows, total_ty_rows);
+
+                abs_out_row += strip_rows;
+                image_enc.write_strip(&strip_buf)?;
             }
 
-            // 将该像素行的每个输出列拷贝到条带缓冲区
-            let row_offset = row_in_strip as usize * out_w as usize * 4;
-
-            for col_tile_idx in 0..cols {
-                let actual_tx = x_min + col_tile_idx;
-
-                // 该瓦片在完整画布中覆盖的列范围
-                let tile_abs_col_start = col_tile_idx * TILE_SIZE;
-                let tile_abs_col_end = tile_abs_col_start + TILE_SIZE;
-
-                // 与输出窗口 [out_x0, out_x0+out_w) 的交叉区域
-                let region_col_left = tile_abs_col_start.max(out_x0);
-                let region_col_right = tile_abs_col_end.min(out_x0 + out_w);
-                if region_col_left >= region_col_right {
-                    continue; // 该列瓦片不在输出窗口内
-                }
-
-                let tile_src_x = region_col_left - tile_abs_col_start; // 瓦片内起始 x
-                let dst_col = region_col_left - out_x0; // 输出行内起始列
-                let copy_w = (region_col_right - region_col_left) as usize;
-
-                if let Some(tile_img) = tile_row_cache.get(&actual_tx) {
-                    if tile_inner_y < tile_img.height()
-                        && tile_src_x + copy_w as u32 <= tile_img.width()
-                    {
-                        // 直接切片拷贝整行片段（bulk copy，避免逐像素循环）
-                        let raw = tile_img.as_raw();
-                        let row_start = tire_row_byte_offset(tile_img.width(), tile_inner_y);
-                        let src_start = row_start + tile_src_x as usize * 4;
-                        let dst_start = row_offset + dst_col as usize * 4;
-                        strip_buf[dst_start..dst_start + copy_w * 4]
-                            .copy_from_slice(&raw[src_start..src_start + copy_w * 4]);
-                    }
-                }
-            }
-
-            // ── 多边形掩膜（奇偶规则，将多边形外像素设为全透明）────────────
-            if let Some(poly) = &polygon {
-                let row_abs = abs_out_row + row_in_strip;
-                // WebMercator：用 Mercator Y 反投影求精确行纬度，避免线性近似误差
-                let row_lat = if merc_per_out_px > 0.0 {
-                    merc_inv(merc_n_out - (row_abs as f64 + 0.5) * merc_per_out_px)
-                } else {
-                    geo_north - (row_abs as f64 + 0.5) * lat_scale
-                };
-                apply_polygon_mask_to_row(
-                    &mut strip_buf,
-                    out_w,
-                    row_offset,
-                    geo_west,
-                    lon_scale,
-                    row_lat,
-                    poly,
-                );
-            }
-        }
-
-        abs_out_row += strip_rows;
-        image_enc.write_strip(&strip_buf)?;
+            if read_count == 0 { bail!("层级 {} 无可用瓦片数据", zoom); }
+            image_enc.finish()?;
+            Ok(read_count)
+        }};
     }
 
-    if read_count == 0 {
-        bail!("层级 {} 无可用瓦片数据", zoom);
+    match compression {
+        "lzw"     => run_encode!(encoder.new_image_with_compression::<RGBA8, _>(out_w, out_h, Lzw::default())?),
+        "deflate" => run_encode!(encoder.new_image_with_compression::<RGBA8, _>(out_w, out_h, Deflate::with_level(DeflateLevel::Best))?),
+        _         => run_encode!(encoder.new_image::<RGBA8>(out_w, out_h)?),
     }
-
-    image_enc.finish()?;
-    Ok(read_count)
 }
 
 /// 计算 RgbaImage 中指定行的字节偏移（width × row × 4）
