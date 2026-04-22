@@ -183,7 +183,8 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
         ($image_enc:expr) => {{
             let mut image_enc = $image_enc;
             let lon_scale = (geo_east - geo_west) / out_w as f64;
-            let lat_scale = (geo_north - geo_south) / out_h as f64;
+            // GeoTIFF 规范：当栅格原点在左上角时，Y 缩放比例为负值（表示纬度随像素 Y 增加而减少）
+            let lat_scale = (geo_south - geo_north) / out_h as f64;
             image_enc
                 .encoder()
                 .write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), [lon_scale, lat_scale, 0.0_f64].as_slice())?;
@@ -280,7 +281,8 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
                         let row_lat = if merc_per_out_px > 0.0 {
                             merc_inv(merc_n_out - (row_abs as f64 + 0.5) * merc_per_out_px)
                         } else {
-                            geo_north - (row_abs as f64 + 0.5) * lat_scale
+                            // lat_scale 现在为负值，所以使用加法（geo_north + row * negative = geo_north - row * positive）
+                            geo_north + (row_abs as f64 + 0.5) * lat_scale
                         };
                         apply_polygon_mask_to_row(
                             &mut strip_buf, out_w, row_offset,
