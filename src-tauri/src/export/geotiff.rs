@@ -1,12 +1,12 @@
 //! 将瓦片包导出为 GeoTIFF 格式（分条带流式写入，低内存占用）
 //!
-//! 将指定层级的所有瓦片拼接并写入带地理参考的 TIFF 文件（EPSG:4326）。
+//! 将指定层级的所有瓦片拼接并写入带地理参考的 TIFF 文件。
 //! 采用逐条带（strip）写入：每次仅将一行瓦片（256 px 高度带）加载进内存，
 //! 峰值内存开销为 `宽度（像素）× 256 × 4 字节`，与图像高度无关。
 //!
 //! # 注意
-//! - 瓦片坐标系为 XYZ / Web Mercator（EPSG:3857）
-//! - GeoTIFF 地理参考使用 WGS84 经纬度包围盒（近似线性变换）
+//! - 根据源瓦片的 CRS 类型写入对应的投影信息（EPSG:3857 或 EPSG:4326）
+//! - GeoTIFF 地理参考使用经纬度包围盒
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -190,11 +190,19 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
             image_enc
                 .encoder()
                 .write_tag(Tag::Unknown(TAG_MODEL_TIEPOINT), [0.0_f64, 0.0, 0.0, geo_west, geo_north, 0.0].as_slice())?;
+
+            // 根据 CRS 类型设置 EPSG 代码
+            let epsg_code: u16 = match crs {
+                CrsType::WebMercator => 3857, // EPSG:3857 - Web Mercator
+                CrsType::Wgs84 => 4326,       // EPSG:4326 - WGS84
+                _ => 4326,                     // 默认使用 WGS84
+            };
+
             let geo_keys: Vec<u16> = vec![
                 1, 1, 0, 3,
                 1024, 0, 1, 2,
                 1025, 0, 1, 1,
-                2048, 0, 1, 4326,
+                2048, 0, 1, epsg_code,
             ];
             image_enc
                 .encoder()
