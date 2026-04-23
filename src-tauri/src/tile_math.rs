@@ -79,7 +79,12 @@ pub fn tile_xyz_to_lng_lat(x: u32, y: u32, zoom: u8) -> (f64, f64) {
 pub fn tile_xyz_to_bounds(x: u32, y: u32, zoom: u8) -> Bounds {
     let (west, north) = tile_xyz_to_lng_lat(x, y, zoom);
     let (east, south) = tile_xyz_to_lng_lat(x + 1, y + 1, zoom);
-    Bounds { west, east, south, north }
+    Bounds {
+        west,
+        east,
+        south,
+        north,
+    }
 }
 
 /// 按坐标系将瓦片坐标转换为经纬度范围（用于闪烁效果）
@@ -88,11 +93,16 @@ pub fn tile_to_lonlat_bounds(x: u32, y: u32, zoom: u8, crs: &CrsType) -> Bounds 
         CrsType::Wgs84 => {
             let cols = 2u32.pow(zoom as u32) as f64;
             let rows = 2u32.pow((zoom as u32).saturating_sub(1)) as f64;
-            let west  = (x as f64) / cols * 360.0 - 180.0;
-            let east  = (x as f64 + 1.0) / cols * 360.0 - 180.0;
+            let west = (x as f64) / cols * 360.0 - 180.0;
+            let east = (x as f64 + 1.0) / cols * 360.0 - 180.0;
             let north = 90.0 - (y as f64) / rows * 180.0;
             let south = 90.0 - (y as f64 + 1.0) / rows * 180.0;
-            Bounds { west, east, south, north }
+            Bounds {
+                west,
+                east,
+                south,
+                north,
+            }
         }
         _ => tile_xyz_to_bounds(x, y, zoom),
     }
@@ -101,21 +111,32 @@ pub fn tile_to_lonlat_bounds(x: u32, y: u32, zoom: u8, crs: &CrsType) -> Bounds 
 /// 判断瓦片是否严格位于指定范围内（瓦片四至完全被范围包含，不含仅相交的边界瓦片）
 ///
 /// 仅支持 WebMercator 坐标系；WGS84 使用近似线性映射。
-pub fn tile_strictly_within_bounds(x: u32, y: u32, zoom: u8, bounds: &Bounds, crs: &CrsType) -> bool {
+pub fn tile_strictly_within_bounds(
+    x: u32,
+    y: u32,
+    zoom: u8,
+    bounds: &Bounds,
+    crs: &CrsType,
+) -> bool {
     let tb = match crs {
         CrsType::Wgs84 => {
             let cols = 2u32.pow(zoom as u32) as f64;
             let rows = 2u32.pow((zoom as u32).saturating_sub(1)) as f64;
-            let west  = (x as f64) / cols * 360.0 - 180.0;
-            let east  = (x as f64 + 1.0) / cols * 360.0 - 180.0;
+            let west = (x as f64) / cols * 360.0 - 180.0;
+            let east = (x as f64 + 1.0) / cols * 360.0 - 180.0;
             let north = 90.0 - (y as f64) / rows * 180.0;
             let south = 90.0 - (y as f64 + 1.0) / rows * 180.0;
-            Bounds { west, east, south, north }
+            Bounds {
+                west,
+                east,
+                south,
+                north,
+            }
         }
         _ => tile_xyz_to_bounds(x, y, zoom),
     };
-    tb.west  >= bounds.west
-        && tb.east  <= bounds.east
+    tb.west >= bounds.west
+        && tb.east <= bounds.east
         && tb.south >= bounds.south
         && tb.north <= bounds.north
 }
@@ -167,7 +188,10 @@ pub fn bounds_to_tile_range_wgs84(bounds: &Bounds, zoom: u8) -> ((u32, u32), (u3
     let cols = 2u32.pow(zoom as u32).saturating_sub(1);
     let rows = 2u32.pow((zoom as u32).saturating_sub(1)).saturating_sub(1);
 
-    ((x_min.min(cols), x_max.min(cols)), (y_min.min(rows), y_max.min(rows)))
+    (
+        (x_min.min(cols), x_max.min(cols)),
+        (y_min.min(rows), y_max.min(rows)),
+    )
 }
 
 // ─── 统一接口 ────────────────────────────────────────────────────────────────
@@ -263,7 +287,9 @@ pub fn generate_tile_grid_geojson(
             let tile_b = tile_xyz_to_bounds(x, y, zoom);
             let feature = format!(
                 r#"{{"type":"Feature","properties":{{"z":{},"x":{},"y":{}}},"geometry":{{"type":"Polygon","coordinates":[[{},{},{},{},{}]]}}}}"#,
-                zoom, x, y,
+                zoom,
+                x,
+                y,
                 format_coord(tile_b.west, tile_b.north),
                 format_coord(tile_b.east, tile_b.north),
                 format_coord(tile_b.east, tile_b.south),
@@ -364,9 +390,15 @@ pub fn tile_intersects_polygon(
 
     // 快速排除：多边形 bbox 与瓦片 bbox 无交集
     let poly_min_lng = polygon.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
-    let poly_max_lng = polygon.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    let poly_max_lng = polygon
+        .iter()
+        .map(|p| p[0])
+        .fold(f64::NEG_INFINITY, f64::max);
     let poly_min_lat = polygon.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
-    let poly_max_lat = polygon.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+    let poly_max_lat = polygon
+        .iter()
+        .map(|p| p[1])
+        .fold(f64::NEG_INFINITY, f64::max);
 
     if tb.east <= poly_min_lng
         || tb.west >= poly_max_lng
@@ -457,16 +489,16 @@ mod tests {
 
     #[test]
     fn test_lng_lat_to_tile_xyz() {
-        // 上海大约在 z=10: x=857, y=393
+        // 上海大约在 z=10: x=857, y=418
         let (x, y) = lng_lat_to_tile_xyz(121.4737, 31.2304, 10);
         assert_eq!(x, 857);
-        assert_eq!(y, 393);
+        assert_eq!(y, 418);
     }
 
     #[test]
     fn test_tile_xyz_to_bounds() {
-        let b = tile_xyz_to_bounds(857, 393, 10);
-        assert!((b.west - 121.376953).abs() < 0.01);
+        let b = tile_xyz_to_bounds(857, 418, 10);
+        assert!((b.west - 121.2890625).abs() < 0.01);
         assert!((b.north - 31.353638).abs() < 0.01);
     }
 

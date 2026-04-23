@@ -140,12 +140,7 @@ pub async fn start_download(
     let concurrency = get_concurrency(app_db.inner());
 
     engine
-        .start(
-            task_id,
-            app_db.inner().clone(),
-            concurrency,
-            app,
-        )
+        .start(task_id, app_db.inner().clone(), concurrency, app)
         .map_err(|e| e.to_string())
 }
 
@@ -182,12 +177,7 @@ pub async fn resume_download(
     // 引擎无记录（应用重启后），重新启动
     let concurrency = get_concurrency(app_db.inner());
     engine
-        .start(
-            task_id,
-            app_db.inner().clone(),
-            concurrency,
-            app,
-        )
+        .start(task_id, app_db.inner().clone(), concurrency, app)
         .map_err(|e| e.to_string())
 }
 
@@ -235,12 +225,7 @@ pub async fn retry_failed(
 
     let concurrency = get_concurrency(app_db.inner());
     engine
-        .start(
-            task_id,
-            app_db.inner().clone(),
-            concurrency,
-            app,
-        )
+        .start(task_id, app_db.inner().clone(), concurrency, app)
         .map_err(|e| e.to_string())?;
 
     Ok(count)
@@ -291,9 +276,19 @@ pub async fn export_mbtiles(
         .ok()
         .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(str::to_string))
         .unwrap_or_else(|| "png".into());
-    let bounds = [task.bounds_west, task.bounds_south, task.bounds_east, task.bounds_north];
-    let polygon: Option<Vec<[f64; 2]>> = task.polygon_wgs84.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config).map(|s| s.crs).unwrap_or_default();
+    let bounds = [
+        task.bounds_west,
+        task.bounds_south,
+        task.bounds_east,
+        task.bounds_north,
+    ];
+    let polygon: Option<Vec<[f64; 2]>> = task
+        .polygon_wgs84
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
+        .map(|s| s.crs)
+        .unwrap_or_default();
     let task_name = task.name.clone();
 
     let job_id = Uuid::new_v4().to_string();
@@ -329,12 +324,22 @@ pub async fn export_mbtiles(
             png_level,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
-                    if let Some(j) = map.get_mut(&jid) { j.done = done; j.total = total; }
+                    if let Some(j) = map.get_mut(&jid) {
+                        j.done = done;
+                        j.total = total;
+                    }
                 }
-                let _ = app_clone.emit("export-progress", ExportProgressPayload {
-                    job_id: jid.clone(), done, total, status: "running".into(),
-                    dest_path: dest_path.clone(), error: None,
-                });
+                let _ = app_clone.emit(
+                    "export-progress",
+                    ExportProgressPayload {
+                        job_id: jid.clone(),
+                        done,
+                        total,
+                        status: "running".into(),
+                        dest_path: dest_path.clone(),
+                        error: None,
+                    },
+                );
             },
         );
         let (status, error, done): (String, Option<String>, u64) = match result {
@@ -343,12 +348,24 @@ pub async fn export_mbtiles(
         };
         if let Ok(mut map) = state_clone.lock() {
             if let Some(j) = map.get_mut(&jid) {
-                j.status = status.clone(); j.error = error.clone(); if done > 0 { j.done = done; }
+                j.status = status.clone();
+                j.error = error.clone();
+                if done > 0 {
+                    j.done = done;
+                }
             }
         }
-        let _ = app_clone.emit("export-progress", ExportProgressPayload {
-            job_id: jid.clone(), done, total: done, status, dest_path: dest_path.clone(), error,
-        });
+        let _ = app_clone.emit(
+            "export-progress",
+            ExportProgressPayload {
+                job_id: jid.clone(),
+                done,
+                total: done,
+                status,
+                dest_path: dest_path.clone(),
+                error,
+            },
+        );
     });
 
     Ok(job_id)
@@ -382,9 +399,19 @@ pub async fn export_directory(
         .ok()
         .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(str::to_string))
         .unwrap_or_else(|| "png".into());
-    let bounds = [task.bounds_west, task.bounds_south, task.bounds_east, task.bounds_north];
-    let polygon: Option<Vec<[f64; 2]>> = task.polygon_wgs84.as_deref().and_then(|s| serde_json::from_str(s).ok());
-    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config).map(|s| s.crs).unwrap_or_default();
+    let bounds = [
+        task.bounds_west,
+        task.bounds_south,
+        task.bounds_east,
+        task.bounds_north,
+    ];
+    let polygon: Option<Vec<[f64; 2]>> = task
+        .polygon_wgs84
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
+        .map(|s| s.crs)
+        .unwrap_or_default();
 
     let job_id = Uuid::new_v4().to_string();
     let job = ExportJob {
@@ -417,12 +444,22 @@ pub async fn export_directory(
             png_level,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
-                    if let Some(j) = map.get_mut(&jid) { j.done = done; j.total = total; }
+                    if let Some(j) = map.get_mut(&jid) {
+                        j.done = done;
+                        j.total = total;
+                    }
                 }
-                let _ = app_clone.emit("export-progress", ExportProgressPayload {
-                    job_id: jid.clone(), done, total, status: "running".into(),
-                    dest_path: dp.clone(), error: None,
-                });
+                let _ = app_clone.emit(
+                    "export-progress",
+                    ExportProgressPayload {
+                        job_id: jid.clone(),
+                        done,
+                        total,
+                        status: "running".into(),
+                        dest_path: dp.clone(),
+                        error: None,
+                    },
+                );
             },
         );
         let (status, error, done): (String, Option<String>, u64) = match result {
@@ -431,12 +468,24 @@ pub async fn export_directory(
         };
         if let Ok(mut map) = state_clone.lock() {
             if let Some(j) = map.get_mut(&jid) {
-                j.status = status.clone(); j.error = error.clone(); if done > 0 { j.done = done; }
+                j.status = status.clone();
+                j.error = error.clone();
+                if done > 0 {
+                    j.done = done;
+                }
             }
         }
-        let _ = app_clone.emit("export-progress", ExportProgressPayload {
-            job_id: jid.clone(), done, total: done, status, dest_path: dest_dir.clone(), error,
-        });
+        let _ = app_clone.emit(
+            "export-progress",
+            ExportProgressPayload {
+                job_id: jid.clone(),
+                done,
+                total: done,
+                status,
+                dest_path: dest_dir.clone(),
+                error,
+            },
+        );
     });
 
     Ok(job_id)
@@ -450,7 +499,6 @@ pub async fn export_geotiff(
     dest_path: String,
     zoom: u8,
     clip_to_bounds: bool,
-    tiff_compression: Option<String>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
     app: AppHandle,
@@ -466,7 +514,12 @@ pub async fn export_geotiff(
         return Err(format!("瓦片文件不存在: {}", src_path));
     }
 
-    let bounds = [task.bounds_west, task.bounds_south, task.bounds_east, task.bounds_north];
+    let bounds = [
+        task.bounds_west,
+        task.bounds_south,
+        task.bounds_east,
+        task.bounds_north,
+    ];
     let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
         .map(|s| s.crs)
         .unwrap_or_default();
@@ -503,7 +556,6 @@ pub async fn export_geotiff(
         let app_clone2 = app_clone.clone();
         let jid2 = jid.clone();
         let dp2 = dp.clone();
-        let compression_str = tiff_compression.as_deref().unwrap_or("lzw").to_string();
         let result = crate::export::geotiff::export_geotiff(
             std::path::Path::new(&src_path),
             std::path::Path::new(&dest_path),
@@ -512,15 +564,24 @@ pub async fn export_geotiff(
             clip_to_bounds,
             polygon,
             &crs,
-            &compression_str,
             move |done, total| {
                 if let Ok(mut map) = state_clone2.lock() {
-                    if let Some(j) = map.get_mut(&jid2) { j.done = done; j.total = total; }
+                    if let Some(j) = map.get_mut(&jid2) {
+                        j.done = done;
+                        j.total = total;
+                    }
                 }
-                let _ = app_clone2.emit("export-progress", ExportProgressPayload {
-                    job_id: jid2.clone(), done, total, status: "running".into(),
-                    dest_path: dp2.clone(), error: None,
-                });
+                let _ = app_clone2.emit(
+                    "export-progress",
+                    ExportProgressPayload {
+                        job_id: jid2.clone(),
+                        done,
+                        total,
+                        status: "running".into(),
+                        dest_path: dp2.clone(),
+                        error: None,
+                    },
+                );
             },
         );
         let (status, error, done): (String, Option<String>, u64) = match result {
@@ -529,12 +590,23 @@ pub async fn export_geotiff(
         };
         if let Ok(mut map) = state_clone.lock() {
             if let Some(j) = map.get_mut(&jid) {
-                j.status = status.clone(); j.error = error.clone(); j.done = done; j.total = done;
+                j.status = status.clone();
+                j.error = error.clone();
+                j.done = done;
+                j.total = done;
             }
         }
-        let _ = app_clone.emit("export-progress", ExportProgressPayload {
-            job_id: jid.clone(), done, total: done, status, dest_path: dp, error,
-        });
+        let _ = app_clone.emit(
+            "export-progress",
+            ExportProgressPayload {
+                job_id: jid.clone(),
+                done,
+                total: done,
+                status,
+                dest_path: dp,
+                error,
+            },
+        );
     });
 
     Ok(job_id)
@@ -562,19 +634,18 @@ pub async fn get_stored_tile(
     app_db: State<'_, AppDb>,
 ) -> Result<Vec<u8>, String> {
     let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
-    let path = task
-        .tile_store_path
-        .ok_or("tile_store_path not set")?;
+    let path = task.tile_store_path.ok_or("tile_store_path not set")?;
 
     let clip_to_bounds = task.clip_to_bounds;
     let task_bounds = crate::types::Bounds {
-        west:  task.bounds_west,
-        east:  task.bounds_east,
+        west: task.bounds_west,
+        east: task.bounds_east,
         south: task.bounds_south,
         north: task.bounds_north,
     };
     // 解析多边形坐标（用于精确裁剪）
-    let polygon: Option<Vec<[f64; 2]>> = task.polygon_wgs84
+    let polygon: Option<Vec<[f64; 2]>> = task
+        .polygon_wgs84
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
     // 解析数据源以获取 CRS
@@ -642,8 +713,8 @@ pub async fn get_task_thumbnail(
         .clone()
         .ok_or("tile_store_path not set")?;
     let bounds = crate::types::Bounds {
-        west:  task.bounds_west,
-        east:  task.bounds_east,
+        west: task.bounds_west,
+        east: task.bounds_east,
         south: task.bounds_south,
         north: task.bounds_north,
     };
@@ -738,9 +809,11 @@ fn generate_thumbnail(
 
     // 经度方向线性映射
     let crop_x = ((bounds.west - grid_west) / (grid_east - grid_west) * total_w)
-        .round().max(0.0) as u32;
+        .round()
+        .max(0.0) as u32;
     let crop_x2 = ((bounds.east - grid_west) / (grid_east - grid_west) * total_w)
-        .round().min(total_w) as u32;
+        .round()
+        .min(total_w) as u32;
 
     // 纬度方向：用 Mercator 投影 (north→上) 映射到像素
     let merc = |lat: f64| -> f64 {
@@ -758,10 +831,14 @@ fn generate_thumbnail(
     };
     let grid_merc_top = merc(grid_north);
     let grid_merc_bottom = merc(grid_south);
-    let crop_y = ((merc(bounds.north) - grid_merc_top) / (grid_merc_bottom - grid_merc_top) * total_h)
-        .round().max(0.0) as u32;
-    let crop_y2 = ((merc(bounds.south) - grid_merc_top) / (grid_merc_bottom - grid_merc_top) * total_h)
-        .round().min(total_h) as u32;
+    let crop_y = ((merc(bounds.north) - grid_merc_top) / (grid_merc_bottom - grid_merc_top)
+        * total_h)
+        .round()
+        .max(0.0) as u32;
+    let crop_y2 = ((merc(bounds.south) - grid_merc_top) / (grid_merc_bottom - grid_merc_top)
+        * total_h)
+        .round()
+        .min(total_h) as u32;
 
     let crop_w = (crop_x2.saturating_sub(crop_x)).max(1);
     let crop_h = (crop_y2.saturating_sub(crop_y)).max(1);
@@ -869,15 +946,12 @@ pub async fn export_task(
     }
 
     // 直接复制 SQLite 文件（O(n) 磁盘读写，无压缩/解压开销）
-    std::fs::copy(tile_path, &dest_path)
-        .map_err(|e| format!("无法复制瓦片文件: {}", e))?;
+    std::fs::copy(tile_path, &dest_path).map_err(|e| format!("无法复制瓦片文件: {}", e))?;
 
     // 在副本中写入任务元数据
-    let store = crate::storage::tile_store::TileStore::open(
-        std::path::Path::new(&dest_path),
-        &task_id,
-    )
-    .map_err(|e| e.to_string())?;
+    let store =
+        crate::storage::tile_store::TileStore::open(std::path::Path::new(&dest_path), &task_id)
+            .map_err(|e| e.to_string())?;
 
     store
         .write_meta(&[
@@ -890,7 +964,10 @@ pub async fn export_task(
             ("tgr.bounds_north", &task.bounds_north.to_string()),
             ("tgr.min_zoom", &task.min_zoom.to_string()),
             ("tgr.max_zoom", &task.max_zoom.to_string()),
-            ("tgr.clip_to_bounds", if task.clip_to_bounds { "1" } else { "0" }),
+            (
+                "tgr.clip_to_bounds",
+                if task.clip_to_bounds { "1" } else { "0" },
+            ),
             (
                 "tgr.polygon_wgs84",
                 task.polygon_wgs84.as_deref().unwrap_or(""),
@@ -925,15 +1002,14 @@ pub async fn import_mbtiles(
     export_state: State<'_, ExportState>,
     app: AppHandle,
 ) -> Result<String, String> {
+    use rusqlite::{Connection, OpenFlags};
     use std::collections::HashMap;
     use std::io::Read;
-    use rusqlite::{Connection, OpenFlags};
 
     // 验证 SQLite 文件头
     let mut header = [0u8; 4];
     {
-        let mut f = std::fs::File::open(&src_path)
-            .map_err(|e| format!("无法打开文件: {}", e))?;
+        let mut f = std::fs::File::open(&src_path).map_err(|e| format!("无法打开文件: {}", e))?;
         f.read_exact(&mut header)
             .map_err(|_| "文件太小或无法读取".to_string())?;
     }
@@ -943,22 +1019,22 @@ pub async fn import_mbtiles(
 
     // 读取 MBTiles metadata
     let mbtiles_meta: HashMap<String, String> = {
-        let conn = Connection::open_with_flags(
-            &src_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(|e| format!("无法打开 MBTiles: {}", e))?;
+        let conn = Connection::open_with_flags(&src_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| format!("无法打开 MBTiles: {}", e))?;
         let mut stmt = conn
             .prepare("SELECT name, value FROM metadata")
             .map_err(|e| e.to_string())?;
-        let rows: Vec<(String, String)> = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|e| e.to_string())?
-        .filter_map(|r| r.ok())
-        .collect();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
         rows
-    }.into_iter().collect();
+    }
+    .into_iter()
+    .collect();
 
     // 解析 bounds
     let bounds_str = mbtiles_meta
@@ -974,9 +1050,18 @@ pub async fn import_mbtiles(
     }
     let (bounds_west, bounds_south, bounds_east, bounds_north) = (bp[0], bp[1], bp[2], bp[3]);
 
-    let min_zoom: u8 = mbtiles_meta.get("minzoom").and_then(|v| v.parse().ok()).unwrap_or(0);
-    let max_zoom: u8 = mbtiles_meta.get("maxzoom").and_then(|v| v.parse().ok()).unwrap_or(18);
-    let format = mbtiles_meta.get("format").cloned().unwrap_or_else(|| "png".to_string());
+    let min_zoom: u8 = mbtiles_meta
+        .get("minzoom")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let max_zoom: u8 = mbtiles_meta
+        .get("maxzoom")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(18);
+    let format = mbtiles_meta
+        .get("format")
+        .cloned()
+        .unwrap_or_else(|| "png".to_string());
     let name = task_name.unwrap_or_else(|| {
         mbtiles_meta
             .get("name")
@@ -1129,8 +1214,8 @@ where
          );",
     )?;
 
-    let total: u64 = src.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))?
-        as u64;
+    let total: u64 =
+        src.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))? as u64;
     if total == 0 {
         return Ok(0);
     }
@@ -1149,15 +1234,16 @@ where
                  ORDER BY zoom_level, tile_column, tile_row
                  LIMIT ?1 OFFSET ?2",
             )?;
-            let rows: Vec<(i64, i64, i64, Vec<u8>)> = stmt.query_map(params![BATCH, offset], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, Vec<u8>>(3)?,
-                ))
-            })?
-            .collect::<std::result::Result<_, _>>()?;
+            let rows: Vec<(i64, i64, i64, Vec<u8>)> = stmt
+                .query_map(params![BATCH, offset], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                    ))
+                })?
+                .collect::<std::result::Result<_, _>>()?;
             rows
         };
 
@@ -1208,8 +1294,7 @@ pub async fn import_task(
     // 读取文件头 4 字节判断格式
     let mut header = [0u8; 4];
     {
-        let mut f = std::fs::File::open(&src_path)
-            .map_err(|e| format!("无法打开文件: {}", e))?;
+        let mut f = std::fs::File::open(&src_path).map_err(|e| format!("无法打开文件: {}", e))?;
         f.read_exact(&mut header)
             .map_err(|_| "文件太小或无法读取".to_string())?;
     }
@@ -1237,20 +1322,44 @@ pub async fn import_task(
 
         let name = get("tgr.name")?;
         let source_config = get("tgr.source_config")?;
-        let bounds_west: f64 = get("tgr.bounds_west")?.parse().map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let bounds_east: f64 = get("tgr.bounds_east")?.parse().map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let bounds_south: f64 = get("tgr.bounds_south")?.parse().map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let bounds_north: f64 = get("tgr.bounds_north")?.parse().map_err(|e: std::num::ParseFloatError| e.to_string())?;
-        let min_zoom: u8 = get("tgr.min_zoom")?.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-        let max_zoom: u8 = get("tgr.max_zoom")?.parse().map_err(|e: std::num::ParseIntError| e.to_string())?;
-        let clip_to_bounds = meta.get("tgr.clip_to_bounds").map(|v| v == "1").unwrap_or(false);
+        let bounds_west: f64 = get("tgr.bounds_west")?
+            .parse()
+            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+        let bounds_east: f64 = get("tgr.bounds_east")?
+            .parse()
+            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+        let bounds_south: f64 = get("tgr.bounds_south")?
+            .parse()
+            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+        let bounds_north: f64 = get("tgr.bounds_north")?
+            .parse()
+            .map_err(|e: std::num::ParseFloatError| e.to_string())?;
+        let min_zoom: u8 = get("tgr.min_zoom")?
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())?;
+        let max_zoom: u8 = get("tgr.max_zoom")?
+            .parse()
+            .map_err(|e: std::num::ParseIntError| e.to_string())?;
+        let clip_to_bounds = meta
+            .get("tgr.clip_to_bounds")
+            .map(|v| v == "1")
+            .unwrap_or(false);
         let polygon_wgs84 = meta
             .get("tgr.polygon_wgs84")
             .filter(|s| !s.is_empty())
             .cloned();
-        let total_tiles: i64 = meta.get("tgr.total_tiles").and_then(|v| v.parse().ok()).unwrap_or(0);
-        let downloaded_tiles: i64 = meta.get("tgr.downloaded_tiles").and_then(|v| v.parse().ok()).unwrap_or(0);
-        let failed_tiles: i64 = meta.get("tgr.failed_tiles").and_then(|v| v.parse().ok()).unwrap_or(0);
+        let total_tiles: i64 = meta
+            .get("tgr.total_tiles")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let downloaded_tiles: i64 = meta
+            .get("tgr.downloaded_tiles")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let failed_tiles: i64 = meta
+            .get("tgr.failed_tiles")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
 
         let new_id = Uuid::new_v4().to_string();
         let new_task = NewTask {
@@ -1270,15 +1379,20 @@ pub async fn import_task(
         app_db
             .create_task(&new_id, &new_task, &src_path)
             .map_err(|e| e.to_string())?;
-        app_db.update_task_total(&new_id, total_tiles).map_err(|e| e.to_string())?;
-        app_db.update_task_progress(&new_id, downloaded_tiles, failed_tiles).map_err(|e| e.to_string())?;
-        app_db.update_task_status(&new_id, "paused").map_err(|e| e.to_string())?;
+        app_db
+            .update_task_total(&new_id, total_tiles)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_progress(&new_id, downloaded_tiles, failed_tiles)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_status(&new_id, "paused")
+            .map_err(|e| e.to_string())?;
 
         Ok(new_id)
     } else if is_zip {
         // ── v1 兼容：解压 tiles.db 后注册 ───────────────────────────────────
-        let file = std::fs::File::open(&src_path)
-            .map_err(|e| format!("无法打开文件: {}", e))?;
+        let file = std::fs::File::open(&src_path).map_err(|e| format!("无法打开文件: {}", e))?;
         let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
         let task: crate::storage::app_db::Task = {
@@ -1314,10 +1428,18 @@ pub async fn import_task(
             polygon_wgs84: task.polygon_wgs84,
         };
         let tile_path_str = new_tile_path.to_string_lossy().to_string();
-        app_db.create_task(&new_id, &new_task, &tile_path_str).map_err(|e| e.to_string())?;
-        app_db.update_task_total(&new_id, task.total_tiles).map_err(|e| e.to_string())?;
-        app_db.update_task_progress(&new_id, task.downloaded_tiles, task.failed_tiles).map_err(|e| e.to_string())?;
-        app_db.update_task_status(&new_id, "paused").map_err(|e| e.to_string())?;
+        app_db
+            .create_task(&new_id, &new_task, &tile_path_str)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_total(&new_id, task.total_tiles)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_progress(&new_id, task.downloaded_tiles, task.failed_tiles)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_status(&new_id, "paused")
+            .map_err(|e| e.to_string())?;
 
         Ok(new_id)
     } else {
@@ -1376,8 +1498,7 @@ pub async fn get_download_progress_geojson(
     // 从 tile store 查询已下载的坐标
     let downloaded_set: std::collections::HashSet<(u32, u32)> =
         tokio::task::spawn_blocking(move || {
-            let conn = rusqlite::Connection::open(&tile_store_path)
-                .map_err(|e| e.to_string())?;
+            let conn = rusqlite::Connection::open(&tile_store_path).map_err(|e| e.to_string())?;
             let mut stmt = conn
                 .prepare(
                     "SELECT tile_column, tile_row FROM download_state

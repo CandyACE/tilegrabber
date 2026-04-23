@@ -4,6 +4,22 @@
 
 ---
 
+## [v0.4.6] - 2026-04-23
+
+### 修复
+
+- **GeoTIFF 坐标参考异常**：修复导出时错误的 GeoTIFF 像素尺度标签号，并按源瓦片 CRS 正确写入 EPSG:4326 / EPSG:3857 与范围信息，避免外部 GIS 将坐标范围识别错误
+- **GeoTIFF 在 QGIS 中读取失败**：GeoTIFF 导出统一改为 BigTIFF 无压缩写出，绕开压缩 strip 兼容性问题，避免 `TIFFReadEncodedStrip()` / `IReadBlock failed` 等加载错误
+- **GeoTIFF 严格裁剪黑底**：为 RGBA GeoTIFF 显式写入 Alpha 通道 `ExtraSamples` 标签，修复 QGIS 中裁剪透明区显示为黑块的问题
+- **导出默认裁剪行为**：导出面板中的「严格裁剪至任务选框范围」现在默认开启
+
+### 优化
+
+- 移除 GeoTIFF 压缩选项，统一收敛为更稳定的 BigTIFF 导出行为
+- 修正过期的瓦片数学测试断言，并修复目录导出模块注释块导致的 doctest 误判
+
+---
+
 ## [v0.4.5] - 2026-04-10
 
 ### 新增

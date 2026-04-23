@@ -1,12 +1,12 @@
 //! 将瓦片包导出为 GeoTIFF 格式（分条带流式写入，低内存占用）
 //!
-//! 将指定层级的所有瓦片拼接并写入带地理参考的 TIFF 文件（EPSG:4326）。
+//! 将指定层级的所有瓦片拼接并写入带地理参考的 TIFF 文件。
 //! 采用逐条带（strip）写入：每次仅将一行瓦片（256 px 高度带）加载进内存，
 //! 峰值内存开销为 `宽度（像素）× 256 × 4 字节`，与图像高度无关。
 //!
 //! # 注意
-//! - 瓦片坐标系为 XYZ / Web Mercator（EPSG:3857）
-//! - GeoTIFF 地理参考使用 WGS84 经纬度包围盒（近似线性变换）
+//! - 支持 WebMercator（EPSG:3857）与 WGS84（EPSG:4326）两种瓦片网格
+//! - GeoTIFF 地理参考按源瓦片 CRS 写入正确的坐标范围与 EPSG
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -17,7 +17,6 @@ use image::RgbaImage;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use tiff::encoder::colortype::RGBA8;
-use tiff::encoder::compression::{Deflate, DeflateLevel, Lzw};
 use tiff::encoder::TiffEncoder;
 use tiff::tags::Tag;
 
@@ -39,15 +38,65 @@ fn merc_inv(y: f64) -> f64 {
     (2.0 * y.exp().atan() - PI / 2.0).to_degrees()
 }
 
+/// WGS84 经纬度 → WebMercator 米坐标
+#[inline(always)]
+fn lng_lat_to_web_mercator(lng: f64, lat: f64) -> (f64, f64) {
+    const ORIGIN_SHIFT: f64 = 20_037_508.342_789_244;
+    let lat = lat.clamp(-85.051_128_779_806_6, 85.051_128_779_806_6);
+    let x = lng * ORIGIN_SHIFT / 180.0;
+    let y = merc(lat) * ORIGIN_SHIFT / std::f64::consts::PI;
+    (x, y)
+}
+
+#[derive(Debug, Clone)]
+struct GeoReference {
+    model_west: f64,
+    model_north: f64,
+    pixel_scale_x: f64,
+    pixel_scale_y: f64,
+    geo_keys: Vec<u16>,
+}
+
+fn build_geo_reference(
+    crs: &CrsType,
+    geo_west: f64,
+    geo_north: f64,
+    geo_east: f64,
+    geo_south: f64,
+    out_w: u32,
+    out_h: u32,
+) -> GeoReference {
+    match crs {
+        CrsType::Wgs84 => GeoReference {
+            model_west: geo_west,
+            model_north: geo_north,
+            pixel_scale_x: (geo_east - geo_west) / out_w as f64,
+            pixel_scale_y: (geo_north - geo_south) / out_h as f64,
+            geo_keys: vec![1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326],
+        },
+        _ => {
+            let (model_west, model_north) = lng_lat_to_web_mercator(geo_west, geo_north);
+            let (model_east, model_south) = lng_lat_to_web_mercator(geo_east, geo_south);
+            GeoReference {
+                model_west,
+                model_north,
+                pixel_scale_x: (model_east - model_west) / out_w as f64,
+                pixel_scale_y: (model_north - model_south) / out_h as f64,
+                geo_keys: vec![1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 3857],
+            }
+        }
+    }
+}
+
 // ─── 常量 ────────────────────────────────────────────────────────────────────
 
 /// 单张瓦片像素尺寸
 const TILE_SIZE: u32 = 256;
 
-// ─── GeoTIFF Custom Tag IDs ──────────────────────────────────────────────────
+// ─── GeoTIFF Tag IDs ─────────────────────────────────────────────────────────
 
 /// ModelPixelScaleTag — 像素地理尺寸 [sx, sy, sz]
-const TAG_MODEL_PIXEL_SCALE: u16 = 34264;
+const TAG_MODEL_PIXEL_SCALE: u16 = 33550;
 /// ModelTiepointTag — 参考控制点 [i,j,k, x,y,z]
 const TAG_MODEL_TIEPOINT: u16 = 33922;
 /// GeoKeyDirectoryTag — GeoKey 字典
@@ -75,7 +124,6 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     clip_to_bounds: bool,
     polygon: Option<Vec<[f64; 2]>>,
     crs: &CrsType,
-    compression: &str,
     progress_cb: F,
 ) -> Result<u64> {
     let [west, south, east, north] = bounds;
@@ -105,14 +153,28 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     let rows = y_max - y_min + 1;
 
     // ── 计算拼接画布的地理范围 ───────────────────────────────────────────────
-    let (img_west, img_north) = crate::tile_math::tile_xyz_to_lng_lat(x_min, y_min, zoom);
-    let (img_east, img_south) = crate::tile_math::tile_xyz_to_lng_lat(x_max + 1, y_max + 1, zoom);
+    let top_left = crate::tile_math::tile_to_lonlat_bounds(x_min, y_min, zoom, crs);
+    let bottom_right = crate::tile_math::tile_to_lonlat_bounds(x_max, y_max, zoom, crs);
+    let img_west = top_left.west;
+    let img_north = top_left.north;
+    let img_east = bottom_right.east;
+    let img_south = bottom_right.south;
 
     // ── 计算输出像素窗口（考虑 clip_to_bounds） ─────────────────────────────
     // out_x0/out_y0: 输出窗口左上角在完整画布中的像素坐标
     // merc_n_out / merc_per_out_px: polygon mask 需要用 Mercator Y 反投影算行纬度（WGS84 时为 0.0）
-    let (out_x0, out_y0, out_w, out_h, geo_west, geo_north, geo_east, geo_south,
-         merc_n_out, merc_per_out_px) = {
+    let (
+        out_x0,
+        out_y0,
+        out_w,
+        out_h,
+        geo_west,
+        geo_north,
+        geo_east,
+        geo_south,
+        merc_n_out,
+        merc_per_out_px,
+    ) = {
         let canvas_w = cols * TILE_SIZE;
         let canvas_h = rows * TILE_SIZE;
         if clip_to_bounds {
@@ -169,147 +231,191 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
                     (mn, (mn - ms) / h_f)
                 }
             };
-            (0, 0, canvas_w, canvas_h, img_west, img_north, img_east, img_south, mn_out, mpp_out)
+            (
+                0, 0, canvas_w, canvas_h, img_west, img_north, img_east, img_south, mn_out, mpp_out,
+            )
         }
     };
 
     // ── 创建 TIFF 编码器并写入地理参考标签 ──────────────────────────────────
-    // 始终使用 BigTIFF（64-bit 偏移量）：无 4 GB 文件大小限制，
-    // GDAL 1.6+ / QGIS / ArcGIS 10.x+ 均支持读取。
     let file = std::fs::File::create(dest_path).context("创建 GeoTIFF 文件失败")?;
     let mut encoder = TiffEncoder::new_big(std::io::BufWriter::new(file))?;
+    let mut image_enc = encoder.new_image::<RGBA8>(out_w, out_h)?;
+    let lon_scale = (geo_east - geo_west) / out_w as f64;
+    let lat_scale = (geo_north - geo_south) / out_h as f64;
+    let geo_ref = build_geo_reference(crs, geo_west, geo_north, geo_east, geo_south, out_w, out_h);
+    image_enc.rows_per_strip(TILE_SIZE)?;
+    image_enc.encoder().write_tag(
+        Tag::Unknown(TAG_MODEL_PIXEL_SCALE),
+        [geo_ref.pixel_scale_x, geo_ref.pixel_scale_y, 0.0_f64].as_slice(),
+    )?;
+    image_enc.encoder().write_tag(
+        Tag::Unknown(TAG_MODEL_TIEPOINT),
+        [0.0_f64, 0.0, 0.0, geo_ref.model_west, geo_ref.model_north, 0.0].as_slice(),
+    )?;
+    image_enc.encoder().write_tag(Tag::ExtraSamples, [2u16].as_slice())?;
+    image_enc
+        .encoder()
+        .write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), geo_ref.geo_keys.as_slice())?;
 
-    macro_rules! run_encode {
-        ($image_enc:expr) => {{
-            let mut image_enc = $image_enc;
-            let lon_scale = (geo_east - geo_west) / out_w as f64;
-            let lat_scale = (geo_north - geo_south) / out_h as f64;
-            image_enc
-                .encoder()
-                .write_tag(Tag::Unknown(TAG_MODEL_PIXEL_SCALE), [lon_scale, lat_scale, 0.0_f64].as_slice())?;
-            image_enc
-                .encoder()
-                .write_tag(Tag::Unknown(TAG_MODEL_TIEPOINT), [0.0_f64, 0.0, 0.0, geo_west, geo_north, 0.0].as_slice())?;
-            let geo_keys: Vec<u16> = vec![
-                1, 1, 0, 3,
-                1024, 0, 1, 2,
-                1025, 0, 1, 1,
-                2048, 0, 1, 4326,
-            ];
-            image_enc
-                .encoder()
-                .write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), geo_keys.as_slice())?;
+    let read_count = render_geotiff_strips(
+        &src,
+        zoom,
+        x_min,
+        y_min,
+        cols,
+        rows,
+        out_x0,
+        out_y0,
+        out_w,
+        out_h,
+        polygon.as_deref(),
+        merc_n_out,
+        merc_per_out_px,
+        geo_west,
+        geo_north,
+        lon_scale,
+        lat_scale,
+        progress_cb,
+        |strip_buf| image_enc.write_strip(&strip_buf).map_err(Into::into),
+    )?;
 
-            let mut stmt = src.prepare(
-                "SELECT tile_column, tile_data FROM tiles WHERE zoom_level = ?1 AND tile_row = ?2",
-            )?;
-            let mut abs_out_row: u32 = 0;
-            let mut cached_tile_y: Option<u32> = None;
-            let mut tile_row_cache: HashMap<u32, RgbaImage> = HashMap::new();
-            let mut read_count: u64 = 0;
-            let total_ty_rows = rows as u64;
-
-            loop {
-                let sample_count = image_enc.next_strip_sample_count();
-                if sample_count == 0 { break; }
-                let sample_count = sample_count as usize;
-                let strip_rows = (sample_count / (out_w as usize * 4)) as u32;
-                let mut strip_buf = vec![0u8; sample_count];
-
-                for row_in_strip in 0..strip_rows {
-                    let global_px_row = out_y0 + abs_out_row + row_in_strip;
-                    let tile_row_idx = global_px_row / TILE_SIZE;
-                    let tile_inner_y = global_px_row % TILE_SIZE;
-                    let actual_tile_y = y_min + tile_row_idx;
-
-                    if cached_tile_y != Some(actual_tile_y) {
-                        tile_row_cache.clear();
-                        let loaded: Vec<(u32, Vec<u8>)> = stmt
-                            .query_map(rusqlite::params![zoom as i64, actual_tile_y as i64], |r| {
-                                Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Vec<u8>>(1)?))
-                            })?
-                            .filter_map(|r| r.ok())
-                            .collect();
-                        let decoded: Vec<(u32, Option<RgbaImage>)> = loaded
-                            .into_par_iter()
-                            .map(|(tx, data)| {
-                                let img = image::load_from_memory(&data).map(|i| i.to_rgba8()).ok();
-                                (tx, img)
-                            })
-                            .collect();
-                        let mut count = 0u64;
-                        for (tx, img_opt) in decoded {
-                            if let Some(img) = img_opt {
-                                tile_row_cache.insert(tx, img);
-                                count += 1;
-                            }
-                        }
-                        read_count += count;
-                        cached_tile_y = Some(actual_tile_y);
-                        let done_rows = (actual_tile_y - y_min + 1) as u64;
-                        progress_cb(done_rows, total_ty_rows);
-                    }
-
-                    let row_offset = row_in_strip as usize * out_w as usize * 4;
-                    for col_tile_idx in 0..cols {
-                        let actual_tx = x_min + col_tile_idx;
-                        let tile_abs_col_start = col_tile_idx * TILE_SIZE;
-                        let tile_abs_col_end = tile_abs_col_start + TILE_SIZE;
-                        let region_col_left = tile_abs_col_start.max(out_x0);
-                        let region_col_right = tile_abs_col_end.min(out_x0 + out_w);
-                        if region_col_left >= region_col_right { continue; }
-                        let tile_src_x = region_col_left - tile_abs_col_start;
-                        let dst_col = region_col_left - out_x0;
-                        let copy_w = (region_col_right - region_col_left) as usize;
-                        if let Some(tile_img) = tile_row_cache.get(&actual_tx) {
-                            if tile_inner_y < tile_img.height()
-                                && tile_src_x + copy_w as u32 <= tile_img.width()
-                            {
-                                let raw = tile_img.as_raw();
-                                let row_start = tire_row_byte_offset(tile_img.width(), tile_inner_y);
-                                let src_start = row_start + tile_src_x as usize * 4;
-                                let dst_start = row_offset + dst_col as usize * 4;
-                                strip_buf[dst_start..dst_start + copy_w * 4]
-                                    .copy_from_slice(&raw[src_start..src_start + copy_w * 4]);
-                            }
-                        }
-                    }
-
-                    if let Some(poly) = &polygon {
-                        let row_abs = abs_out_row + row_in_strip;
-                        let row_lat = if merc_per_out_px > 0.0 {
-                            merc_inv(merc_n_out - (row_abs as f64 + 0.5) * merc_per_out_px)
-                        } else {
-                            geo_north - (row_abs as f64 + 0.5) * lat_scale
-                        };
-                        apply_polygon_mask_to_row(
-                            &mut strip_buf, out_w, row_offset,
-                            geo_west, lon_scale, row_lat, poly,
-                        );
-                    }
-                }
-
-                abs_out_row += strip_rows;
-                image_enc.write_strip(&strip_buf)?;
-            }
-
-            if read_count == 0 { bail!("层级 {} 无可用瓦片数据", zoom); }
-            image_enc.finish()?;
-            Ok(read_count)
-        }};
-    }
-
-    match compression {
-        "lzw"     => run_encode!(encoder.new_image_with_compression::<RGBA8, _>(out_w, out_h, Lzw::default())?),
-        "deflate" => run_encode!(encoder.new_image_with_compression::<RGBA8, _>(out_w, out_h, Deflate::with_level(DeflateLevel::Best))?),
-        _         => run_encode!(encoder.new_image::<RGBA8>(out_w, out_h)?),
-    }
+    image_enc.finish()?;
+    Ok(read_count)
 }
 
 /// 计算 RgbaImage 中指定行的字节偏移（width × row × 4）
 #[inline(always)]
 fn tire_row_byte_offset(width: u32, row: u32) -> usize {
     row as usize * width as usize * 4
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_geotiff_strips<FProgress, FConsume>(
+    src: &Connection,
+    zoom: u8,
+    x_min: u32,
+    y_min: u32,
+    cols: u32,
+    rows: u32,
+    out_x0: u32,
+    out_y0: u32,
+    out_w: u32,
+    out_h: u32,
+    polygon: Option<&[[f64; 2]]>,
+    merc_n_out: f64,
+    merc_per_out_px: f64,
+    geo_west: f64,
+    geo_north: f64,
+    lon_scale: f64,
+    lat_scale: f64,
+    progress_cb: FProgress,
+    mut consume_strip: FConsume,
+) -> Result<u64>
+where
+    FProgress: Fn(u64, u64),
+    FConsume: FnMut(Vec<u8>) -> Result<()>,
+{
+    let mut stmt =
+        src.prepare("SELECT tile_column, tile_data FROM tiles WHERE zoom_level = ?1 AND tile_row = ?2")?;
+    let mut abs_out_row: u32 = 0;
+    let mut cached_tile_y: Option<u32> = None;
+    let mut tile_row_cache: HashMap<u32, RgbaImage> = HashMap::new();
+    let mut read_count: u64 = 0;
+    let total_ty_rows = rows as u64;
+
+    while abs_out_row < out_h {
+        let strip_rows = (out_h - abs_out_row).min(TILE_SIZE);
+        let mut strip_buf = vec![0u8; strip_rows as usize * out_w as usize * 4];
+
+        for row_in_strip in 0..strip_rows {
+            let global_px_row = out_y0 + abs_out_row + row_in_strip;
+            let tile_row_idx = global_px_row / TILE_SIZE;
+            let tile_inner_y = global_px_row % TILE_SIZE;
+            let actual_tile_y = y_min + tile_row_idx;
+
+            if cached_tile_y != Some(actual_tile_y) {
+                tile_row_cache.clear();
+                let loaded: Vec<(u32, Vec<u8>)> = stmt
+                    .query_map(rusqlite::params![zoom as i64, actual_tile_y as i64], |r| {
+                        Ok((r.get::<_, i64>(0)? as u32, r.get::<_, Vec<u8>>(1)?))
+                    })?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                let decoded: Vec<(u32, Option<RgbaImage>)> = loaded
+                    .into_par_iter()
+                    .map(|(tx, data)| {
+                        let img = image::load_from_memory(&data).map(|i| i.to_rgba8()).ok();
+                        (tx, img)
+                    })
+                    .collect();
+                let mut count = 0u64;
+                for (tx, img_opt) in decoded {
+                    if let Some(img) = img_opt {
+                        tile_row_cache.insert(tx, img);
+                        count += 1;
+                    }
+                }
+                read_count += count;
+                cached_tile_y = Some(actual_tile_y);
+                let done_rows = (actual_tile_y - y_min + 1) as u64;
+                progress_cb(done_rows, total_ty_rows);
+            }
+
+            let row_offset = row_in_strip as usize * out_w as usize * 4;
+            for col_tile_idx in 0..cols {
+                let actual_tx = x_min + col_tile_idx;
+                let tile_abs_col_start = col_tile_idx * TILE_SIZE;
+                let tile_abs_col_end = tile_abs_col_start + TILE_SIZE;
+                let region_col_left = tile_abs_col_start.max(out_x0);
+                let region_col_right = tile_abs_col_end.min(out_x0 + out_w);
+                if region_col_left >= region_col_right {
+                    continue;
+                }
+                let tile_src_x = region_col_left - tile_abs_col_start;
+                let dst_col = region_col_left - out_x0;
+                let copy_w = (region_col_right - region_col_left) as usize;
+                if let Some(tile_img) = tile_row_cache.get(&actual_tx) {
+                    if tile_inner_y < tile_img.height() && tile_src_x + copy_w as u32 <= tile_img.width()
+                    {
+                        let raw = tile_img.as_raw();
+                        let row_start = tire_row_byte_offset(tile_img.width(), tile_inner_y);
+                        let src_start = row_start + tile_src_x as usize * 4;
+                        let dst_start = row_offset + dst_col as usize * 4;
+                        strip_buf[dst_start..dst_start + copy_w * 4]
+                            .copy_from_slice(&raw[src_start..src_start + copy_w * 4]);
+                    }
+                }
+            }
+
+            if let Some(poly) = polygon {
+                let row_abs = abs_out_row + row_in_strip;
+                let row_lat = if merc_per_out_px > 0.0 {
+                    merc_inv(merc_n_out - (row_abs as f64 + 0.5) * merc_per_out_px)
+                } else {
+                    geo_north - (row_abs as f64 + 0.5) * lat_scale
+                };
+                apply_polygon_mask_to_row(
+                    &mut strip_buf,
+                    out_w,
+                    row_offset,
+                    geo_west,
+                    lon_scale,
+                    row_lat,
+                    poly,
+                );
+            }
+        }
+
+        abs_out_row += strip_rows;
+        consume_strip(strip_buf)?;
+    }
+
+    if read_count == 0 {
+        bail!("层级 {} 无可用瓦片数据", zoom);
+    }
+
+    Ok(read_count)
 }
 
 /// 对条带缓冲区中某像素行应用多边形掩膜（奇偶填充规则）
@@ -355,5 +461,109 @@ fn apply_polygon_mask_to_row(
             strip_buf[base + 2] = 0;
             strip_buf[base + 3] = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufReader;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use image::{DynamicImage, ImageFormat};
+    use rusqlite::params;
+    use tiff::decoder::{Decoder, DecodingResult};
+
+    #[test]
+    fn writes_wgs84_georeference_in_degrees() {
+        let geo = build_geo_reference(&CrsType::Wgs84, 120.0, 31.0, 121.0, 30.0, 256, 256);
+        assert_eq!(geo.model_west, 120.0);
+        assert_eq!(geo.model_north, 31.0);
+        assert!((geo.pixel_scale_x - (1.0 / 256.0)).abs() < 1e-12);
+        assert!((geo.pixel_scale_y - (1.0 / 256.0)).abs() < 1e-12);
+        assert_eq!(
+            geo.geo_keys,
+            vec![1, 1, 0, 3, 1024, 0, 1, 2, 1025, 0, 1, 1, 2048, 0, 1, 4326,]
+        );
+    }
+
+    #[test]
+    fn writes_web_mercator_georeference_in_meters() {
+        let geo = build_geo_reference(
+            &CrsType::WebMercator,
+            -180.0,
+            85.051_128_779_806_6,
+            180.0,
+            -85.051_128_779_806_6,
+            256,
+            256,
+        );
+        assert!((geo.model_west + 20_037_508.342_789_244).abs() < 1e-6);
+        assert!((geo.model_north - 20_037_508.342_789_244).abs() < 1e-6);
+        assert!((geo.pixel_scale_x - 156_543.033_928_040_97).abs() < 1e-6);
+        assert!((geo.pixel_scale_y - 156_543.033_928_040_97).abs() < 1e-6);
+        assert_eq!(
+            geo.geo_keys,
+            vec![1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, 3857,]
+        );
+    }
+
+    #[test]
+    fn exports_readable_bigtiff() -> Result<()> {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let temp_dir = std::env::temp_dir();
+        let tile_store_path = temp_dir.join(format!("tilegrabber-geotiff-{nonce}.tiles"));
+        let tif_path = temp_dir.join(format!("tilegrabber-geotiff-{nonce}.tif"));
+
+        let result = (|| -> Result<()> {
+            let conn = Connection::open(&tile_store_path)?;
+            conn.execute_batch(
+                "CREATE TABLE tiles (
+                    zoom_level INTEGER NOT NULL,
+                    tile_column INTEGER NOT NULL,
+                    tile_row INTEGER NOT NULL,
+                    tile_data BLOB NOT NULL
+                );",
+            )?;
+
+            let tile = RgbaImage::from_pixel(TILE_SIZE, TILE_SIZE, image::Rgba([255, 0, 0, 255]));
+            let mut encoded = Vec::new();
+            DynamicImage::ImageRgba8(tile).write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                ImageFormat::Png,
+            )?;
+
+            conn.execute(
+                "INSERT INTO tiles (zoom_level, tile_column, tile_row, tile_data)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![0_i64, 0_i64, 0_i64, encoded],
+            )?;
+
+            export_geotiff(
+                &tile_store_path,
+                &tif_path,
+                [-180.0, -85.051_128_779_806_6, 180.0, 85.051_128_779_806_6],
+                0,
+                false,
+                None,
+                &CrsType::WebMercator,
+                |_, _| {},
+            )?;
+
+            let file = std::fs::File::open(&tif_path)?;
+            let mut decoder = Decoder::new(BufReader::new(file))?;
+            assert_eq!(decoder.dimensions()?, (256, 256));
+            assert_eq!(decoder.get_tag_unsigned::<u16>(Tag::ExtraSamples)?, 2);
+            match decoder.read_image()? {
+                DecodingResult::U8(buf) => assert_eq!(buf.len(), 256 * 256 * 4),
+                other => panic!("unexpected decoding result: {other:?}"),
+            }
+
+            Ok(())
+        })();
+
+        let _ = std::fs::remove_file(&tile_store_path);
+        let _ = std::fs::remove_file(&tif_path);
+        result
     }
 }

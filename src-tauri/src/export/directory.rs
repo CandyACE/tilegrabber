@@ -1,7 +1,7 @@
 //! 将瓦片包导出为 z/x/y.{ext} 文件目录
 //!
 //! 目录结构示例：
-//! ```
+//! ```text
 //! output/
 //!   14/
 //!     10882/
@@ -108,53 +108,70 @@ where
         }
 
         use rayon::prelude::*;
-        let errors: Vec<anyhow::Error> = batch.par_iter().filter_map(|(z, x, y, data)| {
-            // 范围裁剪：完全在范围外的跳过；边缘相交的保留区域内像素，外部透明
-            let write_data = if need_clip {
-                if let Some(poly) = polygon {
-                    match crate::export::tile_clip::clip_tile_to_polygon_crs(
-                        data, *x as u32, *y as u32, *z as u8, poly, crs,
-                    ) {
-                        Ok(None) => return None, // 无交集
-                        Ok(Some(clipped)) => std::borrow::Cow::Owned(clipped),
-                        Err(e) => return Some(e),
+        let errors: Vec<anyhow::Error> = batch
+            .par_iter()
+            .filter_map(|(z, x, y, data)| {
+                // 范围裁剪：完全在范围外的跳过；边缘相交的保留区域内像素，外部透明
+                let write_data = if need_clip {
+                    if let Some(poly) = polygon {
+                        match crate::export::tile_clip::clip_tile_to_polygon_crs(
+                            data, *x as u32, *y as u32, *z as u8, poly, crs,
+                        ) {
+                            Ok(None) => return None, // 无交集
+                            Ok(Some(clipped)) => std::borrow::Cow::Owned(clipped),
+                            Err(e) => return Some(e),
+                        }
+                    } else {
+                        let [west, south, east, north] = bounds;
+                        let task_bounds = crate::types::Bounds {
+                            west,
+                            east,
+                            south,
+                            north,
+                        };
+                        match crate::export::tile_clip::clip_tile_to_bounds_crs(
+                            data,
+                            *x as u32,
+                            *y as u32,
+                            *z as u8,
+                            &task_bounds,
+                            crs,
+                        ) {
+                            Ok(None) => return None,
+                            Ok(Some(clipped)) => std::borrow::Cow::Owned(clipped),
+                            Err(e) => return Some(e),
+                        }
                     }
                 } else {
-                    let [west, south, east, north] = bounds;
-                    let task_bounds = crate::types::Bounds { west, east, south, north };
-                    match crate::export::tile_clip::clip_tile_to_bounds_crs(
-                        data, *x as u32, *y as u32, *z as u8, &task_bounds, crs,
-                    ) {
-                        Ok(None) => return None,
-                        Ok(Some(clipped)) => std::borrow::Cow::Owned(clipped),
-                        Err(e) => return Some(e),
-                    }
+                    std::borrow::Cow::Borrowed(data.as_slice())
+                };
+                // 重编码（调整 JPEG 品质 / PNG 压缩级别）
+                let write_data = if jpeg_quality.is_some() || png_level.is_some() {
+                    crate::export::try_reencode_tile(write_data.as_ref(), jpeg_quality, png_level)
+                        .into_owned()
+                        .into()
+                } else {
+                    write_data
+                };
+                let actual_ext = if write_data.as_ref().starts_with(b"\x89PNG") {
+                    "png"
+                } else {
+                    ext
+                };
+                let tile_dir = dest_dir.join(z.to_string()).join(x.to_string());
+                if let Err(e) = std::fs::create_dir_all(&tile_dir) {
+                    return Some(anyhow::anyhow!("无法创建目录 {}: {e}", tile_dir.display()));
                 }
-            } else {
-                std::borrow::Cow::Borrowed(data.as_slice())
-            };
-            // 重编码（调整 JPEG 品质 / PNG 压缩级别）
-            let write_data = if jpeg_quality.is_some() || png_level.is_some() {
-                crate::export::try_reencode_tile(write_data.as_ref(), jpeg_quality, png_level)
-                    .into_owned().into()
-            } else {
-                write_data
-            };
-            let actual_ext = if write_data.as_ref().starts_with(b"\x89PNG") {
-                "png"
-            } else {
-                ext
-            };
-            let tile_dir = dest_dir.join(z.to_string()).join(x.to_string());
-            if let Err(e) = std::fs::create_dir_all(&tile_dir) {
-                return Some(anyhow::anyhow!("无法创建目录 {}: {e}", tile_dir.display()));
-            }
-            let file_path = tile_dir.join(format!("{y}.{actual_ext}"));
-            if let Err(e) = std::fs::write(&file_path, write_data.as_ref()) {
-                return Some(anyhow::anyhow!("写入瓦片文件失败: {}: {e}", file_path.display()));
-            }
-            None
-        }).collect();
+                let file_path = tile_dir.join(format!("{y}.{actual_ext}"));
+                if let Err(e) = std::fs::write(&file_path, write_data.as_ref()) {
+                    return Some(anyhow::anyhow!(
+                        "写入瓦片文件失败: {}: {e}",
+                        file_path.display()
+                    ));
+                }
+                None
+            })
+            .collect();
         if !errors.is_empty() {
             return Err(anyhow::anyhow!("批量导出时发生错误: {:?}", errors));
         }
