@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use fs2::available_space as fs2_available_space;
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
@@ -52,6 +53,108 @@ fn get_concurrency(app_db: &AppDb) -> usize {
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(DEFAULT_CONCURRENCY)
+}
+
+/// 从 AppDb 读取最大并发任务数（0 = 不限制）
+fn get_max_concurrent_tasks(app_db: &AppDb) -> usize {
+    app_db
+        .get_setting("tasks.max_concurrent")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+/// 检查是否超出最大并发任务数限制。超出时返回 Err，否则返回 Ok。
+fn check_concurrent_limit(engine: &DownloadEngine, app_db: &AppDb) -> Result<(), String> {
+    let max = get_max_concurrent_tasks(app_db);
+    if max == 0 {
+        return Ok(()); // 不限制
+    }
+    let running = engine.active_download_count();
+    if running >= max {
+        Err(format!(
+            "已达到最大并发任务数限制（{}/{}），请等待当前任务完成后再启动",
+            running, max
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+// ─── 磁盘空间预检 ────────────────────────────────────────────────────────────
+
+/// 磁盘空间预检结果
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskSpaceInfo {
+    /// 预计还需要下载的瓦片数
+    pub pending_tiles: u64,
+    /// 预计需要的字节数（30 KB/瓦片保守估算）
+    pub estimated_bytes: u64,
+    /// 瓦片存储目录所在磁盘的可用字节数
+    pub available_bytes: u64,
+    /// 是否有足够空间
+    pub sufficient: bool,
+}
+
+/// 每个瓦片的保守空间估算（字节）—— 30 KB 覆盖绝大多数 PNG/JPEG/WebP 场景
+const BYTES_PER_TILE_ESTIMATE: u64 = 30 * 1024;
+
+/// 查询指定任务的磁盘空间预检信息
+#[tauri::command]
+pub async fn check_disk_space(
+    task_id: String,
+    app_db: State<'_, AppDb>,
+    app: AppHandle,
+) -> Result<DiskSpaceInfo, String> {
+    use crate::tile_math::count_tiles;
+    use crate::types::{Bounds, CrsType};
+
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+
+    // 计算待下载瓦片数
+    let pending_tiles: u64 = if task.total_tiles > 0 {
+        // 任务已初始化：用实际剩余量
+        let pending = task.total_tiles - task.downloaded_tiles - task.failed_tiles;
+        pending.max(0) as u64
+    } else {
+        // 任务尚未启动：按范围 + 层级估算总瓦片数
+        let source: serde_json::Value = serde_json::from_str(&task.source_config)
+            .unwrap_or(serde_json::Value::Null);
+        let crs_str = source
+            .get("crs")
+            .and_then(|v| v.as_str())
+            .unwrap_or("WebMercator");
+        let crs = if crs_str.contains("84") || crs_str.contains("4326") {
+            CrsType::Wgs84
+        } else {
+            CrsType::WebMercator
+        };
+        let bounds = Bounds {
+            west: task.bounds_west,
+            east: task.bounds_east,
+            south: task.bounds_south,
+            north: task.bounds_north,
+        };
+        count_tiles(&bounds, task.min_zoom as u8, task.max_zoom as u8, &crs).total
+    };
+
+    let estimated_bytes = pending_tiles * BYTES_PER_TILE_ESTIMATE;
+
+    // 获取瓦片存储目录的磁盘可用空间
+    let tiles_dir = get_tiles_dir(&app, app_db.inner())?;
+    std::fs::create_dir_all(&tiles_dir).ok();
+
+    let available_bytes = fs2_available_space(&tiles_dir)
+        .map_err(|e| format!("无法获取磁盘可用空间: {}", e))?;
+
+    Ok(DiskSpaceInfo {
+        pending_tiles,
+        estimated_bytes,
+        available_bytes,
+        sufficient: available_bytes >= estimated_bytes,
+    })
 }
 
 // ─── 任务创建 ────────────────────────────────────────────────────────────────
@@ -137,6 +240,9 @@ pub async fn start_download(
         return engine.resume(&task_id).map_err(|e| e.to_string());
     }
 
+    // 新任务启动前检查并发上限
+    check_concurrent_limit(&engine, app_db.inner())?;
+
     let concurrency = get_concurrency(app_db.inner());
 
     engine
@@ -170,11 +276,13 @@ pub async fn resume_download(
     app: AppHandle,
 ) -> Result<(), String> {
     if engine.is_active(&task_id) {
-        // 已在运行，发送 Run 信号解除暂停
+        // 已在运行，发送 Run 信号解除暂停（paused→run 不计入新任务，不检查上限）
         return engine.resume(&task_id).map_err(|e| e.to_string());
     }
 
-    // 引擎无记录（应用重启后），重新启动
+    // 引擎无记录（应用重启后重新启动），需检查并发上限
+    check_concurrent_limit(&engine, app_db.inner())?;
+
     let concurrency = get_concurrency(app_db.inner());
     engine
         .start(task_id, app_db.inner().clone(), concurrency, app)
@@ -222,6 +330,9 @@ pub async fn retry_failed(
     app_db
         .update_task_status(&task_id, "pending")
         .map_err(|e| e.to_string())?;
+
+    // 重试也需检查并发上限
+    check_concurrent_limit(&engine, app_db.inner())?;
 
     let concurrency = get_concurrency(app_db.inner());
     engine

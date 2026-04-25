@@ -1,5 +1,8 @@
 export default {
   appName: '御图',
+  app: {
+    networkOffline: '网络已断开 — 下载任务已自动暂停，网络恢复后将自动继续',
+  },
 
   nav: {
     map: '地图',
@@ -121,6 +124,10 @@ export default {
         label: '请求间隔上限（ms）',
         hint: '相邻两次瓦片请求的最大随机延迟',
       },
+      tasks_max_concurrent: {
+        label: '最大并发任务数',
+        hint: '同时运行的下载任务上限，0 表示不限制',
+      },
       server_default_port: {
         label: '默认端口',
         hint: '瓦片发布服务的默认监听端口',
@@ -173,14 +180,10 @@ export default {
       '支持 .lrc / .lra / .ovmap 图层配置文件',
       '支持天地图、星图、自定义图源',
     ],
-    companyTitle: '关于公司',
-    companyNameLabel: '公司名称',
-    companyName: '苏州御空未来科技有限公司',
-    industryLabel: '行业领域',
-    industry: '无人机 · 地图数据 · 低空智联 · AI',
-    contactLabel: '联系方式',
-    copyright: '© 2026 苏州御空未来科技有限公司',
-    rightsReserved: '保留所有权利。本软件仅供授权用户使用。',
+    openSourceTitle: '开源项目',
+    githubLabel: 'GitHub 仓库',
+    licenseLabel: '开源协议',
+    copyright: '© 2026 御图开源项目贡献者',
     mapDataNote: '地图数据版权归各数据提供方所有，使用前请确认已获得相应授权。',
   },
 
@@ -293,6 +296,18 @@ export default {
     confirmDeleteTitle: '确定删除该任务？',
     confirmDeleteFileTitle: '同时删除外部文件？',
     confirmDeleteFile: '是否同时删除 .tgr 文件？\n{path}',
+    batchModeOn: '批量操作',
+    batchModeOff: '退出批量操作',
+    selectAll: '全选',
+    deselectAll: '取消全选',
+    selected: '已选 {count} 个',
+    batchPause: '暂停已选',
+    batchResume: '继续已选',
+    batchDelete: '删除已选',
+    confirmBatchDelete: '将永久删除 {count} 个任务及其所有已下载瓦片，此操作不可撤销。',
+    confirmBatchDeleteTitle: '确定批量删除 {count} 个任务？',
+    diskWarning: '磁盘空间可能不足',
+    diskWarningDetail: '预计需要 {estimated} MB，可用 {available} MB。',
   },
 
   taskCard: {

@@ -1,4 +1,4 @@
-﻿//! TileGrabber — 异步多任务下载引擎
+//! TileGrabber — 异步多任务下载引擎
 //!
 //! 管理多个并发下载任务，每个任务通过 watch channel 发送暂停/恢复/取消信号。
 //! 下载进度通过 Tauri 事件 `tilegrab-progress` 推送到前端。
@@ -168,6 +168,31 @@ impl DownloadEngine {
             .map(|h| h.contains_key(task_id))
             .unwrap_or(false)
     }
+
+    /// 统计当前正在实际下载（Run 信号）的任务数（不含已暂停的任务）
+    pub fn active_download_count(&self) -> usize {
+        self.0
+            .lock()
+            .map(|h| {
+                h.values()
+                    .filter(|th| *th.ctrl_tx.borrow() == CtrlSignal::Run)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
+    /// 返回所有正在实际下载（Run 信号）的任务 ID 列表
+    pub fn running_task_ids(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .map(|h| {
+                h.iter()
+                    .filter(|(_, th)| *th.ctrl_tx.borrow() == CtrlSignal::Run)
+                    .map(|(id, _)| id.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 // ─── 下载主循环 ──────────────────────────────────────────────────────────────
@@ -185,7 +210,9 @@ async fn run_download(
         Ok(t) => t,
         Err(e) => {
             eprintln!("[engine] cannot load task {}: {}", task_id, e);
-            app_db.add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e)).ok();
+            app_db
+                .add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e))
+                .ok();
             return;
         }
     };
@@ -195,7 +222,13 @@ async fn run_download(
         Ok(s) => s,
         Err(e) => {
             eprintln!("[engine] invalid source_config: {}", e);
-            app_db.add_log(Some(&task_id), "error", &format!("数据源配置解析失败: {}", e)).ok();
+            app_db
+                .add_log(
+                    Some(&task_id),
+                    "error",
+                    &format!("数据源配置解析失败: {}", e),
+                )
+                .ok();
             app_db.update_task_status(&task_id, "failed").ok();
             return;
         }
@@ -206,12 +239,22 @@ async fn run_download(
         let tile_store_path = match task.tile_store_path.as_deref() {
             Some(p) => p.to_owned(),
             None => {
-                app_db.add_log(Some(&task_id), "error", "任务缺少瓦片存储路径").ok();
+                app_db
+                    .add_log(Some(&task_id), "error", "任务缺少瓦片存储路径")
+                    .ok();
                 app_db.update_task_status(&task_id, "failed").ok();
                 return;
             }
         };
-        run_mbtiles_import(task_id, app_db, app, source.url_template, tile_store_path, ctrl_rx).await;
+        run_mbtiles_import(
+            task_id,
+            app_db,
+            app,
+            source.url_template,
+            tile_store_path,
+            ctrl_rx,
+        )
+        .await;
         return;
     }
 
@@ -219,7 +262,9 @@ async fn run_download(
     let tile_store_path = match task.tile_store_path.as_deref() {
         Some(p) => p.to_owned(),
         None => {
-            app_db.add_log(Some(&task_id), "error", "任务缺少瓦片存储路径").ok();
+            app_db
+                .add_log(Some(&task_id), "error", "任务缺少瓦片存储路径")
+                .ok();
             app_db.update_task_status(&task_id, "failed").ok();
             return;
         }
@@ -240,11 +285,19 @@ async fn run_download(
     // 4. 将"下载中"回退为 pending（断点续传支持）
     tile_store.reset_stale_downloading().ok();
 
+    // 将数据源格式写入 metadata，确保本地服务器以正确 MIME 类型提供瓦片
+    let tile_format = serde_json::from_str::<serde_json::Value>(&task.source_config)
+        .ok()
+        .and_then(|v| {
+            v.get("format")
+                .and_then(|f| f.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "png".to_string());
+    tile_store.write_meta(&[("format", &tile_format)]).ok();
+
     // 5. 首次运行：枚举瓦片并写入 download_state
-    let init_total = tile_store
-        .get_progress()
-        .map(|p| p.total)
-        .unwrap_or(0);
+    let init_total = tile_store.get_progress().map(|p| p.total).unwrap_or(0);
 
     if init_total == 0 {
         let bounds = Bounds {
@@ -255,31 +308,59 @@ async fn run_download(
         };
 
         // 若任务附带多边形范围，仅枚举与多边形相交的瓦片，跳过外包围矩形中多余的瓦片
-        let polygon: Option<Vec<[f64; 2]>> = task.polygon_wgs84
+        let polygon: Option<Vec<[f64; 2]>> = task
+            .polygon_wgs84
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
 
         let tiles = if let Some(ref poly) = polygon {
-            app_db.add_log(
-                Some(&task_id), "info",
-                "已检测到多边形范围，将按多边形过滤下载瓦片",
-            ).ok();
+            app_db
+                .add_log(
+                    Some(&task_id),
+                    "info",
+                    "已检测到多边形范围，将按多边形过滤下载瓦片",
+                )
+                .ok();
             enumerate_tiles_with_polygon(
-                &bounds, task.min_zoom, task.max_zoom, &source.crs, poly, Some(2_000_000),
+                &bounds,
+                task.min_zoom,
+                task.max_zoom,
+                &source.crs,
+                poly,
+                Some(2_000_000),
             )
         } else {
             enumerate_tiles(
-                &bounds, task.min_zoom, task.max_zoom, &source.crs, Some(2_000_000),
+                &bounds,
+                task.min_zoom,
+                task.max_zoom,
+                &source.crs,
+                Some(2_000_000),
             )
         };
         match tile_store.init_download_state(&tiles) {
             Ok(total) => {
                 app_db.update_task_total(&task_id, total).ok();
-                app_db.add_log(Some(&task_id), "info", &format!("共枚举 {} 个瓦片，z{}-z{}", total, task.min_zoom, task.max_zoom)).ok();
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "info",
+                        &format!(
+                            "共枚举 {} 个瓦片，z{}-z{}",
+                            total, task.min_zoom, task.max_zoom
+                        ),
+                    )
+                    .ok();
             }
             Err(e) => {
                 eprintln!("[engine] init_download_state failed: {}", e);
-                app_db.add_log(Some(&task_id), "error", &format!("初始化瓦片列表失败: {}", e)).ok();
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "error",
+                        &format!("初始化瓦片列表失败: {}", e),
+                    )
+                    .ok();
                 app_db.update_task_status(&task_id, "failed").ok();
                 return;
             }
@@ -358,19 +439,30 @@ async fn run_download(
     let write_task_id = task_id.clone();
     let write_handle = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
-            let WriteBatchMsg { success_tiles, failed_tiles, flash_tiles } = msg;
+            let WriteBatchMsg {
+                success_tiles,
+                failed_tiles,
+                flash_tiles,
+            } = msg;
             // 批量写入成功的瓦片（单事务）——先保存原始数据，下载完成后再统一裁剪
             if !success_tiles.is_empty() {
                 let store = write_store.clone();
                 tokio::task::spawn_blocking(move || {
                     store.save_tiles_batch(&success_tiles).ok();
-                }).await.ok();
+                })
+                .await
+                .ok();
             }
             // 批量标记失败（单事务）
             if !failed_tiles.is_empty() {
                 for (coord, err) in &failed_tiles {
-                    let log_msg = format!("瓦片 z{}/x{}/y{} 下载失败: {}", coord.z, coord.x, coord.y, err);
-                    write_app_db.add_log(Some(&write_task_id), "warn", &log_msg).ok();
+                    let log_msg = format!(
+                        "瓦片 z{}/x{}/y{} 下载失败: {}",
+                        coord.z, coord.x, coord.y, err
+                    );
+                    write_app_db
+                        .add_log(Some(&write_task_id), "warn", &log_msg)
+                        .ok();
                 }
                 write_store.mark_failed_batch(&failed_tiles).ok();
             }
@@ -459,7 +551,10 @@ async fn run_download(
             join_set.spawn(async move {
                 let _permit = permit;
                 if *ctrl.borrow() == CtrlSignal::Cancel {
-                    return (tile, Err::<Vec<u8>, anyhow::Error>(anyhow::anyhow!("cancelled")));
+                    return (
+                        tile,
+                        Err::<Vec<u8>, anyhow::Error>(anyhow::anyhow!("cancelled")),
+                    );
                 }
                 // 瓦片间随机微延迟（防封禁，使用用户配置的延迟范围）
                 throttle::random_delay(delay_min_ms, delay_max_ms).await;
@@ -480,8 +575,18 @@ async fn run_download(
                 Ok((coord, Ok(data))) => {
                     throttle::ADAPTIVE.report_success();
                     last_bytes += data.len() as u64;
-                    let b = crate::tile_math::tile_to_lonlat_bounds(coord.x, coord.y, coord.z, &source.crs);
-                    flash_tiles.push(TileFlashBounds { west: b.west, east: b.east, south: b.south, north: b.north });
+                    let b = crate::tile_math::tile_to_lonlat_bounds(
+                        coord.x,
+                        coord.y,
+                        coord.z,
+                        &source.crs,
+                    );
+                    flash_tiles.push(TileFlashBounds {
+                        west: b.west,
+                        east: b.east,
+                        south: b.south,
+                        north: b.north,
+                    });
                     success_tiles.push((coord, data));
                 }
                 Ok((coord, Err(ref e))) if e.to_string() != "cancelled" => {
@@ -495,11 +600,13 @@ async fn run_download(
         // 流水线：将本批写入任务发送到后台写入线程，主循环立即开始下一批下载
         let batch_downloaded = success_tiles.len() as i64;
         let _batch_failed = failed_tiles.len() as i64;
-        let _ = write_tx.send(WriteBatchMsg {
-            success_tiles,
-            failed_tiles,
-            flash_tiles,
-        }).await;
+        let _ = write_tx
+            .send(WriteBatchMsg {
+                success_tiles,
+                failed_tiles,
+                flash_tiles,
+            })
+            .await;
 
         // 批次间停顿：优先使用规则配置，否则使用 throttle 默认随机值
         match rules.batch_pause_ms() {
@@ -536,7 +643,11 @@ async fn run_download(
             // 定期从 DB 获取精确进度
             if let Ok(progress) = tile_store.get_progress() {
                 let delta = progress.downloaded - (last_downloaded - batch_downloaded);
-                let speed = if elapsed > 0.1 { delta as f64 / elapsed } else { 0.0 };
+                let speed = if elapsed > 0.1 {
+                    delta as f64 / elapsed
+                } else {
+                    0.0
+                };
                 let remaining = progress.pending + progress.failed;
                 let eta_secs = if speed > 0.1 {
                     Some(remaining as f64 / speed)
@@ -544,7 +655,11 @@ async fn run_download(
                     None
                 };
 
-                let bytes_per_sec = if elapsed > 0.1 { last_bytes as f64 / elapsed } else { 0.0 };
+                let bytes_per_sec = if elapsed > 0.1 {
+                    last_bytes as f64 / elapsed
+                } else {
+                    0.0
+                };
                 last_downloaded = progress.downloaded;
                 last_tick = Instant::now();
                 last_bytes = 0;
@@ -598,16 +713,15 @@ async fn run_download(
     // 先保存原始瓦片，确保数据完整；下载全部结束后再统一做像素级裁剪，
     // 这样既不影响下载速度，又能保证裁剪结果一致。
     if task.clip_to_bounds && *ctrl_rx.borrow() != CtrlSignal::Cancel {
-        app_db.add_log(Some(&task_id), "info", "开始精确裁剪瓦片…").ok();
+        app_db
+            .add_log(Some(&task_id), "info", "开始精确裁剪瓦片…")
+            .ok();
         app_db.update_task_status(&task_id, "processing").ok();
 
         // 查询边界瓦片总数，用于裁剪进度（第一遍扫描完后才知道，这里先发 0/0 的占位事件）
         // 立即发送裁剪启动事件，让前端切换到"裁剪中"状态；
         // downloaded 保持 total 使进度条暂时停在 100%（等第一遍扫描完毕后再重置）
-        let download_total: i64 = tile_store
-            .get_progress()
-            .map(|p| p.total)
-            .unwrap_or(0);
+        let download_total: i64 = tile_store.get_progress().map(|p| p.total).unwrap_or(0);
         let _ = app.emit(
             "tilegrab-progress",
             ProgressPayload {
@@ -623,12 +737,13 @@ async fn run_download(
         );
 
         let clip_bounds = Bounds {
-            west:  task.bounds_west,
-            east:  task.bounds_east,
+            west: task.bounds_west,
+            east: task.bounds_east,
             south: task.bounds_south,
             north: task.bounds_north,
         };
-        let clip_polygon: Option<Vec<[f64; 2]>> = task.polygon_wgs84
+        let clip_polygon: Option<Vec<[f64; 2]>> = task
+            .polygon_wgs84
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
         let clip_crs = source.crs.clone();
@@ -782,9 +897,8 @@ fn post_clip_tiles(
     )?;
 
     // 统计总瓦片数（进度条总量）
-    let total: u64 = conn
-        .query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))?
-        as u64;
+    let total: u64 =
+        conn.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get::<_, i64>(0))? as u64;
     if total == 0 {
         return Ok(());
     }
@@ -823,9 +937,7 @@ fn post_clip_tiles(
         last_rowid = batch.last().map(|(rowid, ..)| *rowid).unwrap_or(last_rowid);
 
         for (rowid, z, x, y) in &batch {
-            let tb = crate::tile_math::tile_to_lonlat_bounds(
-                *x as u32, *y as u32, *z as u8, crs,
-            );
+            let tb = crate::tile_math::tile_to_lonlat_bounds(*x as u32, *y as u32, *z as u8, crs);
             // 判断是否需要处理：
             // - 无多边形（矩形任务）：瓦片完全在 bbox 内则跳过
             // - 有多边形：必须确认瓦片四个角点都在多边形内才跳过；
@@ -842,8 +954,8 @@ fn post_clip_tiles(
                     .iter()
                     .all(|c| crate::tile_math::point_in_polygon(c[0], c[1], poly))
             } else {
-                !(tb.west  >= bounds.west
-                    && tb.east  <= bounds.east
+                !(tb.west >= bounds.west
+                    && tb.east <= bounds.east
                     && tb.south >= bounds.south
                     && tb.north <= bounds.north)
             };
@@ -886,8 +998,10 @@ fn post_clip_tiles(
         );
         let batch_data: Vec<(i64, i64, i64, i64, Vec<u8>)> = {
             let mut stmt = conn.prepare(&sql)?;
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                chunk.iter().map(|r| r as &dyn rusqlite::types::ToSql).collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = chunk
+                .iter()
+                .map(|r| r as &dyn rusqlite::types::ToSql)
+                .collect();
             let rows = stmt.query_map(param_refs.as_slice(), |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -915,8 +1029,8 @@ fn post_clip_tiles(
                 };
                 match result {
                     Ok(Some(d)) => Some((*rowid, Some(d))), // 写入裁剪后数据
-                    Ok(None)    => Some((*rowid, None)),      // 完全在范围外：删除
-                    Err(_)      => None,                       // 裁剪失败：保留原始
+                    Ok(None) => Some((*rowid, None)),       // 完全在范围外：删除
+                    Err(_) => None,                         // 裁剪失败：保留原始
                 }
             })
             .collect();
@@ -933,10 +1047,7 @@ fn post_clip_tiles(
                         )?;
                     }
                     None => {
-                        tx.execute(
-                            "DELETE FROM tiles WHERE rowid=?1",
-                            params![rowid],
-                        )?;
+                        tx.execute("DELETE FROM tiles WHERE rowid=?1", params![rowid])?;
                     }
                 }
             }
@@ -947,9 +1058,8 @@ fn post_clip_tiles(
         let flash_bounds: Vec<TileFlashBounds> = batch_data
             .iter()
             .map(|(_, z, x, y, _)| {
-                let tb = crate::tile_math::tile_to_lonlat_bounds(
-                    *x as u32, *y as u32, *z as u8, crs,
-                );
+                let tb =
+                    crate::tile_math::tile_to_lonlat_bounds(*x as u32, *y as u32, *z as u8, crs);
                 TileFlashBounds {
                     west: tb.west,
                     east: tb.east,
@@ -1000,14 +1110,22 @@ async fn run_mbtiles_import(
             let total: i64 = src.query_row("SELECT COUNT(*) FROM tiles", [], |r| r.get(0))?;
             app_db.update_task_total(&task_id, total).ok();
 
-            app.emit("tilegrab-progress", ProgressPayload {
-                task_id: task_id.clone(), total, downloaded: 0, failed: 0,
-                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "downloading".into(),
-            })?;
-
-            let mut stmt = src.prepare(
-                "SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles",
+            app.emit(
+                "tilegrab-progress",
+                ProgressPayload {
+                    task_id: task_id.clone(),
+                    total,
+                    downloaded: 0,
+                    failed: 0,
+                    speed: 0.0,
+                    bytes_per_sec: 0.0,
+                    eta_secs: None,
+                    status: "downloading".into(),
+                },
             )?;
+
+            let mut stmt =
+                src.prepare("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")?;
 
             if let Some(parent) = std::path::Path::new(&tile_store_path).parent() {
                 std::fs::create_dir_all(parent)?;
@@ -1021,18 +1139,31 @@ async fn run_mbtiles_import(
                 let signal = ctrl_rx.borrow().clone();
                 match signal {
                     CtrlSignal::Cancel => {
-                        app_db.update_task_progress(&task_id, downloaded, failed).ok();
+                        app_db
+                            .update_task_progress(&task_id, downloaded, failed)
+                            .ok();
                         app_db.update_task_status(&task_id, "cancelled").ok();
-                        app.emit("tilegrab-progress", ProgressPayload {
-                            task_id: task_id.clone(), total, downloaded, failed,
-                            speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "cancelled".into(),
-                        })?;
+                        app.emit(
+                            "tilegrab-progress",
+                            ProgressPayload {
+                                task_id: task_id.clone(),
+                                total,
+                                downloaded,
+                                failed,
+                                speed: 0.0,
+                                bytes_per_sec: 0.0,
+                                eta_secs: None,
+                                status: "cancelled".into(),
+                            },
+                        )?;
                         return Ok(());
                     }
                     CtrlSignal::Pause => {
                         for _ in 0..300 {
                             std::thread::sleep(std::time::Duration::from_millis(200));
-                            if *ctrl_rx.borrow() != CtrlSignal::Pause { break; }
+                            if *ctrl_rx.borrow() != CtrlSignal::Pause {
+                                break;
+                            }
                         }
                         continue;
                     }
@@ -1047,39 +1178,79 @@ async fn run_mbtiles_import(
 
                 match tile_store.save_tile(&crate::tile_math::TileCoord { z, x, y }, &tile_data) {
                     Ok(_) => downloaded += 1,
-                    Err(e) => { eprintln!("[mbtiles-import] {e}"); failed += 1; }
+                    Err(e) => {
+                        eprintln!("[mbtiles-import] {e}");
+                        failed += 1;
+                    }
                 }
 
                 if (downloaded + failed) % 100 == 0 {
-                    app.emit("tilegrab-progress", ProgressPayload {
-                        task_id: task_id.clone(), total, downloaded, failed,
-                        speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "downloading".into(),
-                    })?;
+                    app.emit(
+                        "tilegrab-progress",
+                        ProgressPayload {
+                            task_id: task_id.clone(),
+                            total,
+                            downloaded,
+                            failed,
+                            speed: 0.0,
+                            bytes_per_sec: 0.0,
+                            eta_secs: None,
+                            status: "downloading".into(),
+                        },
+                    )?;
                 }
             }
 
-            let final_status = if failed == 0 { "completed" } else { "completed_with_errors" };
+            let final_status = if failed == 0 {
+                "completed"
+            } else {
+                "completed_with_errors"
+            };
             app_db.update_task_status(&task_id, final_status).ok();
-            app_db.update_task_progress(&task_id, downloaded, failed).ok();
-            app.emit("tilegrab-progress", ProgressPayload {
-                task_id: task_id.clone(), total, downloaded, failed,
-                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: final_status.into(),
-            })?;
+            app_db
+                .update_task_progress(&task_id, downloaded, failed)
+                .ok();
+            app.emit(
+                "tilegrab-progress",
+                ProgressPayload {
+                    task_id: task_id.clone(),
+                    total,
+                    downloaded,
+                    failed,
+                    speed: 0.0,
+                    bytes_per_sec: 0.0,
+                    eta_secs: None,
+                    status: final_status.into(),
+                },
+            )?;
 
             Ok(())
         }
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
             eprintln!("[engine] mbtiles import error: {e}");
-            app_db.add_log(Some(&task_id), "error", &format!("MBTiles 导入失败: {e}")).ok();
+            app_db
+                .add_log(Some(&task_id), "error", &format!("MBTiles 导入失败: {e}"))
+                .ok();
             app_db.update_task_status(&task_id, "failed").ok();
-            app.emit("tilegrab-progress", ProgressPayload {
-                task_id: task_id.clone(), total: 0, downloaded: 0, failed: 0,
-                speed: 0.0, bytes_per_sec: 0.0, eta_secs: None, status: "failed".into(),
-            }).ok();
+            app.emit(
+                "tilegrab-progress",
+                ProgressPayload {
+                    task_id: task_id.clone(),
+                    total: 0,
+                    downloaded: 0,
+                    failed: 0,
+                    speed: 0.0,
+                    bytes_per_sec: 0.0,
+                    eta_secs: None,
+                    status: "failed".into(),
+                },
+            )
+            .ok();
         }
         Err(e) => {
             eprintln!("[engine] spawn_blocking panicked: {e}");

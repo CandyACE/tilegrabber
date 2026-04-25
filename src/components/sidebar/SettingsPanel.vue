@@ -96,6 +96,7 @@ const groups = computed(() => [
       { key: 'download.retry_delay_ms', label: t('settings.fields.download_retry_delay_ms.label'), type: 'number', min: 100, max: 10000, hint: t('settings.fields.download_retry_delay_ms.hint') },
       { key: 'download.delay_min_ms', label: t('settings.fields.download_delay_min_ms.label'), type: 'number', min: 0, max: 5000, hint: t('settings.fields.download_delay_min_ms.hint') },
       { key: 'download.delay_max_ms', label: t('settings.fields.download_delay_max_ms.label'), type: 'number', min: 0, max: 5000, hint: t('settings.fields.download_delay_max_ms.hint') },
+      { key: 'tasks.max_concurrent', label: t('settings.fields.tasks_max_concurrent.label'), type: 'number', min: 0, max: 20, hint: t('settings.fields.tasks_max_concurrent.hint') },
     ],
   },
   {

@@ -48,6 +48,8 @@ pub fn default_settings() -> HashMap<&'static str, &'static str> {
         ("app.float_window", "false"),
         // 下载完成后是否发送系统通知
         ("app.download_notification", "true"),
+        // 最大并发任务数（0 = 不限制）
+        ("tasks.max_concurrent", "0"),
         // ── 网络代理 ────────────────────────────────────────────────────────
         // 是否启用代理
         ("network.proxy_enabled", "false"),
@@ -75,15 +77,17 @@ pub fn get_active_proxy_url(app_db: &AppDb) -> Option<String> {
         .ok()
         .flatten()
         .unwrap_or_default();
-    if url.is_empty() { None } else { Some(url) }
+    if url.is_empty() {
+        None
+    } else {
+        Some(url)
+    }
 }
 
 /// 读取单个设置（若不存在返回默认值，若默认值也无返回 null）
 #[tauri::command]
 pub fn get_setting(key: String, app_db: State<'_, AppDb>) -> Result<Option<String>, String> {
-    let val = app_db
-        .get_setting(&key)
-        .map_err(|e| e.to_string())?;
+    let val = app_db.get_setting(&key).map_err(|e| e.to_string())?;
     if val.is_none() {
         // 返回默认值
         let defaults = default_settings();

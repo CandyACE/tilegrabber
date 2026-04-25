@@ -29,6 +29,8 @@ flate2 = "1"
 # Zip 打包 (任务导入/导出)
 zip = "2"
 
+tauri-plugin-single-instance = "2"
+
 # HTTP 客户端 (WMTS/TMS 探测 + 更新包下载)
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli", "deflate", "stream", "http2"], default-features = false }
 tokio = { version = "1", features = ["full"] }
@@ -50,8 +52,11 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # 随机数 (反封禁延迟 + UA 轮换)
 rand = "0.8"
 
+# 磁盘空间查询（下载前预检）
+fs2 = "0.4"
+
 # 图像处理 (GeoTIFF 导出：瓦片解码 + 拼接)
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 tiff = "0.9"
 
 # 并行迭代器（导出多线程加速）

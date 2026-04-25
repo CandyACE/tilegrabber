@@ -7,7 +7,7 @@ import {
   open as tauriOpen,
   save as tauriSave,
 } from "@tauri-apps/plugin-dialog";
-import { Plus, Inbox, Upload } from "lucide-vue-next";
+import { Plus, Inbox, Upload, CheckSquare, Square } from "lucide-vue-next";
 import TaskCard from "./TaskCard.vue";
 import type { Task, TaskStatus } from "./TaskCard.vue";
 import { useExportJobs } from "~/composables/useExportJobs";
@@ -179,6 +179,25 @@ async function handlePause(id: string) {
 }
 
 async function handleResume(id: string) {
+  // Disk space pre-check warning
+  invoke<{
+    pendingTiles: number;
+    estimatedBytes: number;
+    availableBytes: number;
+    sufficient: boolean;
+  }>("check_disk_space", { taskId: id })
+    .then((info) => {
+      if (!info.sufficient) {
+        const estMb = (info.estimatedBytes / 1024 / 1024).toFixed(0);
+        const avMb = (info.availableBytes / 1024 / 1024).toFixed(0);
+        addToast(
+          t("tasks.diskWarning"),
+          "warning",
+          t("tasks.diskWarningDetail", { estimated: estMb, available: avMb }),
+        );
+      }
+    })
+    .catch(() => {}); // Ignore disk check errors — proceed anyway
   await invoke("resume_download", { taskId: id }).catch(console.error);
 }
 
@@ -295,6 +314,78 @@ const countByFilter = computed(() => {
 // 侧边栏宽度动画
 const sidebarWidth = computed(() => (props.open ? "280px" : "0px"));
 
+// ─── 批量操作 ──────────────────────────────────────────────────────────────
+const batchMode = ref(false);
+const selectedIds = ref<Set<string>>(new Set());
+
+function toggleBatchMode() {
+  batchMode.value = !batchMode.value;
+  selectedIds.value = new Set();
+}
+
+function toggleSelectTask(id: string) {
+  const s = new Set(selectedIds.value);
+  if (s.has(id)) s.delete(id);
+  else s.add(id);
+  selectedIds.value = s;
+}
+
+function selectAll() {
+  selectedIds.value = new Set(filteredTasks.value.map((t) => t.id));
+}
+
+function clearSelection() {
+  selectedIds.value = new Set();
+}
+
+const allSelected = computed(
+  () =>
+    filteredTasks.value.length > 0 &&
+    filteredTasks.value.every((t) => selectedIds.value.has(t.id)),
+);
+
+async function batchPause() {
+  for (const id of selectedIds.value) {
+    const task = tasks.value.find((t) => t.id === id);
+    if (task?.status === "downloading") {
+      await invoke("pause_download", { taskId: id }).catch(console.error);
+    }
+  }
+}
+
+async function batchResume() {
+  for (const id of selectedIds.value) {
+    const task = tasks.value.find((t) => t.id === id);
+    if (task?.status === "paused") {
+      await invoke("resume_download", { taskId: id }).catch(
+        (e: unknown) => {
+          addToast(String(e), "error");
+        },
+      );
+    }
+  }
+}
+
+async function batchDelete() {
+  const count = selectedIds.value.size;
+  if (count === 0) return;
+  const ok = await tauriConfirm(
+    `将永久删除 ${count} 个任务及其所有已下载瓦片，此操作不可撤销。`,
+    { title: `确定批量删除 ${count} 个任务？`, kind: "warning" },
+  );
+  if (!ok) return;
+  for (const id of selectedIds.value) {
+    const task = tasks.value.find((t) => t.id === id);
+    // 跳过正在下载的任务，避免数据损坏
+    if (task?.status === "downloading") continue;
+    await invoke("delete_task", { taskId: id, deleteFile: false }).catch(
+      console.error,
+    );
+  }
+  selectedIds.value = new Set();
+  await loadTasks();
+}
+
 defineExpose({ loadTasks });
 </script>
 
@@ -322,6 +413,20 @@ defineExpose({ loadTasks });
           {{ t("tasks.title") }}
         </h2>
         <div class="flex items-center gap-1">
+          <!-- 批量操作切换 -->
+          <button
+            class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors"
+            :class="
+              batchMode
+                ? 'bg-blue-100 text-blue-600'
+                : 'hover:bg-slate-100 text-slate-500'
+            "
+            :title="batchMode ? t('tasks.batchModeOff') : t('tasks.batchModeOn')"
+            @click="toggleBatchMode"
+          >
+            <CheckSquare v-if="batchMode" class="size-3.5" />
+            <Square v-else class="size-3.5" />
+          </button>
           <button
             class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors hover:bg-slate-100"
             style="color: var(--color-text-secondary)"
@@ -372,6 +477,50 @@ defineExpose({ loadTasks });
         </button>
       </div>
 
+      <!-- 批量操作工具栏 -->
+      <div
+        v-if="batchMode"
+        class="flex items-center gap-1.5 px-3 py-2 border-b shrink-0 flex-wrap"
+        style="
+          border-color: var(--color-border-subtle);
+          background: var(--color-elevated);
+        "
+      >
+        <button
+          class="text-xs px-2 py-0.5 rounded border transition-colors hover:bg-slate-100"
+          style="
+            color: var(--color-text-secondary);
+            border-color: var(--color-border-subtle);
+          "
+          @click="allSelected ? clearSelection() : selectAll()"
+        >
+          {{ allSelected ? t("tasks.deselectAll") : t("tasks.selectAll") }}
+        </button>
+        <span
+          class="text-xs"
+          style="color: var(--color-text-muted)"
+        >{{ t("tasks.selected", { count: selectedIds.size }) }}</span>
+        <div class="flex-1" />
+        <button
+          :disabled="selectedIds.size === 0"
+          class="text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-40"
+          :class="selectedIds.size > 0 ? 'hover:bg-blue-50 text-blue-600 border-blue-300' : 'text-slate-400 border-slate-200'"
+          @click="batchPause"
+        >{{ t("tasks.batchPause") }}</button>
+        <button
+          :disabled="selectedIds.size === 0"
+          class="text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-40"
+          :class="selectedIds.size > 0 ? 'hover:bg-green-50 text-green-700 border-green-300' : 'text-slate-400 border-slate-200'"
+          @click="batchResume"
+        >{{ t("tasks.batchResume") }}</button>
+        <button
+          :disabled="selectedIds.size === 0"
+          class="text-xs px-2 py-0.5 rounded border transition-colors disabled:opacity-40"
+          :class="selectedIds.size > 0 ? 'hover:bg-red-50 text-red-600 border-red-300' : 'text-slate-400 border-slate-200'"
+          @click="batchDelete"
+        >{{ t("tasks.batchDelete") }}</button>
+      </div>
+
       <!-- 任务列表 -->
       <div class="flex-1 overflow-y-auto px-3 py-2">
         <TransitionGroup name="task-list" tag="div" class="relative space-y-2">
@@ -381,6 +530,8 @@ defineExpose({ loadTasks });
             :task="task"
             :live="taskLive[task.id]"
             :exportJob="getActiveJobForTask(task.id)"
+            :selectable="batchMode"
+            :selected="selectedIds.has(task.id)"
             @pause="handlePause"
             @resume="handleResume"
             @cancel="handleCancel"
@@ -388,6 +539,7 @@ defineExpose({ loadTasks });
             @delete="handleDelete"
             @export="handleExport"
             @open="handleOpen"
+            @toggle="toggleSelectTask"
           />
         </TransitionGroup>
 

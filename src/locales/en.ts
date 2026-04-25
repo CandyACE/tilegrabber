@@ -1,5 +1,8 @@
 export default {
   appName: '御图',
+  app: {
+    networkOffline: 'Network offline — downloads paused automatically and will resume when reconnected',
+  },
 
   nav: {
     map: 'Map',
@@ -121,6 +124,10 @@ export default {
         label: 'Request Interval Max (ms)',
         hint: 'Maximum random delay between adjacent tile requests',
       },
+      tasks_max_concurrent: {
+        label: 'Max Concurrent Tasks',
+        hint: 'Maximum number of simultaneously running download tasks. 0 = unlimited.',
+      },
       server_default_port: {
         label: 'Default Port',
         hint: 'Default listening port for the tile publish server',
@@ -173,14 +180,10 @@ export default {
       'Supports .lrc / .lra / .ovmap layer config files',
       'Supports Tianditu, StarMap, and custom tile sources',
     ],
-    companyTitle: 'About the Company',
-    companyNameLabel: 'Company Name',
-    companyName: 'Suzhou Yukong Future Technology Co., Ltd.',
-    industryLabel: 'Industry',
-    industry: 'UAV · Map Data · Low-altitude Smart Connectivity · AI',
-    contactLabel: 'Contact',
-    copyright: '© 2026 Suzhou Yukong Future Technology Co., Ltd.',
-    rightsReserved: 'All rights reserved. This software is for authorized users only.',
+    openSourceTitle: 'Open Source',
+    githubLabel: 'GitHub Repository',
+    licenseLabel: 'License',
+    copyright: '© 2026 TileGrabber Contributors',
     mapDataNote: 'Map data is copyrighted by the respective data providers. Please ensure you have obtained the appropriate authorization before use.',
   },
 
@@ -293,6 +296,18 @@ export default {
     confirmDeleteTitle: 'Delete this task?',
     confirmDeleteFileTitle: 'Also delete external file?',
     confirmDeleteFile: 'Also delete the .tgr file?\n{path}',
+    batchModeOn: 'Batch select',
+    batchModeOff: 'Exit batch mode',
+    selectAll: 'Select all',
+    deselectAll: 'Deselect all',
+    selected: '{count} selected',
+    batchPause: 'Pause selected',
+    batchResume: 'Resume selected',
+    batchDelete: 'Delete selected',
+    confirmBatchDelete: '{count} tasks and all their downloaded tiles will be permanently deleted. This cannot be undone.',
+    confirmBatchDeleteTitle: 'Delete {count} tasks?',
+    diskWarning: 'Disk space may be insufficient',
+    diskWarningDetail: 'Estimated {estimated} MB needed, {available} MB available.',
   },
 
   taskCard: {

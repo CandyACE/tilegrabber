@@ -55,6 +55,8 @@ const props = defineProps<{
   task: Task;
   live?: { speed: number; speedMb: number; eta: number | null };
   exportJob?: ExportRecord;
+  selectable?: boolean;
+  selected?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -65,6 +67,7 @@ const emit = defineEmits<{
   open: [id: string];
   delete: [id: string];
   export: [id: string];
+  toggle: [id: string];
 }>();
 
 const statusConfig = computed((): Record<
@@ -169,15 +172,32 @@ watch(
 
 <template>
   <div
-    class="px-3 py-2.5 rounded-lg cursor-pointer transition-all hover:shadow-sm border"
+    class="relative px-3 py-2.5 rounded-lg cursor-pointer transition-all hover:shadow-sm border"
+    :class="selectable && selected ? 'ring-2 ring-blue-400' : ''"
     style="
       background: var(--color-surface);
       border-color: var(--color-border-subtle);
     "
-    @click="emit('open', task.id)"
+    @click="selectable ? emit('toggle', task.id) : emit('open', task.id)"
   >
+    <!-- 批量选择复选框 -->
+    <div
+      v-if="selectable"
+      class="absolute top-2 left-2 z-10"
+      @click.stop="emit('toggle', task.id)"
+    >
+      <input
+        type="checkbox"
+        :checked="selected"
+        class="size-4 rounded accent-blue-500 cursor-pointer"
+        @change.stop
+      />
+    </div>
     <!-- 首行：名称 + 标识 + 状态徽章 -->
-    <div class="flex items-start justify-between gap-2 mb-1.5">
+    <div
+      class="flex items-start justify-between gap-2 mb-1.5"
+      :class="selectable ? 'pl-6' : ''"
+    >
       <span
         class="text-sm font-medium leading-snug truncate"
         style="color: var(--color-text-primary)"
@@ -213,7 +233,11 @@ watch(
     </div>
 
     <!-- 来源信息行 -->
-    <p class="text-xs mb-2 font-mono" style="color: var(--color-text-muted)">
+    <p
+      class="text-xs mb-2 font-mono"
+      :class="selectable ? 'pl-6' : ''"
+      style="color: var(--color-text-muted)"
+    >
       {{ task.sourceType }} · z{{ task.minZoom }}–z{{ task.maxZoom }} ·
       {{ task.totalTiles.toLocaleString() }} {{ t('taskCard.tiles') }}
     </p>

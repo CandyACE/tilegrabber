@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { BoxSelect, Trash2, X } from "lucide-vue-next";
+import { BoxSelect, Trash2, X, WifiOff } from "lucide-vue-next";
+import { useI18n } from "vue-i18n";
 import type { Map as MaplibreMap, LngLatBoundsLike } from "maplibre-gl";
 import type { Bounds, CrsType, TileSource } from "~/types/tile-source";
 import { useWizardState } from "~/composables/useWizardState";
@@ -36,6 +38,8 @@ import ToastContainer from "~/components/ToastContainer.vue";
 
 // ─── 启动时缓存设置（单次 IPC，供 onMounted 和 onSplashDone 共用） ──────────
 let cachedSettings: Record<string, string> = {};
+
+const { t } = useI18n();
 
 // ─── 免责声明 ──────────────────────────────────────────────────────────────
 const showDisclaimer = ref(false);
@@ -108,6 +112,10 @@ const showSplash = ref(true);
 const appVisible = ref(false);
 
 let unlistenClose: (() => void) | null = null;
+let unlistenNetwork: (() => void) | null = null;
+
+// ─── 网络状态横幅 ──────────────────────────────────────────────────────────
+const networkOffline = ref(false);
 
 onMounted(async () => {
   // 单次 IPC 获取所有设置：语言立即应用，其余缓存供 onSplashDone 使用
@@ -120,16 +128,21 @@ onMounted(async () => {
   } catch {
     // ignore - fallback to navigator.language detection already done in i18n.ts
   }
-  // 并行：注册关闭事件监听 + 后台更新检查监听（互不依赖）
-  const [unlistenFn] = await Promise.all([
+  // 并行：注册关闭事件监听 + 后台更新检查监听 + 网络状态监听（互不依赖）
+  const [unlistenFn, , unlistenNetFn] = await Promise.all([
     getCurrentWindow().onCloseRequested((event) => handleCloseRequest(event)),
     initUpdateListener(),
+    listen<{ online: boolean }>("tilegrab-network-status", (ev) => {
+      networkOffline.value = !ev.payload.online;
+    }),
   ]);
   unlistenClose = unlistenFn;
+  unlistenNetwork = unlistenNetFn;
 });
 
 onUnmounted(() => {
   unlistenClose?.();
+  unlistenNetwork?.();
   destroyUpdateListener();
 });
 
@@ -431,6 +444,18 @@ function handleDetailDeleted() {
       @nav-change="onNavChange"
     />
 
+    <!-- 网络离线横幅 -->
+    <Transition name="banner-slide">
+      <div
+        v-if="networkOffline"
+        class="flex items-center gap-2 px-4 py-2 text-xs font-medium shrink-0 z-50"
+        style="background: #fef9c3; color: #854d0e; border-bottom: 1px solid #fde047"
+      >
+        <WifiOff class="size-3.5 shrink-0" />
+        <span>{{ t('app.networkOffline') }}</span>
+      </div>
+    </Transition>
+
     <!-- 主体区域 -->
     <div class="flex flex-1 min-h-0 overflow-hidden relative">
       <!-- ── 功能面板：覆盖在主体上方，地图始终保持渲染 ──────────────── -->
@@ -639,5 +664,21 @@ function handleDetailDeleted() {
 .splash-out-leave-active {
   /* splash 内部动画已完成，无需额外等待，立即移除 DOM */
   transition: none;
+}
+
+.banner-slide-enter-active,
+.banner-slide-leave-active {
+  transition: max-height 0.25s ease, opacity 0.25s ease;
+  overflow: hidden;
+}
+.banner-slide-enter-from,
+.banner-slide-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+.banner-slide-enter-to,
+.banner-slide-leave-from {
+  max-height: 40px;
+  opacity: 1;
 }
 </style>
