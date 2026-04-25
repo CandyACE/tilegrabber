@@ -2,7 +2,7 @@
 
 use tauri::State;
 
-use crate::server::{ServiceStats, StatsMap, TileServerState, start_server, stop_server};
+use crate::server::{start_server, stop_server, ServiceStats, StatsMap, TileServerState};
 use crate::storage::app_db::AppDb;
 
 /// 服务器当前状态（返回给前端）
@@ -58,9 +58,7 @@ pub async fn start_tile_server(
 
 /// 停止瓦片发布服务
 #[tauri::command]
-pub async fn stop_tile_server(
-    server_state: State<'_, TileServerState>,
-) -> Result<(), String> {
+pub async fn stop_tile_server(server_state: State<'_, TileServerState>) -> Result<(), String> {
     stop_server(server_state.inner())
 }
 
@@ -76,7 +74,11 @@ pub async fn get_server_status(
         running: s.is_running(),
         port: s.port,
         base_url: format!("http://localhost:{}", s.port),
-        lan_urls: if s.is_running() { get_lan_urls(s.port) } else { Vec::new() },
+        lan_urls: if s.is_running() {
+            get_lan_urls(s.port)
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -90,9 +92,7 @@ pub struct TaskStatsDto {
 }
 
 #[tauri::command]
-pub async fn get_service_stats(
-    stats: State<'_, StatsMap>,
-) -> Result<Vec<TaskStatsDto>, String> {
+pub async fn get_service_stats(stats: State<'_, StatsMap>) -> Result<Vec<TaskStatsDto>, String> {
     let map = stats.lock().map_err(|_| "mutex poisoned".to_string())?;
     let result = map
         .iter()

@@ -91,7 +91,6 @@ struct LatestRelease {
 pub async fn check_for_update() -> Result<UpdateCheckResult, String> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
-
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(concat!("TileGrabber/", env!("CARGO_PKG_VERSION")))
@@ -161,19 +160,33 @@ pub async fn check_for_update() -> Result<UpdateCheckResult, String> {
     // 根据当前编译平台和架构选择下载链接
     let download_url = {
         #[cfg(target_os = "windows")]
-        { release.assets.windows.clone() }
+        {
+            release.assets.windows.clone()
+        }
         #[cfg(target_os = "macos")]
         {
             // M 系列（aarch64）优先用 macos 字段；Intel 优先用 macos_x64，回退 macos
             #[cfg(target_arch = "aarch64")]
-            { release.assets.macos.clone() }
+            {
+                release.assets.macos.clone()
+            }
             #[cfg(not(target_arch = "aarch64"))]
-            { release.assets.macos_x64.clone().or_else(|| release.assets.macos.clone()) }
+            {
+                release
+                    .assets
+                    .macos_x64
+                    .clone()
+                    .or_else(|| release.assets.macos.clone())
+            }
         }
         #[cfg(target_os = "linux")]
-        { release.assets.linux.clone() }
+        {
+            release.assets.linux.clone()
+        }
         #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        { None::<String> }
+        {
+            None::<String>
+        }
     };
 
     let release_notes = release.body.clone();
@@ -194,10 +207,7 @@ pub async fn check_for_update() -> Result<UpdateCheckResult, String> {
 /// 下载过程中持续向前端推送 `update-download-progress` 事件。
 /// 安全限制：URL 必须 https 开头。
 #[tauri::command]
-pub async fn download_and_install_update(
-    app: tauri::AppHandle,
-    url: String,
-) -> Result<(), String> {
+pub async fn download_and_install_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
     // 安全校验：只允许 https
     if !url.starts_with("https://") {
         return Err("仅支持 HTTPS 下载地址".to_string());
@@ -251,7 +261,11 @@ pub async fn download_and_install_update(
         };
         let _ = app.emit(
             "update-download-progress",
-            DownloadProgress { downloaded, total, percent },
+            DownloadProgress {
+                downloaded,
+                total,
+                percent,
+            },
         );
     }
 

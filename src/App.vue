@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { BoxSelect, Trash2, X, WifiOff } from "lucide-vue-next";
+import { BoxSelect, Trash2, X, WifiOff, HardDrive } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
 import type { Map as MaplibreMap, LngLatBoundsLike } from "maplibre-gl";
 import type { Bounds, CrsType, TileSource } from "~/types/tile-source";
@@ -113,9 +113,20 @@ const appVisible = ref(false);
 
 let unlistenClose: (() => void) | null = null;
 let unlistenNetwork: (() => void) | null = null;
+let unlistenDiskFull: (() => void) | null = null;
 
 // ─── 网络状态横幅 ──────────────────────────────────────────────────────────
 const networkOffline = ref(false);
+
+// ─── 磁盘满警告 Toast ─────────────────────────────────────────────────────
+const diskFullWarning = ref(false);
+let diskFullTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showDiskFullWarning() {
+  diskFullWarning.value = true;
+  if (diskFullTimer) clearTimeout(diskFullTimer);
+  diskFullTimer = setTimeout(() => { diskFullWarning.value = false; }, 8000);
+}
 
 onMounted(async () => {
   // 单次 IPC 获取所有设置：语言立即应用，其余缓存供 onSplashDone 使用
@@ -128,21 +139,26 @@ onMounted(async () => {
   } catch {
     // ignore - fallback to navigator.language detection already done in i18n.ts
   }
-  // 并行：注册关闭事件监听 + 后台更新检查监听 + 网络状态监听（互不依赖）
-  const [unlistenFn, , unlistenNetFn] = await Promise.all([
+  // 并行：注册关闭事件监听 + 后台更新检查监听 + 网络状态监听 + 磁盘满监听
+  const [unlistenFn, , unlistenNetFn, unlistenDiskFn] = await Promise.all([
     getCurrentWindow().onCloseRequested((event) => handleCloseRequest(event)),
     initUpdateListener(),
     listen<{ online: boolean }>("tilegrab-network-status", (ev) => {
       networkOffline.value = !ev.payload.online;
     }),
+    listen<{ task_id: string }>("tilegrab-disk-full", () => {
+      showDiskFullWarning();
+    }),
   ]);
   unlistenClose = unlistenFn;
   unlistenNetwork = unlistenNetFn;
+  unlistenDiskFull = unlistenDiskFn;
 });
 
 onUnmounted(() => {
   unlistenClose?.();
   unlistenNetwork?.();
+  unlistenDiskFull?.();
   destroyUpdateListener();
 });
 
@@ -453,6 +469,18 @@ function handleDetailDeleted() {
       >
         <WifiOff class="size-3.5 shrink-0" />
         <span>{{ t('app.networkOffline') }}</span>
+      </div>
+    </Transition>
+
+    <!-- 磁盘空间不足警告 -->
+    <Transition name="banner-slide">
+      <div
+        v-if="diskFullWarning"
+        class="flex items-center gap-2 px-4 py-2 text-xs font-medium shrink-0 z-50"
+        style="background: #fff1f2; color: #be123c; border-bottom: 1px solid #fda4af"
+      >
+        <HardDrive class="size-3.5 shrink-0" />
+        <span>{{ t('app.diskFull') }}</span>
       </div>
     </Transition>
 

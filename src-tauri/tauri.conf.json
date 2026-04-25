@@ -55,6 +55,7 @@
     ],
     "windows": {
       "nsis": {
+        "template": "installer-assets/installer.nsi",
         "sidebarImage": "installer-assets/sidebar.bmp",
         "headerImage": "installer-assets/header.bmp",
         "installMode": "currentUser",

@@ -157,7 +157,42 @@ pub async fn check_disk_space(
     })
 }
 
-// ─── 任务创建 ────────────────────────────────────────────────────────────────
+/// 在任务创建前估算下载规模（瓦片数量 + 预估字节数）
+#[tauri::command]
+pub async fn estimate_download(
+    west: f64,
+    east: f64,
+    south: f64,
+    north: f64,
+    min_zoom: i32,
+    max_zoom: i32,
+    crs_str: String,
+) -> Result<EstimateInfo, String> {
+    use crate::tile_math::count_tiles;
+    use crate::types::{Bounds, CrsType};
+
+    let crs = if crs_str.contains("84") || crs_str.contains("4326") {
+        CrsType::Wgs84
+    } else {
+        CrsType::WebMercator
+    };
+    let bounds = Bounds { west, east, south, north };
+    let result = count_tiles(&bounds, min_zoom as u8, max_zoom as u8, &crs);
+    let tile_count = result.total;
+    let estimated_bytes = tile_count * BYTES_PER_TILE_ESTIMATE;
+
+    Ok(EstimateInfo {
+        tile_count,
+        estimated_bytes,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct EstimateInfo {
+    pub tile_count: u64,
+    pub estimated_bytes: u64,
+}
+
 
 /// 创建新的下载任务（仅入库，不启动下载）
 #[tauri::command]

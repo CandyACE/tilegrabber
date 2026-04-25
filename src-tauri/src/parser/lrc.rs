@@ -28,10 +28,15 @@ use crate::types::{Bounds, CoordType, CrsType, SourceKind, TileSource};
 
 /// 从文件路径解析 .lrc 文件
 pub fn parse_lrc_file(path: &Path) -> Result<TileSource> {
-    let raw = std::fs::read(path)
-        .with_context(|| format!("无法读取 lrc 文件: {}", path.display()))?;
+    let raw =
+        std::fs::read(path).with_context(|| format!("无法读取 lrc 文件: {}", path.display()))?;
 
-    parse_lrc_bytes(&raw, path.file_stem().and_then(|s| s.to_str()).unwrap_or("未知图层"))
+    parse_lrc_bytes(
+        &raw,
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("未知图层"),
+    )
 }
 
 /// 从字节切片解析 .lrc 内容（支持 GB18030 / UTF-8）
@@ -40,8 +45,8 @@ pub fn parse_lrc_bytes(raw: &[u8], default_name: &str) -> Result<TileSource> {
     let (text, _, had_errors) = GB18030.decode(raw);
     if had_errors {
         // 尝试 UTF-8 fallback
-        let fallback = std::str::from_utf8(raw)
-            .with_context(|| "lrc 文件编码既非 GB18030 也非 UTF-8")?;
+        let fallback =
+            std::str::from_utf8(raw).with_context(|| "lrc 文件编码既非 GB18030 也非 UTF-8")?;
         parse_lrc_xml(fallback, default_name)
     } else {
         parse_lrc_xml(&text, default_name)
@@ -137,7 +142,8 @@ fn parse_lrc_xml(xml: &str, default_name: &str) -> Result<TileSource> {
 
                 // 在 <HttpHeaders> 内：标签名即请求头名，文本即值
                 // 例如 <Referer>https://...</Referer>
-                if in_http_headers && !current_tag.is_empty()
+                if in_http_headers
+                    && !current_tag.is_empty()
                     && current_tag != "HttpHeaders"
                     && current_tag != "Header"
                 {
@@ -149,12 +155,24 @@ fn parse_lrc_xml(xml: &str, default_name: &str) -> Result<TileSource> {
                 // 在 <Range> 内：子元素格式 <West>-180</West>
                 if in_range {
                     match current_tag.as_str() {
-                        "West" => { source.bounds.west = text.parse().unwrap_or(source.bounds.west); }
-                        "East" => { source.bounds.east = text.parse().unwrap_or(source.bounds.east); }
-                        "South" => { source.bounds.south = text.parse().unwrap_or(source.bounds.south); }
-                        "North" => { source.bounds.north = text.parse().unwrap_or(source.bounds.north); }
-                        "LevelBegin" => { source.min_zoom = text.parse().unwrap_or(source.min_zoom); }
-                        "LevelEnd" => { source.max_zoom = text.parse().unwrap_or(source.max_zoom); }
+                        "West" => {
+                            source.bounds.west = text.parse().unwrap_or(source.bounds.west);
+                        }
+                        "East" => {
+                            source.bounds.east = text.parse().unwrap_or(source.bounds.east);
+                        }
+                        "South" => {
+                            source.bounds.south = text.parse().unwrap_or(source.bounds.south);
+                        }
+                        "North" => {
+                            source.bounds.north = text.parse().unwrap_or(source.bounds.north);
+                        }
+                        "LevelBegin" => {
+                            source.min_zoom = text.parse().unwrap_or(source.min_zoom);
+                        }
+                        "LevelEnd" => {
+                            source.max_zoom = text.parse().unwrap_or(source.max_zoom);
+                        }
                         _ => {}
                     }
                     buf.clear();
@@ -183,24 +201,18 @@ fn parse_lrc_xml(xml: &str, default_name: &str) -> Result<TileSource> {
                     "TileRowDir" => {
                         // NorthToSouth → true（XYZ 标准，y=0 在北方）
                         // SouthToNorth → false（TMS 约定，y=0 在南方）
-                        source.north_to_south = text
-                            .to_lowercase()
-                            .starts_with("north");
+                        source.north_to_south = text.to_lowercase().starts_with("north");
                     }
                     "MapSpaceType" => {
                         source.coord_type = parse_map_space_type(&text);
                     }
                     "UrlParamOrder" => {
-                        source.url_param_order = text
-                            .split(',')
-                            .map(|s| s.trim().to_uppercase())
-                            .collect();
+                        source.url_param_order =
+                            text.split(',').map(|s| s.trim().to_uppercase()).collect();
                     }
                     "ServerParts" => {
-                        source.subdomains = text
-                            .split_whitespace()
-                            .map(|s| s.to_string())
-                            .collect();
+                        source.subdomains =
+                            text.split_whitespace().map(|s| s.to_string()).collect();
                     }
                     "DataType" | "Format" | "format" => {
                         source.format = detect_format(&text).to_string();
@@ -429,7 +441,11 @@ fn find_assignment_eq(line: &str) -> Option<usize> {
             }
             '=' => {
                 let prev = if i > 0 { chars[i - 1] } else { ' ' };
-                let next = if i + 1 < chars.len() { chars[i + 1] } else { ' ' };
+                let next = if i + 1 < chars.len() {
+                    chars[i + 1]
+                } else {
+                    ' '
+                };
                 if next != '=' && prev != '=' && prev != '~' && prev != '<' && prev != '>' {
                     return Some(i);
                 }
@@ -624,7 +640,7 @@ mod tests {
         assert_eq!(src.crs, CrsType::WebMercator);
         assert_eq!(src.tile_size, 256);
         assert_eq!(src.north_to_south, true);
-        assert_eq!(src.subdomains, vec!["0","1","2","3","4","5","6","7"]);
+        assert_eq!(src.subdomains, vec!["0", "1", "2", "3", "4", "5", "6", "7"]);
         assert_eq!(src.min_zoom, 1);
         assert_eq!(src.max_zoom, 18);
         assert!(src.headers.contains_key("Referer"));
@@ -666,9 +682,16 @@ mod tests {
 
         assert_eq!(src.crs, CrsType::WebMercator);
         // SouthToNorth → north_to_south 应为 false
-        assert_eq!(src.north_to_south, false, "SouthToNorth 应解析为 north_to_south=false");
+        assert_eq!(
+            src.north_to_south, false,
+            "SouthToNorth 应解析为 north_to_south=false"
+        );
         // MapSpaceType GCJ02 应被识别
-        assert_eq!(src.coord_type, CoordType::Gcj02, "MapSpaceType GCJ02 应解析为 CoordType::Gcj02");
+        assert_eq!(
+            src.coord_type,
+            CoordType::Gcj02,
+            "MapSpaceType GCJ02 应解析为 CoordType::Gcj02"
+        );
         assert_eq!(src.min_zoom, 3);
         assert_eq!(src.max_zoom, 18);
         assert_eq!(src.subdomains, vec!["0", "1", "2", "3"]);

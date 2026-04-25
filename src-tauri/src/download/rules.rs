@@ -64,9 +64,7 @@ impl DownloadRules {
         };
 
         let time_window_enabled = get("rules.time_window_enabled", "false") == "true";
-        let time_window_start: u8 = get("rules.time_window_start", "22")
-            .parse()
-            .unwrap_or(22);
+        let time_window_start: u8 = get("rules.time_window_start", "22").parse().unwrap_or(22);
         let time_window_end: u8 = get("rules.time_window_end", "8").parse().unwrap_or(8);
         let max_tiles_per_sec: u32 = get("rules.max_tiles_per_sec", "0").parse().unwrap_or(0);
         let burst_pause_ms: u32 = get("rules.burst_pause_ms", "0").parse().unwrap_or(0);

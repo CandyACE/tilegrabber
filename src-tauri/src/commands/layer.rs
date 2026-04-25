@@ -15,10 +15,7 @@ use crate::storage::app_db::{AppDb, Layer, NewLayer};
 ///
 /// 前端传入已解析好的 `source_config`（TileSource JSON），不存文件路径。
 #[tauri::command]
-pub async fn create_layer(
-    new_layer: NewLayer,
-    app_db: State<'_, AppDb>,
-) -> Result<String, String> {
+pub async fn create_layer(new_layer: NewLayer, app_db: State<'_, AppDb>) -> Result<String, String> {
     let id = Uuid::new_v4().to_string();
     app_db
         .create_layer(&id, &new_layer)
@@ -34,10 +31,7 @@ pub async fn list_layers(app_db: State<'_, AppDb>) -> Result<Vec<Layer>, String>
 
 /// 删除图层
 #[tauri::command]
-pub async fn delete_layer(
-    layer_id: String,
-    app_db: State<'_, AppDb>,
-) -> Result<(), String> {
+pub async fn delete_layer(layer_id: String, app_db: State<'_, AppDb>) -> Result<(), String> {
     app_db.delete_layer(&layer_id).map_err(|e| e.to_string())
 }
 
@@ -47,9 +41,7 @@ pub async fn reorder_layers(
     layer_ids: Vec<String>,
     app_db: State<'_, AppDb>,
 ) -> Result<(), String> {
-    app_db
-        .reorder_layers(&layer_ids)
-        .map_err(|e| e.to_string())
+    app_db.reorder_layers(&layer_ids).map_err(|e| e.to_string())
 }
 /// 重命名图层
 #[tauri::command]

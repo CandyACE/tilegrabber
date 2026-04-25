@@ -26,14 +26,12 @@ pub fn parse_area_file(path: &std::path::Path) -> Result<ParsedArea> {
 
     match ext.as_str() {
         "kml" => {
-            let content =
-                std::fs::read_to_string(path).context("读取 KML 文件失败")?;
+            let content = std::fs::read_to_string(path).context("读取 KML 文件失败")?;
             parse_kml_str(&content)
         }
         "kmz" => parse_kmz(path),
         "json" | "geojson" => {
-            let content =
-                std::fs::read_to_string(path).context("读取 GeoJSON 文件失败")?;
+            let content = std::fs::read_to_string(path).context("读取 GeoJSON 文件失败")?;
             parse_geojson_str(&content)
         }
         other => anyhow::bail!("不支持的文件格式: .{}", other),
@@ -69,8 +67,7 @@ fn parse_kmz(path: &std::path::Path) -> Result<ParsedArea> {
 // ─── KML 解析 ────────────────────────────────────────────────────────────────
 
 fn parse_kml_str(content: &str) -> Result<ParsedArea> {
-    let doc = roxmltree::Document::parse(content)
-        .context("解析 KML XML 失败")?;
+    let doc = roxmltree::Document::parse(content).context("解析 KML XML 失败")?;
 
     let mut first_polygon: Option<Vec<[f64; 2]>> = None;
     let mut all_coords: Vec<[f64; 2]> = Vec::new();
@@ -150,8 +147,7 @@ fn parse_kml_coordinates(text: &str) -> Vec<[f64; 2]> {
 // ─── GeoJSON 解析 ─────────────────────────────────────────────────────────────
 
 fn parse_geojson_str(content: &str) -> Result<ParsedArea> {
-    let v: serde_json::Value =
-        serde_json::from_str(content).context("解析 GeoJSON 失败")?;
+    let v: serde_json::Value = serde_json::from_str(content).context("解析 GeoJSON 失败")?;
 
     let mut first_polygon: Option<Vec<[f64; 2]>> = None;
     let mut all_coords: Vec<[f64; 2]> = Vec::new();
@@ -290,10 +286,18 @@ fn coords_to_bounds(coords: &[[f64; 2]]) -> [f64; 4] {
     let mut south = f64::INFINITY;
     let mut north = f64::NEG_INFINITY;
     for [lng, lat] in coords {
-        if *lng < west { west = *lng; }
-        if *lng > east { east = *lng; }
-        if *lat < south { south = *lat; }
-        if *lat > north { north = *lat; }
+        if *lng < west {
+            west = *lng;
+        }
+        if *lng > east {
+            east = *lng;
+        }
+        if *lat < south {
+            south = *lat;
+        }
+        if *lat > north {
+            north = *lat;
+        }
     }
     [west, south, east, north]
 }

@@ -370,6 +370,14 @@ async fn run_download(
     // 6. 加载下载规则（时间窗口 + 速率限制）
     let rules = DownloadRules::load(&app_db);
 
+    // 读取可配置的最大重试次数（默认 3）
+    let max_retries = app_db
+        .get_setting("download.max_retries")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(3);
+
     // 若当前不在时间窗口内，等待（每分钟检查一次）
     if rules.time_window_enabled && !rules.is_in_window() {
         app_db
@@ -429,6 +437,7 @@ async fn run_download(
     let mut last_tick = Instant::now();
     let mut last_bytes: u64 = 0; // 每个计时周期内下载的总字节数
     let mut batch_counter: u32 = 0; // 批次计数器，用于视口停顿模拟
+    let mut disk_full_abort = false; // 磁盘空间不足时提前中止
 
     // === 流水线写入通道 ===
     // 单独的 tokio 任务负责 DB 写入 + 事件发送，主循环只管下载
@@ -562,7 +571,7 @@ async fn run_download(
                 if tile_delay_ms > 0 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(tile_delay_ms)).await;
                 }
-                (tile, worker::download_tile(&client, tile, &source).await)
+                (tile, worker::download_tile(&client, tile, &source, max_retries).await)
             });
         }
 
@@ -619,6 +628,27 @@ async fn run_download(
         batch_counter += 1;
         if batch_counter % 16 == 0 {
             throttle::viewport_pause().await;
+        }
+
+        // 每 50 批次检查一次磁盘剩余空间，防止将磁盘写满
+        if batch_counter % 50 == 0 {
+            const MIN_FREE_BYTES: u64 = 200 * 1024 * 1024; // 200 MB
+            if let Ok(free) = fs2::available_space(std::path::Path::new(&tile_store_path)) {
+                if free < MIN_FREE_BYTES {
+                    app_db
+                        .add_log(
+                            Some(&task_id),
+                            "warn",
+                            &format!(
+                                "磁盘剩余空间不足（{}），任务已自动暂停",
+                                format_bytes(free)
+                            ),
+                        )
+                        .ok();
+                    disk_full_abort = true;
+                    break 'outer;
+                }
+            }
         }
 
         // 时间窗口检查：如果离开了时间窗口，暂停等待下次窗口
@@ -688,6 +718,31 @@ async fn run_download(
     // 关闭写入通道，等待后台写入完成
     drop(write_tx);
     write_handle.await.ok();
+
+    // 磁盘满时提前中止：暂停任务并通知前端
+    if disk_full_abort {
+        app_db.update_task_status(&task_id, "paused").ok();
+        if let Ok(p) = tile_store.get_progress() {
+            let _ = app.emit(
+                "tilegrab-progress",
+                ProgressPayload {
+                    task_id: task_id.clone(),
+                    total: p.total,
+                    downloaded: p.downloaded,
+                    failed: p.failed,
+                    speed: 0.0,
+                    bytes_per_sec: 0.0,
+                    eta_secs: None,
+                    status: "paused".to_string(),
+                },
+            );
+        }
+        let _ = app.emit(
+            "tilegrab-disk-full",
+            serde_json::json!({ "task_id": task_id }),
+        );
+        return;
+    }
 
     // 补发下载完成（100%）事件：下载循环的最后一次 tick 可能还未到 100%，
     // 若紧接着进入裁剪阶段，进度条会直接从未满跳到 0%。
@@ -860,6 +915,18 @@ async fn run_download(
             status: final_status.to_string(),
         },
     );
+}
+
+// ─── 辅助函数 ─────────────────────────────────────────────────────────────────
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.0} KB", bytes as f64 / 1024.0)
+    }
 }
 
 // ─── 下载后统一裁剪 ──────────────────────────────────────────────────────────

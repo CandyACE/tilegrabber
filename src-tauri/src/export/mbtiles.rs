@@ -45,11 +45,9 @@ where
     F: FnMut(u64, u64),
 {
     // ── 打开源数据库（只读）──────────────────────────────────────────────────
-    let src = Connection::open_with_flags(
-        tile_store_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .context("打开源瓦片存储失败")?;
+    let src =
+        Connection::open_with_flags(tile_store_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .context("打开源瓦片存储失败")?;
 
     // ── 创建/覆盖目标 MBTiles ────────────────────────────────────────────────
     if dest_path.exists() {
@@ -90,7 +88,10 @@ where
 
     let meta_entries: &[(&str, String)] = &[
         ("name", task_name.to_string()),
-        ("description", format!("Exported by TileGrabber from {task_name}")),
+        (
+            "description",
+            format!("Exported by TileGrabber from {task_name}"),
+        ),
         ("version", "1.1".into()),
         (
             "bounds",
@@ -183,9 +184,19 @@ where
                         }
                     } else {
                         let [west, south, east, north] = bounds;
-                        let task_bounds = crate::types::Bounds { west, east, south, north };
+                        let task_bounds = crate::types::Bounds {
+                            west,
+                            east,
+                            south,
+                            north,
+                        };
                         match crate::export::tile_clip::clip_tile_to_bounds_crs(
-                            data, *x as u32, *y as u32, *z as u8, &task_bounds, crs,
+                            data,
+                            *x as u32,
+                            *y as u32,
+                            *z as u8,
+                            &task_bounds,
+                            crs,
                         )? {
                             None => return Ok(None),
                             Some(clipped) => std::borrow::Cow::Owned(clipped),
@@ -197,7 +208,8 @@ where
                 // 重编码（调整 JPEG 品质 / PNG 压缩级别）
                 let write_data = if jpeg_quality.is_some() || png_level.is_some() {
                     crate::export::try_reencode_tile(write_data.as_ref(), jpeg_quality, png_level)
-                        .into_owned().into()
+                        .into_owned()
+                        .into()
                 } else {
                     write_data
                 };

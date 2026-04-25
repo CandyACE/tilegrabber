@@ -148,7 +148,12 @@ pub struct Bounds {
 
 impl Bounds {
     pub fn new(west: f64, east: f64, south: f64, north: f64) -> Self {
-        Self { west, east, south, north }
+        Self {
+            west,
+            east,
+            south,
+            north,
+        }
     }
 
     /// 转换为 GeoJSON bbox 数组 [west, south, east, north]

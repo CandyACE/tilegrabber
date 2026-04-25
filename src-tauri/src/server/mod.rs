@@ -14,7 +14,7 @@ pub mod handlers;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -103,27 +103,30 @@ pub async fn start_server(
 
     let router: Router = Router::new()
         // TMS 端点
-        .route(
-            "/tiles/:task_id/:z/:x/:y",
-            get(handlers::tms_tile),
-        )
+        .route("/tiles/:task_id/:z/:x/:y", get(handlers::tms_tile))
         // WMTS 端点（单入口，通过 query 参数区分请求类型）
-        .route(
-            "/wmts/:task_id",
-            get(handlers::wmts_dispatch),
-        )
+        .route("/wmts/:task_id", get(handlers::wmts_dispatch))
         // WMS 端点（OGC WMS 1.1.1）
-        .route(
-            "/wms/:task_id",
-            get(handlers::wms_dispatch),
-        )
+        .route("/wms/:task_id", get(handlers::wms_dispatch))
         // OGC API Tiles 端点
         .route("/ogc-tiles/:task_id", get(handlers::ogc_tiles_collection))
-        .route("/ogc-tiles/:task_id/tiles/WebMercatorQuad", get(handlers::ogc_tiles_tileset))
-        .route("/ogc-tiles/:task_id/tiles/WebMercatorQuad/:z/:row/:col", get(handlers::ogc_tiles_tile))
+        .route(
+            "/ogc-tiles/:task_id/tiles/WebMercatorQuad",
+            get(handlers::ogc_tiles_tileset),
+        )
+        .route(
+            "/ogc-tiles/:task_id/tiles/WebMercatorQuad/:z/:row/:col",
+            get(handlers::ogc_tiles_tile),
+        )
         // ArcGIS REST API 兼容端点
-        .route("/arcgis/rest/services/:task_id/MapServer", get(handlers::arcgis_mapserver))
-        .route("/arcgis/rest/services/:task_id/MapServer/tile/:z/:row/:col", get(handlers::arcgis_tile))
+        .route(
+            "/arcgis/rest/services/:task_id/MapServer",
+            get(handlers::arcgis_mapserver),
+        )
+        .route(
+            "/arcgis/rest/services/:task_id/MapServer/tile/:z/:row/:col",
+            get(handlers::arcgis_tile),
+        )
         // REST API
         .route("/api/tasks", get(handlers::api_tasks))
         .route("/api/tasks/:id", get(handlers::api_task_get))

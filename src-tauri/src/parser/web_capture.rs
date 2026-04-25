@@ -27,8 +27,8 @@ pub fn tile_url_to_template(raw: &str) -> Option<String> {
         .map(|i| after_scheme + i)
         .unwrap_or(base.len());
 
-    let host_part = &base[..host_end];       // "https://tile.example.com"
-    let path = &base[host_end..];            // "/15/12345/6789.png"
+    let host_part = &base[..host_end]; // "https://tile.example.com"
+    let path = &base[host_end..]; // "/15/12345/6789.png"
 
     let path_segs: Vec<&str> = path.split('/').collect();
 
@@ -78,7 +78,11 @@ fn tile_url_to_template_query(raw: &str) -> Option<String> {
             let mut it = kv.splitn(2, '=');
             let k = it.next()?.trim();
             let v = it.next().unwrap_or("").trim();
-            if k.is_empty() { None } else { Some((k, v)) }
+            if k.is_empty() {
+                None
+            } else {
+                Some((k, v))
+            }
         })
         .collect();
 
@@ -106,9 +110,7 @@ fn tile_url_to_template_query(raw: &str) -> Option<String> {
 }
 
 /// 在查询参数列表中识别 z/x/y 坐标参数，返回 (z_key, x_key, y_key)
-fn find_zxy_params<'a>(
-    params: &[(&'a str, &'a str)],
-) -> Option<(&'a str, &'a str, &'a str)> {
+fn find_zxy_params<'a>(params: &[(&'a str, &'a str)]) -> Option<(&'a str, &'a str, &'a str)> {
     // 各坐标常见参数名（大小写均支持）
     const Z_NAMES: &[&str] = &["z", "l", "level", "zoom", "tilematrix", "lev", "zoomlevel"];
     const X_NAMES: &[&str] = &["x", "col", "tilecol", "tilecolumn", "column"];
@@ -117,10 +119,7 @@ fn find_zxy_params<'a>(
     // 在参数列表中按名称查找，要求值为整数
     let find_int = |names: &[&str]| -> Option<(&'a str, u64)> {
         for name in names {
-            if let Some(&(k, v)) = params
-                .iter()
-                .find(|(k, _)| k.to_lowercase() == *name)
-            {
+            if let Some(&(k, v)) = params.iter().find(|(k, _)| k.to_lowercase() == *name) {
                 if let Ok(n) = v.parse::<u64>() {
                     return Some((k, n));
                 }
@@ -130,11 +129,13 @@ fn find_zxy_params<'a>(
     };
 
     let (z_key, z_val) = find_int(Z_NAMES)?;
-    let (x_key, _)     = find_int(X_NAMES)?;
-    let (y_key, _)     = find_int(Y_NAMES)?;
+    let (x_key, _) = find_int(X_NAMES)?;
+    let (y_key, _) = find_int(Y_NAMES)?;
 
     // z 值需在合理范围内
-    if z_val > 24 { return None; }
+    if z_val > 24 {
+        return None;
+    }
 
     // 三个参数不能相同
     if z_key == x_key || z_key == y_key || x_key == y_key {

@@ -2,6 +2,7 @@ export default {
   appName: '御图',
   app: {
     networkOffline: 'Network offline — downloads paused automatically and will resume when reconnected',
+    diskFull: 'Disk space low (< 200 MB) — task paused automatically. Free up space and resume manually.',
   },
 
   nav: {
@@ -321,6 +322,7 @@ export default {
     retry: 'Retry',
     delete: 'Delete',
     exporting: 'Exporting',
+    failedBadge: '⚠ {count} failed',
     status: {
       downloading: 'Downloading',
       paused: 'Paused',
@@ -476,6 +478,7 @@ export default {
     clipDesc: 'Precisely clip edge tiles to the selection boundary when exporting, avoiding overflow area data',
     startDownload: 'Start Download',
     cancel: 'Cancel',
+    estimateTiles: '~{count} tiles',
     crsLabels: {
       WEB_MERCATOR: 'EPSG:3857',
       WGS84: 'EPSG:4326',

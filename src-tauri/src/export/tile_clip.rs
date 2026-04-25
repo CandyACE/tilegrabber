@@ -1,4 +1,4 @@
-﻿//! 瓦片图像地理范围裁剪
+//! 瓦片图像地理范围裁剪
 //!
 //! 将超出任务范围的瓦片像素设为透明（alpha=0），范围内保留原始像素。
 //! 边框相交的瓦片不再被整体排除，而是对其外部像素进行透明化处理。
@@ -57,7 +57,6 @@ fn blend_alpha_col(raw: &mut [u8], row: usize, stride: usize, col: usize, factor
         raw[off] = (raw[off] as f64 * factor).round() as u8;
     }
 }
-
 
 // ── 公开 API ──────────────────────────────────────────────────────────────────
 
@@ -146,10 +145,8 @@ pub fn clip_tile_to_bounds_crs(
             let col_l = (clip_w - tb.west) / lng_span * iw_f;
             let col_r = (clip_e - tb.west) / lng_span * iw_f;
 
-            let merc = |lat: f64| -> f64 {
-                (PI / 4.0 + lat.to_radians() / 2.0).tan().ln()
-            };
-            let merc_n    = merc(tb.north);
+            let merc = |lat: f64| -> f64 { (PI / 4.0 + lat.to_radians() / 2.0).tan().ln() };
+            let merc_n = merc(tb.north);
             let merc_span = merc_n - merc(tb.south);
             let clip_n = task_bounds.north.min(tb.north);
             let clip_s = task_bounds.south.max(tb.south);
@@ -160,21 +157,21 @@ pub fn clip_tile_to_bounds_crs(
     };
 
     // 整数边界（完全清零区域）
-    let col_left   = col_left_f.ceil()  as usize;
-    let col_right  = col_right_f.floor() as usize;
-    let row_top    = row_top_f.ceil()   as usize;
-    let row_bottom = row_bot_f.floor()  as usize;
+    let col_left = col_left_f.ceil() as usize;
+    let col_right = col_right_f.floor() as usize;
+    let row_top = row_top_f.ceil() as usize;
+    let row_bottom = row_bot_f.floor() as usize;
 
     // 边界列/行的抗锯齿覆盖率
-    let aa_col_left   = col_left_f.ceil()  - col_left_f;  // 左边界列覆盖率
-    let aa_col_right  = col_right_f        - col_right_f.floor(); // 右边界列覆盖率
-    let aa_row_top    = row_top_f.ceil()   - row_top_f;   // 上边界行覆盖率
-    let aa_row_bottom = row_bot_f          - row_bot_f.floor(); // 下边界行覆盖率
+    let aa_col_left = col_left_f.ceil() - col_left_f; // 左边界列覆盖率
+    let aa_col_right = col_right_f - col_right_f.floor(); // 右边界列覆盖率
+    let aa_row_top = row_top_f.ceil() - row_top_f; // 上边界行覆盖率
+    let aa_row_bottom = row_bot_f - row_bot_f.floor(); // 下边界行覆盖率
 
     // 越界保护
-    let col_left   = col_left.min(iw);
-    let col_right  = col_right.min(iw);
-    let row_top    = row_top.min(ih);
+    let col_left = col_left.min(iw);
+    let col_right = col_right.min(iw);
+    let row_top = row_top.min(ih);
     let row_bottom = row_bottom.min(ih);
     let aa_col_l_idx = (col_left_f.floor() as usize).min(iw.saturating_sub(1));
     let aa_col_r_idx = (col_right_f.floor() as usize).min(iw.saturating_sub(1));
@@ -209,7 +206,7 @@ pub fn clip_tile_to_bounds_crs(
         }
 
         // 2. 中间行：清零左右边距
-        let left_bytes  = col_left  * 4;
+        let left_bytes = col_left * 4;
         let right_start = col_right * 4;
         for row in row_top..row_bottom {
             let base = row * stride;
@@ -232,7 +229,11 @@ pub fn clip_tile_to_bounds_crs(
         }
 
         // 2a. 下边界抗锯齿行
-        if aa_row_bottom > 0.0 && aa_row_bottom < 1.0 && aa_row_b_idx >= row_bottom && aa_row_b_idx < ih {
+        if aa_row_bottom > 0.0
+            && aa_row_bottom < 1.0
+            && aa_row_b_idx >= row_bottom
+            && aa_row_b_idx < ih
+        {
             let base = aa_row_b_idx * stride;
             raw[base..base + stride].fill(0);
             for col in col_left..col_right {
@@ -345,7 +346,7 @@ pub fn clip_tile_to_polygon_crs(
         }
 
         let row_start = row * stride;
-        let row_buf   = &mut raw[row_start..row_start + stride];
+        let row_buf = &mut raw[row_start..row_start + stride];
 
         if xs.is_empty() {
             row_buf.fill(0); // 整行在多边形外

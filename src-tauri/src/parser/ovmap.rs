@@ -54,8 +54,8 @@ const SCAN_START: usize = 36;
 
 /// 从文件路径解析 .ovmap 文件
 pub fn parse_ovmap_file(path: &Path) -> Result<TileSource> {
-    let raw = std::fs::read(path)
-        .with_context(|| format!("无法读取 ovmap 文件: {}", path.display()))?;
+    let raw =
+        std::fs::read(path).with_context(|| format!("无法读取 ovmap 文件: {}", path.display()))?;
 
     let name = path
         .file_stem()
@@ -72,16 +72,12 @@ pub fn parse_ovmap_bytes(raw: &[u8], default_name: &str) -> Result<TileSource> {
         bail!("ovmap 文件太短（{} 字节）", raw.len());
     }
     if &raw[..4] != MAGIC {
-        bail!(
-            "非 ovmap 格式（魔数不匹配，前4字节: {:02X?}）",
-            &raw[..4]
-        );
+        bail!("非 ovmap 格式（魔数不匹配，前4字节: {:02X?}）", &raw[..4]);
     }
 
     // ── 2. 解压 zlib 数据 ────────────────────────────────────────────────────
     let compressed = &raw[OUTER_HEADER_SIZE..];
-    let dc = decompress_zlib(compressed)
-        .with_context(|| "ovmap zlib 解压失败")?;
+    let dc = decompress_zlib(compressed).with_context(|| "ovmap zlib 解压失败")?;
 
     if dc.len() < 48 {
         bail!("ovmap 解压数据过短（{} 字节）", dc.len());
@@ -94,7 +90,11 @@ pub fn parse_ovmap_bytes(raw: &[u8], default_name: &str) -> Result<TileSource> {
 
     let tile_size = {
         let ts = read_u32_le(&dc, 40);
-        if ts == 0 { 256 } else { ts }
+        if ts == 0 {
+            256
+        } else {
+            ts
+        }
     };
 
     // 协议标志：0=HTTP，非0=HTTPS
@@ -112,10 +112,7 @@ pub fn parse_ovmap_bytes(raw: &[u8], default_name: &str) -> Result<TileSource> {
 
     // ── 6. 构建子域名列表 ─────────────────────────────────────────────────────
     // serverparts_str 中每个字符代表一个子域名编号，例如 "123" → ["1","2","3"]
-    let subdomains: Vec<String> = serverparts_str
-        .chars()
-        .map(|c| c.to_string())
-        .collect();
+    let subdomains: Vec<String> = serverparts_str.chars().map(|c| c.to_string()).collect();
 
     // ── 7. 拼装完整 URL 模板 ──────────────────────────────────────────────────
     let url_template = format!("{}://{}{}", scheme, host_converted, path_converted);
@@ -158,7 +155,7 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>> {
 ///
 /// 字符串区结构（每个字段均为长度前缀的字节串）：
 /// ```text
-/// [u32 sp_len] [sp_len bytes: serverpart chars] 
+/// [u32 sp_len] [sp_len bytes: serverpart chars]
 /// [u32 host_len] [host_len bytes: host template]
 /// [u32 path_len] [path_len bytes: path template]
 /// ```
@@ -311,11 +308,18 @@ mod tests {
         assert_eq!(source.kind, SourceKind::Ovmap);
         assert_eq!(source.max_zoom, 18);
         assert_eq!(source.tile_size, 256);
-        assert!(source.url_template.contains("autonavi.com"), "URL 应包含 autonavi.com");
+        assert!(
+            source.url_template.contains("autonavi.com"),
+            "URL 应包含 autonavi.com"
+        );
         assert!(source.url_template.contains("{x}"), "URL 应含 {{x}}");
         assert!(source.url_template.contains("{y}"), "URL 应含 {{y}}");
         assert!(source.url_template.contains("{z}"), "URL 应含 {{z}}");
-        assert_eq!(source.coord_type, CoordType::Gcj02, "高德地图应为 GCJ02 坐标");
+        assert_eq!(
+            source.coord_type,
+            CoordType::Gcj02,
+            "高德地图应为 GCJ02 坐标"
+        );
         assert_eq!(source.subdomains, vec!["1", "2", "3"]);
         println!("url_template: {}", source.url_template);
         println!("subdomains: {:?}", source.subdomains);
@@ -340,13 +344,7 @@ mod tests {
     fn test_convert_placeholders() {
         let host = "webrd0{$serverpart}.is.autonavi.com";
         let path = "/appmaptile?x={$x}&y={$y}&z={$z}";
-        assert_eq!(
-            convert_placeholders(host),
-            "webrd0{s}.is.autonavi.com"
-        );
-        assert_eq!(
-            convert_placeholders(path),
-            "/appmaptile?x={x}&y={y}&z={z}"
-        );
+        assert_eq!(convert_placeholders(host), "webrd0{s}.is.autonavi.com");
+        assert_eq!(convert_placeholders(path), "/appmaptile?x={x}&y={y}&z={z}");
     }
 }

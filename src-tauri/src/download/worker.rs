@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use rand::Rng;
 use reqwest::Client;
 use tokio::time::sleep;
 
@@ -94,7 +95,7 @@ pub fn build_tile_url(source: &TileSource, coord: TileCoord) -> String {
 
     // 替换前端预计算的额外参数（如 Token、时间戳等）
     for (k, v) in &source.extra_params {
-        url = url.replace(&format!("{{{{{}}}}}" , k), v);
+        url = url.replace(&format!("{{{{{}}}}}", k), v);
     }
 
     url
@@ -102,13 +103,17 @@ pub fn build_tile_url(source: &TileSource, coord: TileCoord) -> String {
 
 // ─── 下载 ────────────────────────────────────────────────────────────────────
 
-/// 下载单个瓦片，失败时最多重试 3 次（指数退避）
+/// 下载单个瓦片，失败时按 max_retries 重试（指数退避 + 随机抖动）
 ///
 /// 返回空 Vec 表示该瓦片为空（HTTP 404），调用方可选择跳过或存空数据。
-pub async fn download_tile(client: &Client, coord: TileCoord, source: &TileSource) -> Result<Vec<u8>> {
+pub async fn download_tile(
+    client: &Client,
+    coord: TileCoord,
+    source: &TileSource,
+    max_retries: u32,
+) -> Result<Vec<u8>> {
     let url = build_tile_url(source, coord);
     let origin = extract_origin(&url);
-    const MAX_RETRIES: u32 = 5;
 
     // 判断 TileSource 是否已提供 Referer，避免下方自动推断值覆盖它
     let source_has_referer = source
@@ -116,10 +121,12 @@ pub async fn download_tile(client: &Client, coord: TileCoord, source: &TileSourc
         .keys()
         .any(|k| k.eq_ignore_ascii_case("referer"));
 
-    for attempt in 0..MAX_RETRIES {
+    for attempt in 0..max_retries {
         if attempt > 0 {
-            // 退避：1 s → 2 s → 4 s
-            sleep(Duration::from_secs(2u64.pow(attempt - 1))).await;
+            // 退避：1s + jitter → 2s + jitter → 4s + jitter（防止大量请求同时重试）
+            let base_ms = 1000u64 * 2u64.pow(attempt - 1);
+            let jitter_ms = rand::thread_rng().gen_range(0u64..=500u64);
+            sleep(Duration::from_millis(base_ms + jitter_ms)).await;
         }
 
         let mut req = client
@@ -143,19 +150,14 @@ pub async fn download_tile(client: &Client, coord: TileCoord, source: &TileSourc
             Ok(resp) => {
                 let status = resp.status();
 
-                if status == reqwest::StatusCode::TOO_MANY_REQUESTS
-                    || status.as_u16() == 418
-                {
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.as_u16() == 418 {
                     // 429 / 418（天地图反爬）：触发自适应节流，延长等待后重试
                     throttle::ADAPTIVE.report_failure();
                     sleep(Duration::from_secs(8 + attempt as u64 * 10)).await;
                     continue;
                 }
 
-                if status.as_u16() == 502
-                    || status.as_u16() == 503
-                    || status.as_u16() == 504
-                {
+                if status.as_u16() == 502 || status.as_u16() == 503 || status.as_u16() == 504 {
                     // 502/503/504：服务器临时过载，使用更长的退避重试
                     throttle::ADAPTIVE.report_failure();
                     let wait = 5 + attempt as u64 * 8; // 5s → 13s → 21s
@@ -173,7 +175,7 @@ pub async fn download_tile(client: &Client, coord: TileCoord, source: &TileSourc
                 }
 
                 if !status.is_success() {
-                    if attempt + 1 < MAX_RETRIES {
+                    if attempt + 1 < max_retries {
                         continue;
                     }
                     bail!("HTTP {}: {}", status, url);
@@ -186,11 +188,12 @@ pub async fn download_tile(client: &Client, coord: TileCoord, source: &TileSourc
                 return Ok(bytes.to_vec());
             }
             Err(e) => {
-                if attempt + 1 < MAX_RETRIES {
+                if attempt + 1 < max_retries {
                     continue;
                 }
-                return Err(anyhow::Error::from(e))
-                    .with_context(|| format!("request failed after {} retries: {}", MAX_RETRIES, url));
+                return Err(anyhow::Error::from(e)).with_context(|| {
+                    format!("request failed after {} retries: {}", max_retries, url)
+                });
             }
         }
     }

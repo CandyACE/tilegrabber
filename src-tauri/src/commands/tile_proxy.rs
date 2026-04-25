@@ -30,9 +30,10 @@ pub async fn fetch_tile(
         request = request.header(key.as_str(), value.as_str());
     }
 
-    let response = request.send().await.map_err(|e| {
-        format!("请求失败 {}: {}", url, e)
-    })?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("请求失败 {}: {}", url, e))?;
 
     let status = response.status();
     if !status.is_success() {

@@ -263,6 +263,14 @@ watch(
           task.totalTiles.toLocaleString()
         }})</span
       >
+      <!-- 失败瓦片数徽章 -->
+      <span
+        v-if="task.failedTiles > 0 && task.status !== 'downloading'"
+        class="flex items-center gap-0.5 text-amber-600 font-semibold"
+      >
+        <AlertCircle class="size-3" />
+        {{ t('taskCard.failedBadge', { count: task.failedTiles.toLocaleString() }) }}
+      </span>
       <!-- 瓦片速度（下载中且有实时数据） -->
       <span
         v-if="task.status === 'downloading' && live && live.speed > 0"

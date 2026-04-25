@@ -12,10 +12,10 @@ use std::f64::consts::PI;
 use axum::{
     body::Bytes,
     extract::{Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 use super::{ServerAppState, StatsMap};
 
@@ -25,10 +25,10 @@ fn update_stats(stats: &StatsMap, task_id: &str, service: &str) {
     if let Ok(mut map) = stats.lock() {
         let entry = map.entry(task_id.to_string()).or_default();
         match service {
-            "tms"    => entry.tms_requests    += 1,
-            "wmts"   => entry.wmts_requests   += 1,
-            "wms"    => entry.wms_requests    += 1,
-            "ogc"    => entry.ogc_requests    += 1,
+            "tms" => entry.tms_requests += 1,
+            "wmts" => entry.wmts_requests += 1,
+            "wms" => entry.wms_requests += 1,
+            "ogc" => entry.ogc_requests += 1,
             "arcgis" => entry.arcgis_requests += 1,
             _ => {}
         }
@@ -63,10 +63,8 @@ async fn serve_tile(state: &ServerAppState, task_id: String, z: i64, x: i64, y: 
     };
 
     // 读取瓦片数据（阻塞 IO 放到 spawn_blocking）
-    let result = tokio::task::spawn_blocking(move || {
-        read_tile_from_store(&tile_store_path, z, x, y)
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || read_tile_from_store(&tile_store_path, z, x, y)).await;
 
     match result {
         Ok(Ok(Some((data, format)))) => {
@@ -165,9 +163,7 @@ pub async fn wmts_dispatch(
         .to_ascii_uppercase();
 
     match request.as_str() {
-        "GETCAPABILITIES" | "GETMAP" => {
-            wmts_get_capabilities(&state, &task_id).await
-        }
+        "GETCAPABILITIES" | "GETMAP" => wmts_get_capabilities(&state, &task_id).await,
         "GETTILE" => wmts_get_tile(State(state), Path(task_id), Query(params)).await,
         _ => (StatusCode::BAD_REQUEST, "unsupported WMTS REQUEST").into_response(),
     }
@@ -392,7 +388,7 @@ pub async fn wms_dispatch(
 
     match request.as_str() {
         "GETCAPABILITIES" => wms_get_capabilities(&state, &task_id).await,
-        "GETMAP"          => wms_get_map(&state, &task_id, &params).await,
+        "GETMAP" => wms_get_map(&state, &task_id, &params).await,
         _ => (StatusCode::BAD_REQUEST, "unsupported WMS REQUEST").into_response(),
     }
 }
@@ -445,11 +441,11 @@ async fn wms_get_capabilities(state: &ServerAppState, task_id: &str) -> Response
 </WMT_MS_Capabilities>"#,
         online_resource = online_resource,
         task_id = task_id,
-        name    = task.name,
-        west    = task.bounds_west,
-        south   = task.bounds_south,
-        east    = task.bounds_east,
-        north   = task.bounds_north,
+        name = task.name,
+        west = task.bounds_west,
+        south = task.bounds_south,
+        east = task.bounds_east,
+        north = task.bounds_north,
     );
 
     let mut headers = HeaderMap::new();
@@ -460,11 +456,7 @@ async fn wms_get_capabilities(state: &ServerAppState, task_id: &str) -> Response
     (headers, xml).into_response()
 }
 
-async fn wms_get_map(
-    state: &ServerAppState,
-    task_id: &str,
-    params: &WmsParams,
-) -> Response {
+async fn wms_get_map(state: &ServerAppState, task_id: &str, params: &WmsParams) -> Response {
     // ── 解析必填参数 ─────────────────────────────────────────────────────────
     let bbox_str = match &params.bbox {
         Some(b) => b.clone(),
@@ -475,10 +467,18 @@ async fn wms_get_map(
         .filter_map(|s| s.trim().parse().ok())
         .collect();
     if parts.len() != 4 {
-        return (StatusCode::BAD_REQUEST, "invalid BBOX, expected minx,miny,maxx,maxy").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "invalid BBOX, expected minx,miny,maxx,maxy",
+        )
+            .into_response();
     }
 
-    let srs = params.srs.as_deref().or(params.crs.as_deref()).unwrap_or("EPSG:4326");
+    let srs = params
+        .srs
+        .as_deref()
+        .or(params.crs.as_deref())
+        .unwrap_or("EPSG:4326");
 
     // 统一转换为 WGS84 (lon, lat)
     let (mut min_lon, mut min_lat, mut max_lon, mut max_lat) =
@@ -491,15 +491,29 @@ async fn wms_get_map(
         };
 
     // 保证方向正确
-    if min_lon > max_lon { std::mem::swap(&mut min_lon, &mut max_lon); }
-    if min_lat > max_lat { std::mem::swap(&mut min_lat, &mut max_lat); }
+    if min_lon > max_lon {
+        std::mem::swap(&mut min_lon, &mut max_lon);
+    }
+    if min_lat > max_lat {
+        std::mem::swap(&mut min_lat, &mut max_lat);
+    }
 
     // 裁剪到 Mercator 有效范围
     min_lat = min_lat.clamp(-85.051129, 85.051129);
     max_lat = max_lat.clamp(-85.051129, 85.051129);
 
-    let width:  u32 = params.width.as_deref().and_then(|s| s.parse().ok()).unwrap_or(256).min(4096);
-    let height: u32 = params.height.as_deref().and_then(|s| s.parse().ok()).unwrap_or(256).min(4096);
+    let width: u32 = params
+        .width
+        .as_deref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256)
+        .min(4096);
+    let height: u32 = params
+        .height
+        .as_deref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256)
+        .min(4096);
 
     // ── 查询任务元数据 ────────────────────────────────────────────────────────
     let task = match state.app_db.get_task(task_id) {
@@ -521,14 +535,14 @@ async fn wms_get_map(
     let n = (1u64 << z) as f64;
 
     // ── 计算瓦片范围（XYZ 约定，Y=0 在北）────────────────────────────────────
-    let merc_top    = mercator_y(max_lat);
+    let merc_top = mercator_y(max_lat);
     let merc_bottom = mercator_y(min_lat);
-    let merc_range  = (merc_top - merc_bottom).max(1e-10);
+    let merc_range = (merc_top - merc_bottom).max(1e-10);
 
     let tx_min = ((min_lon + 180.0) / 360.0 * n).floor() as i64;
-    let tx_max = ((max_lon + 180.0) / 360.0 * n).ceil()  as i64;
-    let ty_min = ((1.0 - merc_top    / PI) / 2.0 * n).floor() as i64;
-    let ty_max = ((1.0 - merc_bottom / PI) / 2.0 * n).ceil()  as i64;
+    let tx_max = ((max_lon + 180.0) / 360.0 * n).ceil() as i64;
+    let ty_min = ((1.0 - merc_top / PI) / 2.0 * n).floor() as i64;
+    let ty_max = ((1.0 - merc_bottom / PI) / 2.0 * n).ceil() as i64;
 
     let tx_min = tx_min.max(0);
     let tx_max = tx_max.min(n as i64);
@@ -540,7 +554,11 @@ async fn wms_get_map(
         .collect();
 
     if tiles.len() > 512 {
-        return (StatusCode::BAD_REQUEST, "BBOX covers too many tiles; reduce area or increase zoom").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "BBOX covers too many tiles; reduce area or increase zoom",
+        )
+            .into_response();
     }
 
     // ── 在线程池中执行同步 IO 与图像合成 ─────────────────────────────────────
@@ -615,11 +633,14 @@ async fn wms_get_map(
         Ok(Ok(png)) => {
             let mut headers = HeaderMap::new();
             headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
-            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600"));
+            headers.insert(
+                header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=3600"),
+            );
             (headers, Bytes::from(png)).into_response()
         }
         Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        Err(e)     => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
 
@@ -808,4 +829,3 @@ pub async fn arcgis_tile(
     update_stats(&state.stats, &task_id, "arcgis");
     serve_tile(&state, task_id, z, col, row).await
 }
-

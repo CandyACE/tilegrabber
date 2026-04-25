@@ -45,7 +45,10 @@ pub async fn parse_tms_url(url: String, name: Option<String>) -> Result<TileSour
 ///
 /// 由于需要网络请求，此命令为 async 且耗时较长。
 #[command]
-pub async fn parse_wmts_url(url: String, app_db: State<'_, AppDb>) -> Result<Vec<TileSource>, String> {
+pub async fn parse_wmts_url(
+    url: String,
+    app_db: State<'_, AppDb>,
+) -> Result<Vec<TileSource>, String> {
     // 构建 GetCapabilities 请求 URL
     let caps_url = build_capabilities_url(&url);
     let proxy_url = get_active_proxy_url(app_db.inner());
@@ -97,7 +100,10 @@ pub async fn parse_wmts_url(url: String, app_db: State<'_, AppDb>) -> Result<Vec
 
 /// 验证瓦片 URL 是否可访问（探测 z=0/x=0/y=0 瓦片）
 #[command]
-pub async fn validate_tile_url(url_template: String, app_db: State<'_, AppDb>) -> Result<bool, String> {
+pub async fn validate_tile_url(
+    url_template: String,
+    app_db: State<'_, AppDb>,
+) -> Result<bool, String> {
     // 替换占位符为 z=1, x=0, y=0 的实际坐标
     let test_url = url_template
         .replace("{z}", "1")
@@ -123,15 +129,11 @@ pub async fn validate_tile_url(url_template: String, app_db: State<'_, AppDb>) -
         .build()
         .map_err(|e| format!("HTTP 客户端初始化失败: {e}"))?;
 
-    let result = client
-        .head(&test_url)
-        .send()
-        .await
-        .or_else(|_| {
-            // HEAD 不可用时降级为 GET
-            let _ = &test_url; // 借用检查
-            Err(anyhow::anyhow!("HEAD 请求失败"))
-        });
+    let result = client.head(&test_url).send().await.or_else(|_| {
+        // HEAD 不可用时降级为 GET
+        let _ = &test_url; // 借用检查
+        Err(anyhow::anyhow!("HEAD 请求失败"))
+    });
 
     match result {
         Ok(resp) => Ok(resp.status().is_success() || resp.status().as_u16() == 302),
@@ -152,9 +154,7 @@ pub async fn validate_tile_url(url_template: String, app_db: State<'_, AppDb>) -
 /// 返回第一个多边形坐标面及其外包围矩形。
 /// `polygon` 为 `null` 时表示文件中只有点/线要素，此时只返回 bounds。
 #[command]
-pub async fn parse_area_file(
-    path: String,
-) -> Result<crate::parser::area_file::ParsedArea, String> {
+pub async fn parse_area_file(path: String) -> Result<crate::parser::area_file::ParsedArea, String> {
     crate::parser::area_file::parse_area_file(std::path::Path::new(&path))
         .map_err(|e| e.to_string())
 }
@@ -180,7 +180,9 @@ pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
                 .prepare("SELECT name, value FROM metadata")
                 .map_err(|e| e.to_string())?;
             let rows: Vec<_> = stmt
-                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })
                 .map_err(|e| e.to_string())?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -208,15 +210,26 @@ pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
             (-180.0, -85.0511, 180.0, 85.0511)
         };
 
-        let min_zoom: u8 = meta.get("minzoom").and_then(|s| s.parse().ok()).unwrap_or(0);
-        let max_zoom: u8 = meta.get("maxzoom").and_then(|s| s.parse().ok()).unwrap_or(18);
+        let min_zoom: u8 = meta
+            .get("minzoom")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let max_zoom: u8 = meta
+            .get("maxzoom")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(18);
         let format = meta.get("format").cloned().unwrap_or_else(|| "png".into());
 
         Ok(TileSource {
             kind: SourceKind::MbtileFile,
             name,
             url_template: path,
-            bounds: Bounds { west, south, east, north },
+            bounds: Bounds {
+                west,
+                south,
+                east,
+                north,
+            },
             min_zoom,
             max_zoom,
             format,

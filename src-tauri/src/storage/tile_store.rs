@@ -110,18 +110,14 @@ impl TileStore {
                      VALUES (?1, ?2, ?3, 'pending')",
                 )?;
                 for tile in tiles {
-                    stmt.execute(params![
-                        tile.z as i64,
-                        tile.x as i64,
-                        tile.y as i64
-                    ])?;
+                    stmt.execute(params![tile.z as i64, tile.x as i64, tile.y as i64])?;
                 }
             }
             tx.commit()?;
         }
-        let total: i64 = self
-            .lock()?
-            .query_row("SELECT COUNT(*) FROM download_state", [], |r| r.get(0))?;
+        let total: i64 =
+            self.lock()?
+                .query_row("SELECT COUNT(*) FROM download_state", [], |r| r.get(0))?;
         Ok(total)
     }
 
@@ -197,7 +193,12 @@ impl TileStore {
                  WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3",
             )?;
             for (coord, data) in tiles {
-                insert_stmt.execute(params![coord.z as i64, coord.x as i64, coord.y as i64, data])?;
+                insert_stmt.execute(params![
+                    coord.z as i64,
+                    coord.x as i64,
+                    coord.y as i64,
+                    data
+                ])?;
                 update_stmt.execute(params![coord.z as i64, coord.x as i64, coord.y as i64])?;
             }
         }
@@ -240,7 +241,12 @@ impl TileStore {
                  WHERE zoom_level=?2 AND tile_column=?3 AND tile_row=?4",
             )?;
             for (coord, error) in failures {
-                stmt.execute(params![error, coord.z as i64, coord.x as i64, coord.y as i64])?;
+                stmt.execute(params![
+                    error,
+                    coord.z as i64,
+                    coord.x as i64,
+                    coord.y as i64
+                ])?;
             }
         }
         tx.commit()?;
@@ -262,8 +268,10 @@ impl TileStore {
     /// 将失败的瓦片重置为 pending（用于重试）
     pub fn reset_failed(&self) -> Result<i64> {
         let conn = self.lock()?;
-        let count =
-            conn.execute("UPDATE download_state SET status='pending' WHERE status='failed'", [])?;
+        let count = conn.execute(
+            "UPDATE download_state SET status='pending' WHERE status='failed'",
+            [],
+        )?;
         Ok(count as i64)
     }
 
@@ -296,7 +304,9 @@ impl TileStore {
         let conn = self.lock()?;
         let mut stmt = conn.prepare("SELECT name, value FROM metadata")?;
         let pairs = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(pairs.into_iter().collect())
     }

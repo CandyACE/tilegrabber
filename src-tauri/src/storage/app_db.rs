@@ -211,12 +211,12 @@ impl AppDb {
         )?;
         // 迁移旧数据库：添加 clip_to_bounds 列（忽略已存在时的错误）
         conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN clip_to_bounds INTEGER NOT NULL DEFAULT 0;"
-        ).ok();
+            "ALTER TABLE tasks ADD COLUMN clip_to_bounds INTEGER NOT NULL DEFAULT 0;",
+        )
+        .ok();
         // 迁移旧数据库：添加 polygon_wgs84 列
-        conn.execute_batch(
-            "ALTER TABLE tasks ADD COLUMN polygon_wgs84 TEXT;"
-        ).ok();
+        conn.execute_batch("ALTER TABLE tasks ADD COLUMN polygon_wgs84 TEXT;")
+            .ok();
         Ok(())
     }
 
@@ -328,6 +328,17 @@ impl AppDb {
         Ok(())
     }
 
+    /// 查询当前 status='downloading' 的所有任务 ID（在 reset 前调用，用于崩溃自动续传）
+    pub fn get_downloading_task_ids(&self) -> Result<Vec<String>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT id FROM tasks WHERE status='downloading'")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(ids)
+    }
+
     pub fn delete_task(&self, id: &str) -> Result<()> {
         let conn = self.lock()?;
         conn.execute("DELETE FROM tasks WHERE id=?1", params![id])?;
@@ -373,7 +384,9 @@ impl AppDb {
         let conn = self.lock()?;
         let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
         let pairs = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(pairs.into_iter().collect())
     }
@@ -408,14 +421,22 @@ impl AppDb {
         let conn = self.lock()?;
         // sort_order 取当前最大值 + 1
         let max_order: i64 = conn
-            .query_row("SELECT COALESCE(MAX(sort_order), -1) FROM layers", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM layers",
+                [],
+                |r| r.get(0),
+            )
             .unwrap_or(-1);
         conn.execute(
             "INSERT INTO layers (id, name, source_config, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-            params![id, new_layer.name, new_layer.source_config, max_order + 1, now],
+            params![
+                id,
+                new_layer.name,
+                new_layer.source_config,
+                max_order + 1,
+                now
+            ],
         )?;
         Ok(())
     }

@@ -57,5 +57,8 @@ pub fn generate_tile_grid(
     let crs = crs.unwrap_or(CrsType::WebMercator);
     let (geojson, tile_count) = generate_tile_grid_geojson(&bounds, zoom, &crs, 500);
 
-    Ok(TileGrid { geojson, tile_count })
+    Ok(TileGrid {
+        geojson,
+        tile_count,
+    })
 }

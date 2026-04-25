@@ -31,9 +31,7 @@ pub fn parse_tms_url(url: &str, name: Option<&str>) -> Result<TileSource> {
 
     if !has_xyz && !has_d {
         // 可能是 WMTS 服务 URL，尝试自动识别
-        if url.to_lowercase().contains("wmts")
-            || url.to_lowercase().contains("service=wmts")
-        {
+        if url.to_lowercase().contains("wmts") || url.to_lowercase().contains("service=wmts") {
             return Err(anyhow!(
                 "看起来是 WMTS 服务 URL，请使用 WMTS 解析器或手动添加 {{z}}/{{x}}/{{y}} 占位符"
             ));
@@ -118,7 +116,11 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                         if let Some(layer) = &mut current_layer {
                             let attrs = parse_wmts_attrs(&e);
                             // 只取 tile 类型的 ResourceURL
-                            if attrs.get("resourceType").map(|s| s == "tile").unwrap_or(false) {
+                            if attrs
+                                .get("resourceType")
+                                .map(|s| s == "tile")
+                                .unwrap_or(false)
+                            {
                                 if let Some(tpl) = attrs.get("template") {
                                     // 转换 {TileMatrix}/{TileRow}/{TileCol} → {z}/{y}/{x}
                                     let url = normalize_wmts_url(tpl);
@@ -197,10 +199,7 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
 }
 
 /// 将 WMTS 图层 + TileMatrixSet 构建为 TileSource
-pub fn wmts_layer_to_source(
-    layer: &WmtsLayer,
-    capabilities_url: &str,
-) -> Option<TileSource> {
+pub fn wmts_layer_to_source(layer: &WmtsLayer, capabilities_url: &str) -> Option<TileSource> {
     let url = if let Some(resource) = &layer.resource_url {
         resource.clone()
     } else {
@@ -245,9 +244,7 @@ pub fn wmts_layer_to_source(
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
-fn parse_wmts_attrs(
-    e: &quick_xml::events::BytesStart,
-) -> HashMap<String, String> {
+fn parse_wmts_attrs(e: &quick_xml::events::BytesStart) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for attr in e.attributes().flatten() {
         let key = String::from_utf8_lossy(attr.key.local_name().as_ref()).to_string();
@@ -280,7 +277,11 @@ fn build_wmts_kvp_url(base_url: &str, layer_id: &str, layer: &WmtsLayer) -> Stri
         .cloned()
         .unwrap_or_else(|| "GoogleMapsCompatible".to_string());
 
-    let format = layer.formats.first().cloned().unwrap_or_else(|| "image/png".to_string());
+    let format = layer
+        .formats
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "image/png".to_string());
 
     format!(
         "{}?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0\
@@ -333,8 +334,11 @@ mod tests {
 
     #[test]
     fn test_parse_tms_url() {
-        let src =
-            parse_tms_url("https://tile.openstreetmap.org/{z}/{x}/{y}.png", Some("OSM")).unwrap();
+        let src = parse_tms_url(
+            "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+            Some("OSM"),
+        )
+        .unwrap();
         assert_eq!(src.name, "OSM");
         assert_eq!(src.format, "png");
     }

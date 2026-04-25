@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import {
   Globe,
@@ -121,6 +121,53 @@ const crsLabel = computed(() => {
     UNKNOWN: t('downloadSetup.crsLabels.UNKNOWN'),
   };
   return labels[props.source.crs ?? ""] ?? "—";
+});
+
+// ─── 下载规模估算 ──────────────────────────────────────────────────────────────
+
+interface EstimateInfo {
+  tile_count: number;
+  estimated_bytes: number;
+}
+
+const estimate = ref<EstimateInfo | null>(null);
+let estimateTimer: ReturnType<typeof setTimeout> | null = null;
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes >= 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(0)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
+}
+
+async function refreshEstimate() {
+  if (!props.bounds) {
+    estimate.value = null;
+    return;
+  }
+  try {
+    estimate.value = await invoke<EstimateInfo>("estimate_download", {
+      west: props.bounds.west,
+      east: props.bounds.east,
+      south: props.bounds.south,
+      north: props.bounds.north,
+      minZoom: minZoom.value,
+      maxZoom: maxZoom.value,
+      crsStr: props.source.crs ?? "WEB_MERCATOR",
+    });
+  } catch {
+    estimate.value = null;
+  }
+}
+
+function scheduleEstimate() {
+  if (estimateTimer) clearTimeout(estimateTimer);
+  estimateTimer = setTimeout(refreshEstimate, 400);
+}
+
+watch(() => [props.bounds, minZoom.value, maxZoom.value], scheduleEstimate, {
+  immediate: true,
 });
 </script>
 
@@ -388,6 +435,15 @@ const crsLabel = computed(() => {
       class="shrink-0 p-4 border-t space-y-2"
       style="border-color: var(--color-border-subtle)"
     >
+      <!-- 下载规模估算 -->
+      <div
+        v-if="bounds && estimate"
+        class="flex items-center justify-between text-xs px-1"
+        style="color: var(--color-text-muted)"
+      >
+        <span>{{ t('downloadSetup.estimateTiles', { count: estimate.tile_count.toLocaleString() }) }}</span>
+        <span class="font-mono">~{{ formatBytes(estimate.estimated_bytes) }}</span>
+      </div>
       <button
         class="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition-colors"
         :class="

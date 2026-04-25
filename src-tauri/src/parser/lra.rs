@@ -21,8 +21,8 @@ use crate::types::{SourceKind, TileSource};
 
 /// 从文件路径解析 .lra 文件
 pub fn parse_lra_file(path: &Path) -> Result<TileSource> {
-    let raw = std::fs::read(path)
-        .with_context(|| format!("无法读取 lra 文件: {}", path.display()))?;
+    let raw =
+        std::fs::read(path).with_context(|| format!("无法读取 lra 文件: {}", path.display()))?;
 
     let name = path
         .file_stem()
@@ -104,8 +104,7 @@ fn find_xml_start(data: &[u8]) -> Option<usize> {
 
 /// 解析 JSON 格式的 lra（3D Tiles 或自定义配置）
 fn parse_lra_json(json: &str, default_name: &str) -> Result<TileSource> {
-    let v: serde_json::Value =
-        serde_json::from_str(json).with_context(|| "lra JSON 解析失败")?;
+    let v: serde_json::Value = serde_json::from_str(json).with_context(|| "lra JSON 解析失败")?;
 
     if let Some(base_uri) = v.get("baseUri").or_else(|| {
         v.get("root")

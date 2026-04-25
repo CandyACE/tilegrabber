@@ -18,7 +18,8 @@ use commands::source::{
     parse_wmts_url, validate_tile_url,
 };
 use commands::task::{
-    cancel_download, check_disk_space, create_task, delete_task, export_directory, export_geotiff,
+    cancel_download, check_disk_space, create_task, delete_task, estimate_download,
+    export_directory, export_geotiff,
     export_mbtiles, export_task, get_download_progress_geojson, get_export_jobs, get_stored_tile,
     get_task, get_task_logs, get_task_thumbnail, import_mbtiles, import_task, list_tasks,
     pause_download, resume_download, retry_failed, reveal_in_explorer, start_download, ExportState,
@@ -118,6 +119,10 @@ pub fn run() {
             })?;
             // 应用重启后，将遗留的 downloading 任务重置为 paused，
             // 防止任务卡在"下载中"但引擎无句柄而无法操作的问题
+            // 先获取"崩溃中断"的任务 ID，用于后续自动续传
+            let interrupted_ids = app_db
+                .get_downloading_task_ids()
+                .unwrap_or_default();
             let _ = app_db.reset_downloading_to_paused();
             app.manage(app_db);
 
@@ -254,6 +259,39 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // 崩溃自动续传：延迟 5 秒后自动恢复被中断的任务（如设置允许）
+            if !interrupted_ids.is_empty() {
+                let auto_resume_enabled = app
+                    .state::<AppDb>()
+                    .get_setting("app.auto_resume_on_startup")
+                    .ok()
+                    .flatten()
+                    .map(|v| v != "false")
+                    .unwrap_or(true);
+                if auto_resume_enabled {
+                    let engine_ref = app.state::<DownloadEngine>().inner().clone();
+                    let db_ref = app.state::<AppDb>().inner().clone();
+                    let app_handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let c = db_ref
+                            .get_setting("download.concurrency")
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .filter(|&n| n > 0)
+                            .unwrap_or(16);
+                        for id in interrupted_ids {
+                            if let Ok(task) = db_ref.get_task(&id) {
+                                if task.status == "paused" {
+                                    engine_ref.start(id, db_ref.clone(), c, app_handle.clone()).ok();
+                                }
+                            }
+                        }
+                    });
+                }
+            }
+
             // 启动后静默检查更新（延迟 12 秒，避免干扰应用启动）
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -297,6 +335,7 @@ pub fn run() {
             retry_failed,
             get_task_logs,
             check_disk_space,
+            estimate_download,
             // 本地瓦片读取（地图预览）
             get_stored_tile,
             get_task_thumbnail,

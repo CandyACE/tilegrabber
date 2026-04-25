@@ -2,6 +2,7 @@ export default {
   appName: '御图',
   app: {
     networkOffline: '网络已断开 — 下载任务已自动暂停，网络恢复后将自动继续',
+    diskFull: '磁盘空间不足（< 200 MB），任务已自动暂停，请清理磁盘后手动继续',
   },
 
   nav: {
@@ -321,6 +322,7 @@ export default {
     retry: '重试',
     delete: '删除',
     exporting: '导出中',
+    failedBadge: '⚠ {count} 失败',
     status: {
       downloading: '下载中',
       paused: '已暂停',
@@ -476,6 +478,7 @@ export default {
     clipDesc: '导出时将边缘瓦片精确裁剪至选框，避免溢出区域数据',
     startDownload: '开始下载',
     cancel: '取消',
+    estimateTiles: '约 {count} 块瓦片',
     crsLabels: {
       WEB_MERCATOR: 'EPSG:3857',
       WGS84: 'EPSG:4326',

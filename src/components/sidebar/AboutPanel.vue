@@ -4,12 +4,10 @@ import { getVersion } from "@tauri-apps/api/app";
 import { useI18n } from "vue-i18n";
 import {
   ExternalLink,
-  MapPin,
-  Building2,
-  Mail,
-  Globe,
+  Github,
   Shield,
   Coffee,
+  BookOpen,
 } from "lucide-vue-next";
 import logoUrl from "~/assets/logo.png";
 
@@ -127,76 +125,55 @@ const features = computed(() => tm('about.features') as string[])
           </ul>
         </section>
 
-        <!-- 公司信息 -->
+        <!-- 开源项目 -->
         <section class="space-y-3">
           <h3
             class="text-sm font-semibold flex items-center gap-2"
             style="color: var(--color-text-primary)"
           >
-            <Building2 class="size-4" style="color: var(--color-accent)" />
-            {{ t('about.companyTitle') }}
+            <BookOpen class="size-4" style="color: var(--color-accent)" />
+            {{ t('about.openSourceTitle') }}
           </h3>
           <div
             class="rounded-xl border overflow-hidden"
             style="border-color: var(--color-border-subtle)"
           >
-            <div
-              class="flex items-start gap-3 p-4 border-b"
+            <a
+              href="https://github.com/CandyACE/tilegrabber"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="flex items-center gap-3 p-4 border-b transition-colors hover:opacity-80"
               style="
                 background: var(--color-surface);
                 border-color: var(--color-border-subtle);
+                text-decoration: none;
               "
             >
-              <Building2
+              <Github
                 class="size-4 mt-0.5 shrink-0"
                 style="color: var(--color-accent)"
               />
-              <div>
+              <div class="flex-1 min-w-0">
                 <p
                   class="text-xs font-medium"
                   style="color: var(--color-text-muted)"
                 >
-                  {{ t('about.companyNameLabel') }}
+                  {{ t('about.githubLabel') }}
                 </p>
                 <p
-                  class="text-sm mt-0.5"
+                  class="text-sm mt-0.5 truncate"
                   style="color: var(--color-text-primary)"
                 >
-                  {{ t('about.companyName') }}
+                  github.com/CandyACE/tilegrabber
                 </p>
               </div>
-            </div>
-            <div
-              class="flex items-start gap-3 p-4 border-b"
-              style="
-                background: var(--color-surface);
-                border-color: var(--color-border-subtle);
-              "
-            >
-              <Globe
-                class="size-4 mt-0.5 shrink-0"
-                style="color: var(--color-accent)"
-              />
-              <div>
-                <p
-                  class="text-xs font-medium"
-                  style="color: var(--color-text-muted)"
-                >
-                  {{ t('about.industryLabel') }}
-                </p>
-                <p
-                  class="text-sm mt-0.5"
-                  style="color: var(--color-text-primary)"
-                >
-                  {{ t('about.industry') }}
-                </p>
-              </div>
-            </div>
+              <ExternalLink class="size-3.5 shrink-0" style="color: var(--color-text-muted)" />
+            </a>
             <div
               class="flex items-start gap-3 p-4"
               style="background: var(--color-surface)"
             >
-              <Mail
+              <Shield
                 class="size-4 mt-0.5 shrink-0"
                 style="color: var(--color-accent)"
               />
@@ -205,13 +182,13 @@ const features = computed(() => tm('about.features') as string[])
                   class="text-xs font-medium"
                   style="color: var(--color-text-muted)"
                 >
-                  {{ t('about.contactLabel') }}
+                  {{ t('about.licenseLabel') }}
                 </p>
                 <p
                   class="text-sm mt-0.5"
                   style="color: var(--color-text-primary)"
                 >
-                  400@yukongcloud.com
+                  MIT License
                 </p>
               </div>
             </div>
@@ -230,10 +207,7 @@ const features = computed(() => tm('about.features') as string[])
           <p class="font-medium" style="color: var(--color-text-secondary)">
             {{ t('about.copyright') }}
           </p>
-          <p>{{ t('about.rightsReserved') }}</p>
-          <p class="pt-1">
-            {{ t('about.mapDataNote') }}
-          </p>
+          <p>{{ t('about.mapDataNote') }}</p>
         </section>
       </div>
     </div>
