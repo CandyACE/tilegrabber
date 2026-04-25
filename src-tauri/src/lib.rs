@@ -49,6 +49,7 @@ struct NetworkStatusPayload {
 }
 
 /// 使用 reqwest 探测网络可达性（走当前配置的代理）
+/// 探测网络连通性：请求百度，能收到响应即认为在线。
 async fn probe_network(proxy_url: Option<String>) -> bool {
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
@@ -64,7 +65,7 @@ async fn probe_network(proxy_url: Option<String>) -> bool {
         Err(_) => return false,
     };
     client
-        .head("https://tile.openstreetmap.org/")
+        .head("https://www.baidu.com/favicon.ico")
         .send()
         .await
         .is_ok()
@@ -155,7 +156,11 @@ pub fn run() {
                 let db_ref = app.state::<AppDb>().inner().clone();
                 let paused_ref = net_paused.clone();
                 tauri::async_runtime::spawn(async move {
-                    let mut was_online = true;
+                    // None = 尚未确认状态；Some(true) = 在线；Some(false) = 离线
+                    let mut was_online: Option<bool> = None;
+                    // 连续失败计数：需要连续 2 次失败才声明离线，防止瞬时抖动
+                    let mut consecutive_failures: u32 = 0;
+                    const FAILURES_BEFORE_OFFLINE: u32 = 2;
                     // 首次延迟 20 秒，避免干扰启动阶段的正常网络请求
                     tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                     loop {
@@ -164,48 +169,62 @@ pub fn run() {
                             commands::settings::get_active_proxy_url(&db_ref);
                         let online = probe_network(proxy_url).await;
 
-                        if was_online && !online {
-                            // 网络刚断开：暂停所有正在下载的任务并记录 ID
-                            let running = engine_ref.running_task_ids();
-                            for id in &running {
-                                engine_ref.pause(id).ok();
-                            }
-                            if let Ok(mut set) = paused_ref.lock() {
-                                set.extend(running);
-                            }
-                            let _ =
-                                app_handle.emit("tilegrab-network-status", NetworkStatusPayload { online: false });
-                        } else if !was_online && online {
-                            // 网络刚恢复：只恢复当初被网络中断自动暂停的任务
-                            let to_resume: Vec<String> = paused_ref
-                                .lock()
-                                .map(|mut set| set.drain().collect())
-                                .unwrap_or_default();
-                            let concurrency = commands::settings::get_active_proxy_url(&db_ref)
-                                .map(|_| 16usize)
-                                .unwrap_or(16);
-                            let _ = concurrency; // concurrency is read per-task inside engine.start
-                            for id in to_resume {
-                                // 如果任务仍在引擎中（已暂停），直接发 Run 信号
-                                if engine_ref.is_active(&id) {
-                                    engine_ref.resume(&id).ok();
-                                } else {
-                                    // 引擎无记录（不常见），重新启动
-                                    let c = db_ref
-                                        .get_setting("download.concurrency")
-                                        .ok()
-                                        .flatten()
-                                        .and_then(|s| s.parse::<usize>().ok())
-                                        .filter(|&n| n > 0)
-                                        .unwrap_or(16);
-                                    engine_ref.start(id, db_ref.clone(), c, app_handle.clone()).ok();
-                                }
-                            }
-                            let _ =
-                                app_handle.emit("tilegrab-network-status", NetworkStatusPayload { online: true });
+                        if online {
+                            consecutive_failures = 0;
+                        } else {
+                            consecutive_failures += 1;
                         }
 
-                        was_online = online;
+                        // 实际使用的在线状态：失败次数未达阈值时仍视为在线
+                        let effective_online =
+                            online || consecutive_failures < FAILURES_BEFORE_OFFLINE;
+
+                        match was_online {
+                            Some(prev) if prev && !effective_online => {
+                                // 网络刚断开：暂停所有正在下载的任务并记录 ID
+                                let running = engine_ref.running_task_ids();
+                                for id in &running {
+                                    engine_ref.pause(id).ok();
+                                }
+                                if let Ok(mut set) = paused_ref.lock() {
+                                    set.extend(running);
+                                }
+                                let _ = app_handle.emit(
+                                    "tilegrab-network-status",
+                                    NetworkStatusPayload { online: false },
+                                );
+                            }
+                            Some(prev) if !prev && effective_online => {
+                                // 网络刚恢复：只恢复当初被网络中断自动暂停的任务
+                                let to_resume: Vec<String> = paused_ref
+                                    .lock()
+                                    .map(|mut set| set.drain().collect())
+                                    .unwrap_or_default();
+                                for id in to_resume {
+                                    if engine_ref.is_active(&id) {
+                                        engine_ref.resume(&id).ok();
+                                    } else {
+                                        let c = db_ref
+                                            .get_setting("download.concurrency")
+                                            .ok()
+                                            .flatten()
+                                            .and_then(|s| s.parse::<usize>().ok())
+                                            .filter(|&n| n > 0)
+                                            .unwrap_or(16);
+                                        engine_ref
+                                            .start(id, db_ref.clone(), c, app_handle.clone())
+                                            .ok();
+                                    }
+                                }
+                                let _ = app_handle.emit(
+                                    "tilegrab-network-status",
+                                    NetworkStatusPayload { online: true },
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        was_online = Some(effective_online);
                         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                     }
                 });
