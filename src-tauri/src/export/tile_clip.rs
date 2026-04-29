@@ -30,7 +30,7 @@ use crate::types::{Bounds, CrsType};
 /// 相对于默认压缩（level 6），速度约快 2-4×，文件体积增大约 30-50%。
 /// 仅用于边界瓦片，对整体存储体积影响有限。
 #[inline]
-fn encode_png_fast(img: &RgbaImage) -> Result<Vec<u8>> {
+pub fn encode_png_fast(img: &RgbaImage) -> Result<Vec<u8>> {
     let mut buf = Vec::new();
     PngEncoder::new_with_quality(
         Cursor::new(&mut buf),

@@ -18,6 +18,7 @@ interface SourceInfo {
   kind: string;
   minZoom: number;
   maxZoom: number;
+  coordType: string;
 }
 
 // ─── Props & Emits ─────────────────────────────────────────────────────────
@@ -68,6 +69,7 @@ function parseSource(sourceConfig: string): SourceInfo | null {
       kind: KIND_LABELS[s.kind] ?? s.kind ?? "未知",
       minZoom: s.min_zoom ?? 0,
       maxZoom: s.max_zoom ?? 22,
+      coordType: s.coord_type ?? "WGS84",
     };
   } catch {
     return null;
@@ -297,6 +299,14 @@ defineExpose({ loadLayers });
                       class="font-medium"
                       :class="selectedLayerId === layer.id ? 'text-blue-500' : 'text-slate-500'"
                     >{{ parseSource(layer.sourceConfig)?.kind }}</span>
+                    <template v-if="parseSource(layer.sourceConfig)?.coordType === 'GCJ02'">
+                      <span class="mx-1 text-slate-300">·</span>
+                      <span
+                        class="inline-flex items-center rounded px-1 py-px text-[10px] font-semibold leading-none"
+                        :class="selectedLayerId === layer.id ? 'bg-amber-100 text-amber-700' : 'bg-amber-50 text-amber-600'"
+                        title="已启用 GCJ02 坐标纠偏（高德/火星坐标）"
+                      >GCJ02纠偏</span>
+                    </template>
                     <span class="mx-1 text-slate-300">·</span>
                     <span>z{{ parseSource(layer.sourceConfig)?.minZoom }}–{{ parseSource(layer.sourceConfig)?.maxZoom }}</span>
                     <span class="mx-1 text-slate-300">·</span>

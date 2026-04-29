@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::download::engine::DownloadEngine;
-use crate::storage::app_db::{AppDb, LogEntry, NewTask, Task};
+use crate::storage::app_db::{AppDb, CompletedTaskPreview, LogEntry, NewTask, Task};
 
 // ─── 导出任务状态 ─────────────────────────────────────────────────────────────
 
@@ -229,6 +229,22 @@ pub async fn list_tasks(app_db: State<'_, AppDb>) -> Result<Vec<Task>, String> {
 #[tauri::command]
 pub async fn get_task(task_id: String, app_db: State<'_, AppDb>) -> Result<Task, String> {
     app_db.get_task(&task_id).map_err(|e| e.to_string())
+}
+
+/// 查找与给定数据源匹配的最新已完成任务，返回其 ID 和下载范围/层级信息。
+///
+/// 匹配条件：url_template + coord_type + kind 三者均相同。
+/// 主要用途：GCJ02 来源在完成下载并合成纠偏后，前端可改用本地存储瓦片替代在线拉取。
+#[tauri::command]
+pub fn find_completed_task_for_source(
+    url_template: String,
+    coord_type: String,
+    kind: String,
+    app_db: State<'_, AppDb>,
+) -> Option<CompletedTaskPreview> {
+    app_db
+        .find_completed_task_for_source(&url_template, &coord_type, &kind)
+        .unwrap_or(None)
 }
 
 // ─── 任务删除 ────────────────────────────────────────────────────────────────
@@ -645,6 +661,7 @@ pub async fn export_geotiff(
     dest_path: String,
     zoom: u8,
     clip_to_bounds: bool,
+    compression: Option<String>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
     app: AppHandle,
@@ -702,6 +719,7 @@ pub async fn export_geotiff(
         let app_clone2 = app_clone.clone();
         let jid2 = jid.clone();
         let dp2 = dp.clone();
+        let compression_str = compression.as_deref().unwrap_or("none").to_string();
         let result = crate::export::geotiff::export_geotiff(
             std::path::Path::new(&src_path),
             std::path::Path::new(&dest_path),
@@ -710,6 +728,7 @@ pub async fn export_geotiff(
             clip_to_bounds,
             polygon,
             &crs,
+            &compression_str,
             move |done, total| {
                 if let Ok(mut map) = state_clone2.lock() {
                     if let Some(j) = map.get_mut(&jid2) {

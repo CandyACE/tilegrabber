@@ -441,6 +441,8 @@ export default {
     browse: '浏览…',
     mergeZoom: '拼合层级',
     mergeZoomDesc: 'z{min}–z{max} 可选，层级越高越清晰但文件越大',
+    compression: '压缩方式',
+    compressionNone: '无压缩',
     clipOption: '严格裁剪至任务选框范围',
     clipTiffDesc: '将输出像素精确裁剪至任务选框经纬度边界',
     clipDefaultDesc: '仅导出完全位于任务选框内的瓦片，排除边缘相交瓦片',

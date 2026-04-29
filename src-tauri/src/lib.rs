@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod download;
 pub mod export;
+pub mod gcj02;
 pub mod parser;
 pub mod server;
 pub mod storage;
@@ -20,9 +21,10 @@ use commands::source::{
 use commands::task::{
     cancel_download, check_disk_space, create_task, delete_task, estimate_download,
     export_directory, export_geotiff,
-    export_mbtiles, export_task, get_download_progress_geojson, get_export_jobs, get_stored_tile,
-    get_task, get_task_logs, get_task_thumbnail, import_mbtiles, import_task, list_tasks,
-    pause_download, resume_download, retry_failed, reveal_in_explorer, start_download, ExportState,
+    export_mbtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
+    get_export_jobs, get_stored_tile, get_task, get_task_logs, get_task_thumbnail, import_mbtiles,
+    import_task, list_tasks, pause_download, resume_download, retry_failed, reveal_in_explorer,
+    start_download, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
 use commands::updater::{check_for_update, download_and_install_update, open_release_url};
@@ -327,6 +329,7 @@ pub fn run() {
             list_tasks,
             get_task,
             delete_task,
+            find_completed_task_for_source,
             // 下载控制
             start_download,
             pause_download,

@@ -17,6 +17,7 @@ use image::RgbaImage;
 use rayon::prelude::*;
 use rusqlite::{Connection, OpenFlags};
 use tiff::encoder::colortype::RGBA8;
+use tiff::encoder::compression::{Deflate, DeflateLevel, Lzw};
 use tiff::encoder::TiffEncoder;
 use tiff::tags::Tag;
 
@@ -115,6 +116,7 @@ const TAG_GEO_KEY_DIRECTORY: u16 = 34735;
 /// - `polygon`         — 可选多边形顶点 `[经度, 纬度]`，为 Some 时在矩形裁剪基础上
 ///                       按多边形形状将范围外像素设为透明（奇偶填充规则）
 /// - `crs`             — 瓦片坐标系（WebMercator 或 WGS84）
+/// - `compression`     — 压缩方式："none"（无压缩）、"lzw"、"deflate"
 /// - `progress_cb`     — 进度回调 `(done_tile_rows, total_tile_rows)`
 pub fn export_geotiff<F: Fn(u64, u64)>(
     tile_store_path: &Path,
@@ -124,6 +126,7 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     clip_to_bounds: bool,
     polygon: Option<Vec<[f64; 2]>>,
     crs: &CrsType,
+    compression: &str,
     progress_cb: F,
 ) -> Result<u64> {
     let [west, south, east, north] = bounds;
@@ -240,47 +243,68 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     // ── 创建 TIFF 编码器并写入地理参考标签 ──────────────────────────────────
     let file = std::fs::File::create(dest_path).context("创建 GeoTIFF 文件失败")?;
     let mut encoder = TiffEncoder::new_big(std::io::BufWriter::new(file))?;
-    let mut image_enc = encoder.new_image::<RGBA8>(out_w, out_h)?;
     let lon_scale = (geo_east - geo_west) / out_w as f64;
     let lat_scale = (geo_north - geo_south) / out_h as f64;
     let geo_ref = build_geo_reference(crs, geo_west, geo_north, geo_east, geo_south, out_w, out_h);
-    image_enc.rows_per_strip(TILE_SIZE)?;
-    image_enc.encoder().write_tag(
-        Tag::Unknown(TAG_MODEL_PIXEL_SCALE),
-        [geo_ref.pixel_scale_x, geo_ref.pixel_scale_y, 0.0_f64].as_slice(),
-    )?;
-    image_enc.encoder().write_tag(
-        Tag::Unknown(TAG_MODEL_TIEPOINT),
-        [0.0_f64, 0.0, 0.0, geo_ref.model_west, geo_ref.model_north, 0.0].as_slice(),
-    )?;
-    image_enc.encoder().write_tag(Tag::ExtraSamples, [2u16].as_slice())?;
-    image_enc
-        .encoder()
-        .write_tag(Tag::Unknown(TAG_GEO_KEY_DIRECTORY), geo_ref.geo_keys.as_slice())?;
 
-    let read_count = render_geotiff_strips(
-        &src,
-        zoom,
-        x_min,
-        y_min,
-        cols,
-        rows,
-        out_x0,
-        out_y0,
-        out_w,
-        out_h,
-        polygon.as_deref(),
-        merc_n_out,
-        merc_per_out_px,
-        geo_west,
-        geo_north,
-        lon_scale,
-        lat_scale,
-        progress_cb,
-        |strip_buf| image_enc.write_strip(&strip_buf).map_err(Into::into),
-    )?;
+    // 宏：对任意压缩类型的 ImageEncoder 执行相同的标签写入和条带渲染
+    macro_rules! encode_with {
+        ($image_enc:expr) => {{
+            let mut image_enc = $image_enc;
+            image_enc.rows_per_strip(TILE_SIZE)?;
+            image_enc.encoder().write_tag(
+                Tag::Unknown(TAG_MODEL_PIXEL_SCALE),
+                [geo_ref.pixel_scale_x, geo_ref.pixel_scale_y, 0.0_f64].as_slice(),
+            )?;
+            image_enc.encoder().write_tag(
+                Tag::Unknown(TAG_MODEL_TIEPOINT),
+                [0.0_f64, 0.0, 0.0, geo_ref.model_west, geo_ref.model_north, 0.0].as_slice(),
+            )?;
+            image_enc.encoder().write_tag(Tag::ExtraSamples, [2u16].as_slice())?;
+            image_enc.encoder().write_tag(
+                Tag::Unknown(TAG_GEO_KEY_DIRECTORY),
+                geo_ref.geo_keys.as_slice(),
+            )?;
+            let read_count = render_geotiff_strips(
+                &src,
+                zoom,
+                x_min,
+                y_min,
+                cols,
+                rows,
+                out_x0,
+                out_y0,
+                out_w,
+                out_h,
+                polygon.as_deref(),
+                merc_n_out,
+                merc_per_out_px,
+                geo_west,
+                geo_north,
+                lon_scale,
+                lat_scale,
+                progress_cb,
+                |strip_buf| image_enc.write_strip(&strip_buf).map_err(Into::into),
+            )?;
+            image_enc.finish()?;
+            read_count
+        }};
+    }
 
-    image_enc.finish()?;
+    let read_count = match compression {
+        "lzw" => encode_with!(encoder.new_image_with_compression::<RGBA8, _>(
+            out_w,
+            out_h,
+            Lzw::default()
+        )?),
+        "deflate" => encode_with!(encoder.new_image_with_compression::<RGBA8, _>(
+            out_w,
+            out_h,
+            Deflate::with_level(DeflateLevel::Best)
+        )?),
+        _ => encode_with!(encoder.new_image::<RGBA8>(out_w, out_h)?),
+    };
+
     Ok(read_count)
 }
 

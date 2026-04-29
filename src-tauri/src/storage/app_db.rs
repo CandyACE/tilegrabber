@@ -128,6 +128,19 @@ pub struct NewLayer {
     pub source_config: String,
 }
 
+/// 已完成任务的预览元数据（供前端切换本地瓦片预览）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletedTaskPreview {
+    pub task_id: String,
+    pub bounds_west: f64,
+    pub bounds_east: f64,
+    pub bounds_south: f64,
+    pub bounds_north: f64,
+    pub min_zoom: u8,
+    pub max_zoom: u8,
+}
+
 /// 日志条目
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -284,6 +297,67 @@ impl AppDb {
             .query_map([], row_to_task)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tasks)
+    }
+
+    /// 查找与给定数据源匹配的最新已完成任务（用于前端切换本地瓦片预览）。
+    ///
+    /// 匹配条件：url_template + coord_type + kind 三者相同。
+    /// 状态范围：completed 或 completed_with_errors。
+    /// 返回匹配到的任务的 ID 及下载范围/层级信息，供前端使用本地存储替代在线预览。
+    pub fn find_completed_task_for_source(
+        &self,
+        url_template: &str,
+        coord_type: &str,
+        kind: &str,
+    ) -> Result<Option<CompletedTaskPreview>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source_config, bounds_west, bounds_east, bounds_south, bounds_north,
+                    min_zoom, max_zoom
+             FROM tasks
+             WHERE status IN ('completed', 'completed_with_errors')
+             ORDER BY updated_at DESC",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let config: String = row.get(1)?;
+            let bounds_west: f64 = row.get(2)?;
+            let bounds_east: f64 = row.get(3)?;
+            let bounds_south: f64 = row.get(4)?;
+            let bounds_north: f64 = row.get(5)?;
+            let min_zoom: u8 = row.get::<_, i64>(6)? as u8;
+            let max_zoom: u8 = row.get::<_, i64>(7)? as u8;
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&config) {
+                let same_url = json
+                    .get("url_template")
+                    .and_then(|v| v.as_str())
+                    == Some(url_template);
+                let same_coord = json
+                    .get("coord_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("WGS84")
+                    == coord_type;
+                let same_kind = json
+                    .get("kind")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    == kind;
+                if same_url && same_coord && same_kind {
+                    return Ok(Some(CompletedTaskPreview {
+                        task_id: id,
+                        bounds_west,
+                        bounds_east,
+                        bounds_south,
+                        bounds_north,
+                        min_zoom,
+                        max_zoom,
+                    }));
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn update_task_status(&self, id: &str, status: &str) -> Result<()> {

@@ -9,9 +9,9 @@
  * 纯非可视组件——不渲染 DOM，仅操作地图 API。
  */
 import { watch, onUnmounted } from "vue";
-import maplibregl from "maplibre-gl";
 import type { Map as MaplibreMap } from "maplibre-gl";
 import { invoke } from "@tauri-apps/api/core";
+import { ensureStoredTileProtocol, STORED_TILE_PROTO } from "~/composables/useStoredTileProtocol";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -24,42 +24,6 @@ const props = defineProps<{
 
 const LAYER_ID = "local-task-tiles";
 const SOURCE_ID = "local-task-tiles-src";
-const PROTO = "tilegrab-stored";
-
-// ─── 协议注册（全局一次）──────────────────────────────────────────────────────
-
-let protoRegistered = false;
-
-function ensureProtocol() {
-  if (protoRegistered) return;
-  protoRegistered = true;
-
-  maplibregl.addProtocol(PROTO, async (params) => {
-    // URL 格式: tilegrab-stored://taskId/z/x/y
-    const raw = params.url.replace(`${PROTO}://`, "");
-    const parts = raw.split("/");
-    if (parts.length < 4)
-      throw new Error("bad tilegrab-stored url: " + params.url);
-
-    const taskId = parts[0];
-    const z = parseInt(parts[1]);
-    const x = parseInt(parts[2]);
-    const y = parseInt(parts[3]);
-
-    try {
-      const bytes = await invoke<number[]>("get_stored_tile", {
-        taskId,
-        z,
-        x,
-        y,
-      });
-      return { data: new Uint8Array(bytes).buffer };
-    } catch {
-      // 404 — 返回 1×1 透明 PNG，避免 MapLibre 报错
-      throw new Error("tile not found");
-    }
-  });
-}
 
 // ─── 取消令牌（防止 async 在组件卸载后继续操作已销毁的地图）────────────────────
 
@@ -103,9 +67,9 @@ async function addLayer(m: MaplibreMap, taskId: string, gen: number) {
 
   if (task.downloadedTiles === 0) return;
 
-  ensureProtocol();
+  ensureStoredTileProtocol();
 
-  const tileUrl = `${PROTO}://${taskId}/{z}/{x}/{y}`;
+  const tileUrl = `${STORED_TILE_PROTO}://${taskId}/{z}/{x}/{y}`;
 
   try {
     m.addSource(SOURCE_ID, {

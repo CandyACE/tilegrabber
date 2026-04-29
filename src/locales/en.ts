@@ -441,6 +441,8 @@ export default {
     browse: 'Browse…',
     mergeZoom: 'Merge Zoom Level',
     mergeZoomDesc: 'z{min}–z{max} available — higher zoom means sharper but larger file',
+    compression: 'Compression',
+    compressionNone: 'None',
     clipOption: 'Strictly clip to task bounding box',
     clipTiffDesc: 'Clip output pixels precisely to task bounding box coordinates',
     clipDefaultDesc: 'Only export tiles fully within the task bounding box, excluding edge-intersecting tiles',

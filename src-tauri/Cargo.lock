@@ -4866,8 +4866,6 @@ dependencies = [
 [[package]]
 name = "tiff"
 version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba1310fcea54c6a9a4fd1aad794ecc02c31682f6bfbecdf460bf19533eed1e3e"
 dependencies = [
  "flate2",
  "jpeg-decoder",
@@ -4876,7 +4874,7 @@ dependencies = [
 
 [[package]]
 name = "tilegrabber"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "anyhow",
  "axum",

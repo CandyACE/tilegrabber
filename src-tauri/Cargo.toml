@@ -1,6 +1,6 @@
 [package]
 name = "tilegrabber"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 
 [lib]
@@ -74,3 +74,6 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+[patch.crates-io]
+tiff = { path = "vendor/tiff" }

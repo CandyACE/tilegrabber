@@ -2,6 +2,14 @@
 
 export type CrsType = "WEB_MERCATOR" | "WGS84" | "TERRAIN" | "UNKNOWN";
 
+/**
+ * 瓦片内容的坐标空间类型（与 Rust CoordType 镜像）。
+ * - WGS84：标准坐标，无偏移
+ * - GCJ02：国测局"火星坐标"（高德、腾讯地图）
+ * - BD09：百度坐标
+ */
+export type CoordType = "WGS84" | "GCJ02" | "BD09";
+
 export interface Bounds {
   west: number;
   east: number;
@@ -16,6 +24,8 @@ export interface TileSource {
   url_param_order: string[];
   subdomains: string[];
   crs: CrsType;
+  /** 瓦片内容的坐标空间（默认 WGS84，GCJ02 表示高德/腾讯等国内偏移坐标） */
+  coord_type: CoordType;
   tile_size: number;
   north_to_south: boolean;
   bounds: Bounds;

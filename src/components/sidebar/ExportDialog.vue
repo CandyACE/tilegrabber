@@ -56,6 +56,8 @@ const startError = ref<string | null>(null);
 const { registerJob } = useExportJobs();
 const { t } = useI18n();
 
+const tiffCompression = ref<"none" | "lzw" | "deflate">("none");
+
 watch(
   () => props.open,
   (val) => {
@@ -67,6 +69,7 @@ watch(
       jpegQuality.value = 85;
       pngLevel.value = 6;
       tiffZoom.value = props.task.maxZoom;
+      tiffCompression.value = "none";
       starting.value = false;
       startError.value = null;
     }
@@ -138,6 +141,7 @@ async function doExport() {
         destPath: destPath.value,
         zoom: tiffZoom.value,
         clipToBounds: clipToBounds.value,
+        compression: tiffCompression.value === "none" ? null : tiffCompression.value,
       });
     }
     registerJob(jobId, props.task.id, format.value, destPath.value);
@@ -480,6 +484,38 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     @click="tiffZoom = Math.min(task.maxZoom, tiffZoom + 1)"
                   >
                     ›
+                  </button>
+                </div>
+              </div>
+            </Transition>
+
+            <!-- GeoTIFF 压缩选项（仅 tiff 格式） -->
+            <Transition name="tiff-row">
+              <div
+                v-if="format === 'tiff'"
+                class="rounded-xl border p-3"
+                style="
+                  border-color: var(--color-border-subtle);
+                  background: var(--color-surface-raised);
+                "
+              >
+                <div class="flex items-center gap-2 mb-2">
+                  <PackageCheck class="size-3.5 shrink-0 text-slate-400" />
+                  <span class="text-xs font-medium text-slate-700">{{ t('export.compression') }}</span>
+                </div>
+                <div class="flex gap-2">
+                  <button
+                    v-for="opt in ([{ v: 'none', label: t('export.compressionNone') }, { v: 'lzw', label: 'LZW' }, { v: 'deflate', label: 'DEFLATE' }] as const)"
+                    :key="opt.v"
+                    type="button"
+                    class="flex-1 h-7 rounded-lg text-[11px] font-medium border transition-colors"
+                    :class="tiffCompression === opt.v
+                      ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                      : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'"
+                    :disabled="starting"
+                    @click="tiffCompression = opt.v"
+                  >
+                    {{ opt.label }}
                   </button>
                 </div>
               </div>

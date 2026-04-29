@@ -4,6 +4,7 @@ import maplibregl from "maplibre-gl";
 import type { Map as MaplibreMap } from "maplibre-gl";
 import { invoke } from "@tauri-apps/api/core";
 import type { TileSource } from "~/types/tile-source";
+import { gcj02PixelDelta } from "~/lib/gcj02";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,8 @@ const BOUNDS_LINE_ID = "tile-preview-bounds-line";
 const TILE_PROTO = "tilegrab-preview";
 // MBTiles 专用协议：从本地 .mbtiles 文件读取瓦片
 const MBTILES_PROTO = "mbtiles-tile";
+// GCJ02 纠偏协议：对高德等 GCJ02 来源做像素级拼接纠偏
+const GCJ02_PROTO = "tilegrab-gcj02";
 
 // 当前注入的 headers（供协议处理器读取）
 let currentHeaders: Record<string, string> = {};
@@ -31,6 +34,142 @@ let currentHeaders: Record<string, string> = {};
 let currentMbtilesPath: string = "";
 let protoRegistered = false;
 let mbtilesProtoRegistered = false;
+let gcj02ProtoRegistered = false;
+
+// 取消令牌：防止 async addPreviewLayer 在 source 切换或组件卸载后继续操作地图
+let addGen = 0;
+
+// ─── GCJ02 纠偏工具函数 ───────────────────────────────────────────────────────
+
+/**
+ * 从瓦片 URL 中解析 (z, x, y)。
+ * 支持查询参数格式（高德：?x=...&y=...&z=...）和路径格式（/{z}/{x}/{y}）。
+ */
+function parseTileCoords(url: string): { z: number; x: number; y: number } | null {
+  try {
+    const u = new URL(url.startsWith("http") ? url : "https://" + url.replace(/^[^/]*\/\//, ""));
+    const zs = u.searchParams.get("z");
+    const xs = u.searchParams.get("x");
+    const ys = u.searchParams.get("y");
+    if (zs && xs && ys) {
+      const z = parseInt(zs), x = parseInt(xs), y = parseInt(ys);
+      if (!isNaN(z) && !isNaN(x) && !isNaN(y)) return { z, x, y };
+    }
+  } catch { /* fall through */ }
+
+  const m = url.match(/\/(\d+)\/(\d+)\/(\d+)(?:\.\w+)?(?:[?#]|$)/);
+  if (m) return { z: +m[1], x: +m[2], y: +m[3] };
+  return null;
+}
+
+/**
+ * 将瓦片 URL 中的 (origX, origY) 替换为 (newX, newY)，z 保持不变。
+ */
+function replaceTileXY(
+  url: string,
+  origX: number,
+  origY: number,
+  origZ: number,
+  newX: number,
+  newY: number,
+): string {
+  // 查询参数格式（高德等）
+  try {
+    const schemeMatch = url.match(/^([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)/);
+    const scheme = schemeMatch?.[1] ?? "";
+    const u = new URL("https://" + url.slice(scheme.length).replace(/^\/\//, ""));
+    if (u.searchParams.has("x") && u.searchParams.has("y")) {
+      u.searchParams.set("x", String(newX));
+      u.searchParams.set("y", String(newY));
+      return scheme + u.toString().slice("https://".length);
+    }
+  } catch { /* fall through */ }
+
+  // 路径格式：先替换 x 再替换 y（防止数字碰撞）
+  const withNewX = url.replace(
+    new RegExp(`(/${origZ}/)${origX}(/${origY}(?:\\.|[?#]|$))`),
+    `$1${newX}$2`,
+  );
+  return withNewX.replace(
+    new RegExp(`(/${origZ}/${newX}/)${origY}(?=\\.|[?#]|$)`),
+    `$1${newY}`,
+  );
+}
+
+/**
+ * 注册 GCJ02 纠偏协议（一次性）。
+ *
+ * 原理：
+ *   对于 MapLibre 请求的每个 WGS84 瓦片 (z, x, y)，
+ *   计算 GCJ02 坐标偏移量 (dx, dy)，从高德取最多 2×2 邻接瓦片，
+ *   在 OffscreenCanvas 上按偏移量拼接合成，输出对齐 WGS84 的 PNG。
+ *
+ * 仅适用于 XYZ (north_to_south=true) 方案的来源。
+ */
+function ensureGcj02Protocol() {
+  if (gcj02ProtoRegistered) return;
+  gcj02ProtoRegistered = true;
+
+  maplibregl.addProtocol(GCJ02_PROTO, async (params) => {
+    // 还原 https:// URL
+    const url = params.url.replace(`${GCJ02_PROTO}://`, "https://");
+    const headers = { ...currentHeaders };
+
+    const coords = parseTileCoords(url);
+    if (!coords) {
+      // 无法解析坐标，直接代理（降级）
+      const bytes = await invoke<number[]>("fetch_tile", { url, headers });
+      return { data: new Uint8Array(bytes).buffer };
+    }
+
+    const { z, x, y } = coords;
+    const { dx, dy } = gcj02PixelDelta(z, x, y);
+
+    // 源瓦片的粗偏移（整数瓦片数）和细偏移（瓦片内像素，0..255）
+    const tileOffX = Math.floor(dx / 256);
+    const tileOffY = Math.floor(dy / 256);
+    const subX = ((dx % 256) + 256) % 256;
+    const subY = ((dy % 256) + 256) % 256;
+
+    // 需要合成的 ≤ 2×2 邻接源瓦片（相对于基准偏移）
+    const needed: Array<[number, number]> = [[0, 0]];
+    if (subX > 0) needed.push([1, 0]);
+    if (subY > 0) needed.push([0, 1]);
+    if (subX > 0 && subY > 0) needed.push([1, 1]);
+
+    const fetchBitmap = async (i: number, j: number): Promise<ImageBitmap | null> => {
+      const tileX = x + tileOffX + i;
+      const tileY = y + tileOffY + j;
+      const tileUrl = replaceTileXY(url, x, y, z, tileX, tileY);
+      try {
+        const bytes = await invoke<number[]>("fetch_tile", { url: tileUrl, headers });
+        const blob = new Blob([new Uint8Array(bytes)]);
+        return await createImageBitmap(blob);
+      } catch {
+        return null;
+      }
+    };
+
+    const bitmaps = await Promise.all(needed.map(([i, j]) => fetchBitmap(i, j)));
+
+    // 合成到 256×256 画布
+    const canvas = new OffscreenCanvas(256, 256);
+    const ctx = canvas.getContext("2d")!;
+
+    for (let k = 0; k < needed.length; k++) {
+      const [i, j] = needed[k];
+      const bitmap = bitmaps[k];
+      if (bitmap) {
+        // 瓦片在画布上的绘制起点：(i*256 - subX, j*256 - subY)
+        ctx.drawImage(bitmap, i * 256 - subX, j * 256 - subY);
+        bitmap.close();
+      }
+    }
+
+    const resultBlob = await canvas.convertToBlob({ type: "image/png" });
+    return { data: await resultBlob.arrayBuffer() };
+  });
+}
 
 /** 注册一次自定义协议处理器 */
 function ensureProtocol() {
@@ -79,12 +218,18 @@ function ensureMbtilesProtocol() {
 
 // ─── 添加 / 更新预览图层 ──────────────────────────────────────────────────────
 
-function addPreviewLayer(map: MaplibreMap, src: TileSource) {
+async function addPreviewLayer(map: MaplibreMap, src: TileSource) {
+  // 快照当前 generation：若在 await 期间 source 切换或组件卸载，则丢弃本次结果
+  const gen = ++addGen;
+
   try {
     removePreviewLayer(map);
 
     let tileUrls: string[];
-    const scheme = src.north_to_south ? "xyz" : "tms";
+    let scheme = src.north_to_south ? "xyz" : "tms";
+    let boundsForOverlay = src.bounds;
+    let minZoom = src.min_zoom ?? 0;
+    let maxZoom = src.max_zoom ?? 18;
 
     if (src.kind === "mbtilefile") {
       // MBTiles：本地文件，通过自定义协议读取
@@ -103,15 +248,24 @@ function addPreviewLayer(map: MaplibreMap, src: TileSource) {
 
       // 所有 HTTP 请求统一走 Rust 后端代理，避免 WebView 请求被防火墙/CSP 拦截
       currentHeaders = { ...(src.headers ?? {}) };
-      ensureProtocol();
-      tileUrls = tileUrls.map((u) =>
-        u.replace(/^https?:\/\//, `${TILE_PROTO}://`),
-      );
+
+      // GCJ02 来源（高德等）：始终走在线实时纠偏协议，确保图层预览覆盖完整数据源范围
+      const isGcj02 = src.coord_type === "GCJ02" && src.north_to_south;
+      if (isGcj02) {
+        ensureGcj02Protocol();
+        tileUrls = tileUrls.map((u) => u.replace(/^https?:\/\//, `${GCJ02_PROTO}://`));
+      } else {
+        ensureProtocol();
+        tileUrls = tileUrls.map((u) => u.replace(/^https?:\/\//, `${TILE_PROTO}://`));
+      }
     }
+
+    if (gen !== addGen) return; // stale
 
     console.log("[TilePreviewLayer] Adding preview layer:", {
       name: src.name,
       kind: src.kind,
+      coord_type: src.coord_type,
       urls: tileUrls.slice(0, 2),
       scheme,
     });
@@ -120,8 +274,8 @@ function addPreviewLayer(map: MaplibreMap, src: TileSource) {
       type: "raster",
       tiles: tileUrls,
       tileSize: src.tile_size || 256,
-      minzoom: src.min_zoom ?? 0,
-      maxzoom: src.max_zoom ?? 18,
+      minzoom: minZoom,
+      maxzoom: maxZoom,
       scheme,
       attribution: src.attribution ?? "",
     });
@@ -137,15 +291,17 @@ function addPreviewLayer(map: MaplibreMap, src: TileSource) {
       labelLayerId,
     );
 
-    addBoundsOverlay(map, src);
-    fitToBounds(map, src);
+    addBoundsOverlay(map, boundsForOverlay);
+    fitToBounds(map, boundsForOverlay);
   } catch (err) {
     console.error("[TilePreviewLayer] Failed to add preview layer:", err, src);
   }
 }
 
-function addBoundsOverlay(map: MaplibreMap, src: TileSource) {
-  const { west, east, south, north } = src.bounds;
+type Bounds = { west: number; east: number; south: number; north: number };
+
+function addBoundsOverlay(map: MaplibreMap, bounds: Bounds) {
+  const { west, east, south, north } = bounds;
 
   const geojson: GeoJSON.FeatureCollection = {
     type: "FeatureCollection",
@@ -203,8 +359,8 @@ function removePreviewLayer(map: MaplibreMap) {
   currentHeaders = {};
 }
 
-function fitToBounds(map: MaplibreMap, src: TileSource) {
-  const { west, east, south, north } = src.bounds;
+function fitToBounds(map: MaplibreMap, bounds: Bounds) {
+  const { west, east, south, north } = bounds;
   if (west < east && south < north) {
     // 如果当前相机中心已在图层范围内，无需飞行
     const center = map.getCenter();
@@ -240,6 +396,7 @@ watch(
   () => [props.map, props.source] as const,
   ([map, src]) => {
     if (!map) return;
+    addGen++; // invalidate any pending async addPreviewLayer
     console.log("[TilePreviewLayer] source changed:", src?.name ?? "null");
     if (src) {
       addPreviewLayer(map, src);
@@ -251,6 +408,7 @@ watch(
 );
 
 onUnmounted(() => {
+  addGen++; // invalidate any pending async addPreviewLayer
   if (props.map) removePreviewLayer(props.map);
 });
 </script>

@@ -660,7 +660,8 @@ function handleDetailDeleted() {
               mapRef &&
               !(
                 selectedTaskStatus === 'downloading' ||
-                selectedTaskStatus === 'paused'
+                selectedTaskStatus === 'paused' ||
+                selectedTaskStatus === 'processing'
               )
             "
             :map="mapRef"

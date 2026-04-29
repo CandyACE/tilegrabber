@@ -300,11 +300,25 @@ async fn run_download(
     let init_total = tile_store.get_progress().map(|p| p.total).unwrap_or(0);
 
     if init_total == 0 {
-        let bounds = Bounds {
+        let base_bounds = Bounds {
             west: task.bounds_west,
             east: task.bounds_east,
             south: task.bounds_south,
             north: task.bounds_north,
+        };
+
+        // GCJ02 源显示纠偏需要访问邻接瓦片（最多 7 块）进行合成。
+        // 下载时扩大约 0.01°（≈ zoom 18 下 7 块），保证边缘区域合成所需瓦片完整。
+        let bounds = if source.coord_type == crate::types::CoordType::Gcj02 {
+            const GCJ02_PAD: f64 = 0.01;
+            Bounds {
+                west: (base_bounds.west - GCJ02_PAD).max(-180.0),
+                east: (base_bounds.east + GCJ02_PAD).min(180.0),
+                south: (base_bounds.south - GCJ02_PAD).max(-85.051_129),
+                north: (base_bounds.north + GCJ02_PAD).min(85.051_129),
+            }
+        } else {
+            base_bounds.clone()
         };
 
         // 若任务附带多边形范围，仅枚举与多边形相交的瓦片，跳过外包围矩形中多余的瓦片
@@ -314,21 +328,43 @@ async fn run_download(
             .and_then(|s| serde_json::from_str(s).ok());
 
         let tiles = if let Some(ref poly) = polygon {
-            app_db
-                .add_log(
-                    Some(&task_id),
-                    "info",
-                    "已检测到多边形范围，将按多边形过滤下载瓦片",
+            if source.coord_type == crate::types::CoordType::Gcj02 {
+                // GCJ02 纠偏合成需要从目标瓦片东/北方向读取 2×2 源瓦片拼合。
+                // 若仅按多边形过滤下载，多边形东/北边缘以外的源瓦片将缺失，
+                // 导致合成时 has_data=false，边缘瓦片保留 GCJ02 偏移。
+                // 解决方案：GCJ02 + 多边形任务下载整个扩展边距范围（orig+GCJ02_PAD）
+                // 的全部瓦片，多边形遮罩由后续的 clip_to_bounds_or_polygon 步骤处理。
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "info",
+                        "GCJ02 多边形任务：下载完整扩展范围以保证纠偏合成质量，多边形遮罩在后处理阶段应用",
+                    )
+                    .ok();
+                enumerate_tiles(
+                    &bounds,
+                    task.min_zoom,
+                    task.max_zoom,
+                    &source.crs,
+                    Some(2_000_000),
                 )
-                .ok();
-            enumerate_tiles_with_polygon(
-                &bounds,
-                task.min_zoom,
-                task.max_zoom,
-                &source.crs,
-                poly,
-                Some(2_000_000),
-            )
+            } else {
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "info",
+                        "已检测到多边形范围，将按多边形过滤下载瓦片",
+                    )
+                    .ok();
+                enumerate_tiles_with_polygon(
+                    &bounds,
+                    task.min_zoom,
+                    task.max_zoom,
+                    &source.crs,
+                    poly,
+                    Some(2_000_000),
+                )
+            }
         } else {
             enumerate_tiles(
                 &bounds,
@@ -764,6 +800,82 @@ async fn run_download(
         );
     }
 
+    // ── GCJ02 纠偏合成（下载完成后，裁剪之前）──────────────────────────────────
+    // 将下载的原始高德瓦片合成为 WGS84 对齐的纠偏瓦片，使本地服务器无需额外处理。
+    if source.coord_type == crate::types::CoordType::Gcj02
+        && *ctrl_rx.borrow() != CtrlSignal::Cancel
+    {
+        app_db
+            .add_log(Some(&task_id), "info", "开始 GCJ02 纠偏合成…")
+            .ok();
+        app_db.update_task_status(&task_id, "processing").ok();
+
+        let gcj02_store_path = tile_store_path.clone();
+        let gcj02_app = app.clone();
+        let gcj02_task_id = task_id.clone();
+        let gcj02_bounds = crate::types::Bounds {
+            west: task.bounds_west,
+            east: task.bounds_east,
+            south: task.bounds_south,
+            north: task.bounds_north,
+        };
+        let gcj02_crs = source.crs.clone();
+        let gcj02_min_zoom = task.min_zoom;
+        let gcj02_max_zoom = task.max_zoom;
+
+        let gcj02_result = tokio::task::spawn_blocking(move || {
+            post_gcj02_composite(
+                &gcj02_store_path,
+                &gcj02_bounds,
+                gcj02_min_zoom,
+                gcj02_max_zoom,
+                &gcj02_crs,
+                |done, total| {
+                    let _ = gcj02_app.emit(
+                        "tilegrab-progress",
+                        ProgressPayload {
+                            task_id: gcj02_task_id.clone(),
+                            total: total as i64,
+                            downloaded: done as i64,
+                            failed: 0,
+                            speed: 0.0,
+                            bytes_per_sec: 0.0,
+                            eta_secs: None,
+                            status: "processing".to_string(),
+                        },
+                    );
+                },
+            )
+        })
+        .await;
+
+        match gcj02_result {
+            Ok(Ok(())) => {
+                app_db
+                    .add_log(Some(&task_id), "info", "GCJ02 纠偏合成完成")
+                    .ok();
+            }
+            Ok(Err(e)) => {
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "warn",
+                        &format!("GCJ02 纠偏合成异常: {}", e),
+                    )
+                    .ok();
+            }
+            Err(e) => {
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "warn",
+                        &format!("GCJ02 合成任务异常: {}", e),
+                    )
+                    .ok();
+            }
+        }
+    }
+
     // ── 下载完成后的精确裁剪 ─────────────────────────────────────────────────
     // 先保存原始瓦片，确保数据完整；下载全部结束后再统一做像素级裁剪，
     // 这样既不影响下载速度，又能保证裁剪结果一致。
@@ -871,6 +983,15 @@ async fn run_download(
     app_db.update_task_status(&task_id, final_status).ok();
 
     let progress = tile_store.get_progress().unwrap_or_default();
+    // 将最终精确进度持久化到 tasks 表（下载循环内只按 0.5s 节流更新，最后一次可能未到 100%）
+    // 同步更新 total_tiles：GCJ02 合成后会删除 padding 瓦片，download_state 行数从 N+M 缩减到 N，
+    // 但 init_download_state 时写入的 total_tiles = N+M 从未更新，导致进度分母偏大无法到 100%
+    app_db
+        .update_task_total(&task_id, progress.total)
+        .ok();
+    app_db
+        .update_task_progress(&task_id, progress.downloaded, progress.failed)
+        .ok();
     let summary = format!(
         "任务结束 [{}]：已下载 {}，失败 {}，共 {}",
         final_status, progress.downloaded, progress.failed, progress.total
@@ -1150,7 +1271,251 @@ fn post_clip_tiles(
     Ok(())
 }
 
-// ─── MBTiles 文件数据源复制 ───────────────────────────────────────────────────
+// ─── GCJ02 纠偏合成 ────────────────────────────────────────────────────────────
+
+/// 对已下载的 GCJ02（高德）瓦片进行纠偏合成，将纠偏结果原地写回存储。
+///
+/// # 原理
+/// 高德等 GCJ02 来源的瓦片内容相对 WGS84 存在系统性偏移（约 100–700 m）。
+/// 本函数对 `orig_bounds` 内的每块 WGS84 目标瓦片 (z, x, y)：
+/// 1. 计算该瓦片中心的 GCJ02 像素偏移 `(dx, dy)`；
+/// 2. 以偏移量确定 2×2 来源 Gaode 瓦片并读取（来源瓦片因下载时扩边已存在）；
+/// 3. 合成为 256×256 WGS84 对齐图像，编码为 PNG 并原地覆写；
+/// 4. 所有合成完成后删除扩边区（GCJ02_PAD）瓦片，更新格式元数据为 `png`。
+///
+/// # 处理顺序安全性
+/// 在中国境内 GCJ02 偏移始终向东（dx ≥ 0）且向北（dy ≤ 0），故来源瓦片始终位于
+/// 目标瓦片的东方和/或北方。按 (x 升序, y 降序) 批处理时，来源行列号均不小于
+/// 当前批次的最大处理行列号，保证批间读写不发生污染。批内以"先全部读源、再全部写"
+/// 模式执行，同样无污染。
+fn post_gcj02_composite(
+    store_path: &str,
+    orig_bounds: &Bounds,
+    min_zoom: u8,
+    max_zoom: u8,
+    crs: &crate::types::CrsType,
+    progress_cb: impl Fn(u64, u64),
+) -> Result<()> {
+    use rayon::prelude::*;
+    use rusqlite::{params, Connection};
+    use std::collections::HashMap;
+
+    use image::RgbaImage;
+
+    let conn = Connection::open(store_path)?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA cache_size=-204800;
+         PRAGMA mmap_size=536870912;
+         PRAGMA temp_store=MEMORY;
+         PRAGMA busy_timeout=10000;",
+    )?;
+
+    // 幂等保护：已合成过则直接跳过
+    let already_done: bool = conn
+        .query_row(
+            "SELECT value FROM metadata WHERE name='tiles.gcj02_composited'",
+            [],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    if already_done {
+        return Ok(());
+    }
+
+    // 枚举原始范围内的所有目标瓦片（逐层级，避免单次枚举超出上限）
+    let mut target_tiles: Vec<(u8, u32, u32)> = Vec::new();
+    for z in min_zoom..=max_zoom {
+        let tiles =
+            crate::tile_math::enumerate_tiles(orig_bounds, z, z, crs, Some(10_000_000));
+        for tc in tiles {
+            target_tiles.push((tc.z, tc.x, tc.y));
+        }
+    }
+
+    // 按 (x 升序, y 降序) 排序保证合成顺序安全（见函数文档注释）
+    target_tiles.sort_unstable_by(|a, b| a.1.cmp(&b.1).then(b.2.cmp(&a.2)));
+
+    let total = target_tiles.len() as u64;
+    if total == 0 {
+        return Ok(());
+    }
+    progress_cb(0, total);
+
+    const BATCH_SIZE: usize = 200;
+    let mut processed: u64 = 0;
+
+    for chunk in target_tiles.chunks(BATCH_SIZE) {
+        // 1. 计算每块目标瓦片的偏移量，收集所需源瓦片坐标
+        struct TileInfo {
+            z: u8,
+            x: u32,
+            y: u32,
+            tile_off_x: i32,
+            tile_off_y: i32,
+            sub_x: i32,
+            sub_y: i32,
+        }
+        let tile_infos: Vec<TileInfo> = chunk
+            .iter()
+            .map(|&(z, x, y)| {
+                let (dx, dy) = crate::gcj02::gcj02_pixel_delta(z, x, y);
+                TileInfo {
+                    z,
+                    x,
+                    y,
+                    tile_off_x: dx.div_euclid(256),
+                    tile_off_y: dy.div_euclid(256),
+                    sub_x: dx.rem_euclid(256),
+                    sub_y: dy.rem_euclid(256),
+                }
+            })
+            .collect();
+
+        let mut source_keys: Vec<(u8, i64, i64)> = Vec::new();
+        for ti in &tile_infos {
+            for j in 0i64..2 {
+                for i in 0i64..2 {
+                    let sx = ti.x as i64 + ti.tile_off_x as i64 + i;
+                    let sy = ti.y as i64 + ti.tile_off_y as i64 + j;
+                    if sx >= 0 && sy >= 0 {
+                        source_keys.push((ti.z, sx, sy));
+                    }
+                }
+            }
+        }
+        source_keys.sort_unstable();
+        source_keys.dedup();
+
+        // 2. 批量读取源瓦片 → HashMap
+        let source_data: HashMap<(u8, i64, i64), Vec<u8>> = source_keys
+            .iter()
+            .filter_map(|&(z, sx, sy)| {
+                conn.query_row(
+                    "SELECT tile_data FROM tiles \
+                     WHERE zoom_level=?1 AND tile_column=?2 AND tile_row=?3",
+                    params![z as i64, sx, sy],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )
+                .ok()
+                .map(|data| ((z, sx, sy), data))
+            })
+            .collect();
+
+        // 3. 并行合成（source_data 为只读共享，rayon 安全）
+        let results: Vec<(u8, u32, u32, Vec<u8>)> = tile_infos
+            .par_iter()
+            .filter_map(|ti| {
+                let mut canvas = RgbaImage::new(256, 256);
+                let mut has_data = false;
+
+                for j in 0i32..2 {
+                    for i in 0i32..2 {
+                        let sx = ti.x as i64 + ti.tile_off_x as i64 + i as i64;
+                        let sy = ti.y as i64 + ti.tile_off_y as i64 + j as i64;
+                        if sx < 0 || sy < 0 {
+                            continue;
+                        }
+                        if let Some(data) = source_data.get(&(ti.z, sx, sy)) {
+                            if let Ok(img) = image::load_from_memory(data) {
+                                let src = img.into_rgba8();
+                                // 源瓦片在画布上的左上角（可为负值）
+                                let cx = i * 256 - ti.sub_x;
+                                let cy = j * 256 - ti.sub_y;
+                                // 计算源与目标的有效重叠区域
+                                let dst_x0 = cx.max(0) as u32;
+                                let dst_y0 = cy.max(0) as u32;
+                                let src_x0 = (-cx).max(0) as u32;
+                                let src_y0 = (-cy).max(0) as u32;
+                                let w = ((256 - src_x0 as i32).min(256 - cx)).max(0) as u32;
+                                let h = ((256 - src_y0 as i32).min(256 - cy)).max(0) as u32;
+                                for dp in 0..h {
+                                    for dq in 0..w {
+                                        let px = src.get_pixel(src_x0 + dq, src_y0 + dp);
+                                        canvas.put_pixel(dst_x0 + dq, dst_y0 + dp, *px);
+                                    }
+                                }
+                                has_data = true;
+                            }
+                        }
+                    }
+                }
+
+                if !has_data {
+                    return None;
+                }
+
+                crate::export::tile_clip::encode_png_fast(&canvas)
+                    .ok()
+                    .map(|encoded| (ti.z, ti.x, ti.y, encoded))
+            })
+            .collect();
+
+        // 4. 写回（事务批量提交）
+        if !results.is_empty() {
+            let tx = conn.unchecked_transaction()?;
+            for (z, x, y, data) in &results {
+                tx.execute(
+                    "UPDATE tiles SET tile_data=?1 \
+                     WHERE zoom_level=?2 AND tile_column=?3 AND tile_row=?4",
+                    params![data, *z as i64, *x as i64, *y as i64],
+                )?;
+            }
+            tx.commit()?;
+        }
+
+        processed += chunk.len() as u64;
+        progress_cb(processed, total);
+    }
+
+    // 5. 删除扩边区（GCJ02_PAD）中不属于原始范围的 padding 瓦片
+    {
+        let tx = conn.unchecked_transaction()?;
+        for z in min_zoom..=max_zoom {
+            let ((x_min, x_max), (y_min, y_max)) =
+                crate::tile_math::bounds_to_tile_range_xyz(orig_bounds, z);
+            let args = params![
+                z as i64,
+                x_min as i64,
+                x_max as i64,
+                y_min as i64,
+                y_max as i64
+            ];
+            tx.execute(
+                "DELETE FROM tiles WHERE zoom_level=?1 \
+                 AND (tile_column<?2 OR tile_column>?3 OR tile_row<?4 OR tile_row>?5)",
+                args,
+            )?;
+            tx.execute(
+                "DELETE FROM download_state WHERE zoom_level=?1 \
+                 AND (tile_column<?2 OR tile_column>?3 OR tile_row<?4 OR tile_row>?5)",
+                params![
+                    z as i64,
+                    x_min as i64,
+                    x_max as i64,
+                    y_min as i64,
+                    y_max as i64
+                ],
+            )?;
+        }
+        tx.commit()?;
+    }
+
+    // 6. 更新格式元数据（合成输出始终为 PNG）并写入完成标记
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (name, value) VALUES ('format', 'png')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata (name, value) VALUES ('tiles.gcj02_composited', '1')",
+        [],
+    )?;
+
+    Ok(())
+}
 
 async fn run_mbtiles_import(
     task_id: String,
