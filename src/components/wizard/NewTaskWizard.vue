@@ -213,8 +213,32 @@ async function loadTilePreview(src: TileSource) {
   const lonSpan = b.east - b.west;
   // Pick a zoom level appropriate for the area, then clamp to the source's actual range
   const lonSpanZ = lonSpan > 80 ? 4 : lonSpan > 20 ? 6 : 8;
-  const minZ = src.min_zoom ?? 0;
-  const maxZ = src.max_zoom ?? 18;
+  let minZ = src.min_zoom ?? 0;
+  let maxZ = src.max_zoom ?? 18;
+
+  // For TileGrabber's own WMTS sources, fetch actual zoom range from the REST API
+  // (Rust capabilities parsing may not have populated min/max zoom yet)
+  const isTileGrabberWmts =
+    src.url_template.includes("localhost:8765/wmts/") ||
+    src.url_template.includes("127.0.0.1:8765/wmts/");
+  if (isTileGrabberWmts && minZ === 0 && maxZ === 18) {
+    try {
+      const taskIdMatch = src.url_template.match(/wmts\/([^?/&]+)/);
+      if (taskIdMatch) {
+        const taskId = taskIdMatch[1];
+        const apiBase = src.url_template.replace(/\/wmts\/.*/, "");
+        const resp = await fetch(`${apiBase}/api/tasks/${taskId}`);
+        if (resp.ok) {
+          const task = await resp.json();
+          if (typeof task.minZoom === "number") minZ = task.minZoom;
+          if (typeof task.maxZoom === "number") maxZ = task.maxZoom;
+        }
+      }
+    } catch {
+      // ignore, fall through with defaults
+    }
+  }
+
   const z = Math.max(minZ, Math.min(maxZ, lonSpanZ));
 
   const n = Math.pow(2, z);
