@@ -240,7 +240,8 @@ async function loadTilePreview(src: TileSource) {
         });
         const blob = new Blob([new Uint8Array(bytes)], { type: "image/png" });
         return URL.createObjectURL(blob);
-      } catch {
+      } catch (e) {
+        console.error(`[TilePreview] fetch failed z=${z} x=${x} y=${y} url=${url}:`, e);
         return null;
       }
     }),
