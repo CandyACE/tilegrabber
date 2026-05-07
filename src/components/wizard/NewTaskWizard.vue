@@ -54,6 +54,8 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 // 瓦片预览状态（step 2）
 const previewBlobUrls = ref<(string | null)[]>(new Array(9).fill(null));
 const previewLoading = ref(false);
+// Monotonic counter: each loadTilePreview call increments this; stale calls bail out
+let previewRequestId = 0;
 
 // ─── 请求配置（Headers + Param Scripts）─────────────────────────────────────
 
@@ -204,6 +206,7 @@ function buildTileUrl(
 
 /** 根据数据源边界，加载 3×3 预览瓦片 */
 async function loadTilePreview(src: TileSource) {
+  const myRequestId = ++previewRequestId;
   revokePreviews();
   previewLoading.value = true;
 
@@ -256,6 +259,7 @@ async function loadTilePreview(src: TileSource) {
 
   const results = await Promise.all(
     coords.map(async ([z, x, y]) => {
+      if (previewRequestId !== myRequestId) return null; // cancelled by a newer call
       const url = buildTileUrl(src, z, x, y);
       try {
         const bytes = await invoke<number[]>("fetch_tile", {
@@ -271,6 +275,7 @@ async function loadTilePreview(src: TileSource) {
     }),
   );
 
+  if (previewRequestId !== myRequestId) return; // a newer call superseded us
   previewBlobUrls.value = results;
   previewLoading.value = false;
 }
@@ -1104,6 +1109,9 @@ function onLayerSelect(idx: number) {
               @click="
                 step = 1;
                 errorMsg = '';
+                wmtsLayers.value = [];
+                parsedSource.value = null;
+                revokePreviews();
               "
               >{{ t('wizard.back') }}</UiButton
             >
