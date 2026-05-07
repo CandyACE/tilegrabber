@@ -34,6 +34,8 @@ pub struct DownloadRules {
     pub proxy_enabled: bool,
     /// HTTP/HTTPS 代理 URL（如 http://127.0.0.1:7890）
     pub proxy_url: String,
+    /// 批次高失败率时的冷却等待时间（毫秒，0 = 不冷却）
+    pub retry_delay_ms: u64,
 }
 
 impl Default for DownloadRules {
@@ -48,6 +50,7 @@ impl Default for DownloadRules {
             delay_max_ms: 150,
             proxy_enabled: false,
             proxy_url: String::new(),
+            retry_delay_ms: 5000,
         }
     }
 }
@@ -72,6 +75,9 @@ impl DownloadRules {
         let delay_max_ms: u64 = get("download.delay_max_ms", "150").parse().unwrap_or(150);
         let proxy_enabled = get("network.proxy_enabled", "false") == "true";
         let proxy_url = get("network.proxy_url", "");
+        let retry_delay_ms: u64 = get("download.retry_delay_ms", "5000")
+            .parse()
+            .unwrap_or(5000);
 
         DownloadRules {
             time_window_enabled,
@@ -83,6 +89,7 @@ impl DownloadRules {
             delay_max_ms,
             proxy_enabled,
             proxy_url,
+            retry_delay_ms,
         }
     }
 

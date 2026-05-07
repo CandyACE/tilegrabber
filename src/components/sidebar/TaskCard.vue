@@ -11,13 +11,15 @@ import {
   Play,
   Loader,
   RefreshCw,
+  RotateCcw,
   Trash2,
   PackageOpen,
   PackageCheck,
   HardDrive,
+  X,
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
-import type { ExportRecord } from "~/composables/useExportJobs";
+import { useExportJobs, type ExportRecord } from "~/composables/useExportJobs";
 
 export type TaskStatus =
   | "downloading"
@@ -50,10 +52,11 @@ export interface Task {
 }
 
 const { t } = useI18n();
+const { cancelJob } = useExportJobs();
 
 const props = defineProps<{
   task: Task;
-  live?: { speed: number; speedMb: number; eta: number | null };
+  live?: { speed: number; speedMb: number; eta: number | null; retryIn: number | null };
   exportJob?: ExportRecord;
   selectable?: boolean;
   selected?: boolean;
@@ -298,6 +301,16 @@ watch(
       <span v-if="live.eta">{{ t('taskCard.remaining', { time: formatEta(live.eta) }) }}</span>
     </div>
 
+    <!-- 重试冷却倒计时 -->
+    <div
+      v-if="task.status === 'downloading' && live && live.retryIn && live.retryIn > 0"
+      class="flex items-center gap-1.5 mt-1 text-xs"
+      style="color: var(--color-text-muted)"
+    >
+      <RotateCcw class="size-3 text-amber-500 animate-spin" style="animation-duration: 2s" />
+      <span>{{ t('taskCard.retryingIn', { secs: live.retryIn }) }}</span>
+    </div>
+
     <!-- 导出进度条（有活跃导出任务时显示） -->
     <div v-if="exportJob" class="mt-2" @click.stop>
       <div class="flex items-center justify-between text-[11px] mb-1">
@@ -308,12 +321,22 @@ watch(
           <PackageCheck class="size-3 text-indigo-500" />
           {{ t('taskCard.exporting') }}
         </span>
-        <span
-          v-if="exportJob.total > 0"
-          class="font-mono tabular-nums"
-          style="color: var(--color-text-muted)"
-        >
-          {{ Math.round((exportJob.done / exportJob.total) * 100) }}%
+        <span class="flex items-center gap-1.5">
+          <span
+            v-if="exportJob.total > 0"
+            class="font-mono tabular-nums"
+            style="color: var(--color-text-muted)"
+          >
+            {{ Math.round((exportJob.done / exportJob.total) * 100) }}%
+          </span>
+          <button
+            class="flex items-center rounded hover:bg-red-50 hover:text-red-500 transition-colors p-0.5"
+            style="color: var(--color-text-muted)"
+            :title="t('taskCard.cancelExport')"
+            @click.stop="cancelJob(exportJob!.jobId)"
+          >
+            <X class="size-3" />
+          </button>
         </span>
       </div>
       <div

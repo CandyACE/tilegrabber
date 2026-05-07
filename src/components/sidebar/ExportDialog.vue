@@ -57,6 +57,7 @@ const { registerJob } = useExportJobs();
 const { t } = useI18n();
 
 const tiffCompression = ref<"none" | "lzw" | "deflate">("none");
+const tiffOutputCrs = ref<string>("3857");
 
 watch(
   () => props.open,
@@ -70,6 +71,7 @@ watch(
       pngLevel.value = 6;
       tiffZoom.value = props.task.maxZoom;
       tiffCompression.value = "none";
+      tiffOutputCrs.value = "3857";
       starting.value = false;
       startError.value = null;
     }
@@ -142,6 +144,7 @@ async function doExport() {
         zoom: tiffZoom.value,
         clipToBounds: clipToBounds.value,
         compression: tiffCompression.value === "none" ? null : tiffCompression.value,
+        outputCrs: tiffOutputCrs.value,
       });
     }
     registerJob(jobId, props.task.id, format.value, destPath.value);
@@ -514,6 +517,45 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                       : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'"
                     :disabled="starting"
                     @click="tiffCompression = opt.v"
+                  >
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+            </Transition>
+
+            <!-- GeoTIFF 坐标系选择（仅 tiff 格式） -->
+            <Transition name="tiff-row">
+              <div
+                v-if="format === 'tiff'"
+                class="rounded-xl border p-3"
+                style="
+                  border-color: var(--color-border-subtle);
+                  background: var(--color-surface-raised);
+                "
+              >
+                <div class="flex items-center gap-2 mb-2">
+                  <Map class="size-3.5 shrink-0 text-slate-400" />
+                  <span class="text-xs font-medium text-slate-700">{{ t('export.outputCrs') }}</span>
+                </div>
+                <div class="grid grid-cols-2 gap-1.5">
+                  <button
+                    v-for="opt in ([
+                      { v: '4326', label: 'EPSG:4326 (WGS84)' },
+                      { v: '4490', label: 'EPSG:4490 (CGCS2000)' },
+                      { v: '3857', label: 'EPSG:3857 (Web Mercator)', span: true },
+                    ] as const)"
+                    :key="opt.v"
+                    type="button"
+                    class="h-7 rounded-lg text-[11px] font-medium border transition-colors"
+                    :class="[
+                      tiffOutputCrs === opt.v
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300',
+                      'span' in opt && opt.span ? 'col-span-2' : '',
+                    ]"
+                    :disabled="starting"
+                    @click="tiffOutputCrs = opt.v"
                   >
                     {{ opt.label }}
                   </button>

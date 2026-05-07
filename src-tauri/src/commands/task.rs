@@ -3,6 +3,8 @@
 //! 提供给前端的任务 CRUD + 下载引擎控制接口。
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::Arc;
 
 use fs2::available_space as fs2_available_space;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -22,12 +24,16 @@ pub struct ExportJob {
     pub dest_path: String,
     pub done: u64,
     pub total: u64,
-    pub status: String, // "running" | "done" | "error"
+    pub status: String, // "running" | "done" | "error" | "cancelled"
     pub error: Option<String>,
 }
 
 pub type ExportState =
     std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, ExportJob>>>;
+
+/// 每个活跃导出任务对应的取消令牌（job_id → AtomicBool）
+pub type CancelMap =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<AtomicBool>>>>;
 
 /// 导出进度/完成事件 payload（通过 Tauri 事件推送到前端）
 #[derive(Clone, serde::Serialize)]
@@ -421,6 +427,7 @@ pub async fn export_mbtiles(
     png_level: Option<u8>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
+    cancel_map: State<'_, CancelMap>,
     app: AppHandle,
 ) -> Result<String, String> {
     let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
@@ -454,6 +461,8 @@ pub async fn export_mbtiles(
     let task_name = task.name.clone();
 
     let job_id = Uuid::new_v4().to_string();
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -467,6 +476,7 @@ pub async fn export_mbtiles(
     export_state.lock().unwrap().insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
+    let cancel_map_clone = cancel_map.inner().clone();
     let app_clone = app.clone();
     let jid = job_id.clone();
 
@@ -484,6 +494,7 @@ pub async fn export_mbtiles(
             &crs,
             jpeg_quality,
             png_level,
+            &cancel_token,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
                     if let Some(j) = map.get_mut(&jid) {
@@ -504,8 +515,11 @@ pub async fn export_mbtiles(
                 );
             },
         );
+        cancel_map_clone.lock().unwrap().remove(&jid);
+        let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
+            Err(_) if cancelled => ("cancelled".into(), None, 0),
             Err(e) => ("error".into(), Some(e.to_string()), 0),
         };
         if let Ok(mut map) = state_clone.lock() {
@@ -544,6 +558,7 @@ pub async fn export_directory(
     png_level: Option<u8>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
+    cancel_map: State<'_, CancelMap>,
     app: AppHandle,
 ) -> Result<String, String> {
     let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
@@ -576,6 +591,8 @@ pub async fn export_directory(
         .unwrap_or_default();
 
     let job_id = Uuid::new_v4().to_string();
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -589,6 +606,7 @@ pub async fn export_directory(
     export_state.lock().unwrap().insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
+    let cancel_map_clone = cancel_map.inner().clone();
     let app_clone = app.clone();
     let jid = job_id.clone();
 
@@ -604,6 +622,7 @@ pub async fn export_directory(
             &crs,
             jpeg_quality,
             png_level,
+            &cancel_token,
             |done, total| {
                 if let Ok(mut map) = state_clone.lock() {
                     if let Some(j) = map.get_mut(&jid) {
@@ -624,8 +643,11 @@ pub async fn export_directory(
                 );
             },
         );
+        cancel_map_clone.lock().unwrap().remove(&jid);
+        let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
+            Err(_) if cancelled => ("cancelled".into(), None, 0),
             Err(e) => ("error".into(), Some(e.to_string()), 0),
         };
         if let Ok(mut map) = state_clone.lock() {
@@ -662,8 +684,10 @@ pub async fn export_geotiff(
     zoom: u8,
     clip_to_bounds: bool,
     compression: Option<String>,
+    output_crs: Option<String>,
     app_db: State<'_, AppDb>,
     export_state: State<'_, ExportState>,
+    cancel_map: State<'_, CancelMap>,
     app: AppHandle,
 ) -> Result<String, String> {
     let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
@@ -683,9 +707,26 @@ pub async fn export_geotiff(
         task.bounds_east,
         task.bounds_north,
     ];
-    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
+    let source_crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
         .map(|s| s.crs)
         .unwrap_or_default();
+
+    // 解析目标 EPSG 代号：数字字符串直接解析，"auto_utm" 按任务中心经度自动选带
+    let target_epsg: Option<u32> = match output_crs.as_deref() {
+        None | Some("auto") => None, // 跟随源图层
+        Some("auto_utm") => {
+            let center_lon = (bounds[0] + bounds[2]) / 2.0;
+            let zone = crate::export::utm::zone_from_lon(center_lon);
+            let center_lat = (bounds[1] + bounds[3]) / 2.0;
+            let epsg = if center_lat >= 0.0 {
+                32600 + zone as u32
+            } else {
+                32700 + zone as u32
+            };
+            Some(epsg)
+        }
+        Some(s) => s.parse::<u32>().ok(),
+    };
 
     // 若启用精确裁剪且任务带有多边形，解析顶点用于像素级掩膜
     let polygon: Option<Vec<[f64; 2]>> = if clip_to_bounds {
@@ -697,6 +738,8 @@ pub async fn export_geotiff(
     };
 
     let job_id = Uuid::new_v4().to_string();
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -710,6 +753,7 @@ pub async fn export_geotiff(
     export_state.lock().unwrap().insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
+    let cancel_map_clone = cancel_map.inner().clone();
     let app_clone = app.clone();
     let jid = job_id.clone();
 
@@ -727,8 +771,10 @@ pub async fn export_geotiff(
             zoom,
             clip_to_bounds,
             polygon,
-            &crs,
+            &source_crs,
+            target_epsg,
             &compression_str,
+            &cancel_token,
             move |done, total| {
                 if let Ok(mut map) = state_clone2.lock() {
                     if let Some(j) = map.get_mut(&jid2) {
@@ -749,8 +795,11 @@ pub async fn export_geotiff(
                 );
             },
         );
+        cancel_map_clone.lock().unwrap().remove(&jid);
+        let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
+            Err(_) if cancelled => ("cancelled".into(), None, 0),
             Err(e) => ("error".into(), Some(e.to_string()), 0),
         };
         if let Ok(mut map) = state_clone.lock() {
@@ -784,6 +833,19 @@ pub async fn get_export_jobs(
 ) -> Result<Vec<ExportJob>, String> {
     let map = export_state.lock().map_err(|e| e.to_string())?;
     Ok(map.values().cloned().collect())
+}
+
+/// 取消指定导出任务（设置取消令牌，导出函数在下一个条带/批次时退出）
+#[tauri::command]
+pub async fn cancel_export(
+    job_id: String,
+    cancel_map: State<'_, CancelMap>,
+) -> Result<(), String> {
+    let map = cancel_map.lock().map_err(|e| e.to_string())?;
+    if let Some(token) = map.get(&job_id) {
+        token.store(true, AtomicOrdering::Relaxed);
+    }
+    Ok(())
 }
 
 // ─── 工具 ────────────────────────────────────────────────────────────────────

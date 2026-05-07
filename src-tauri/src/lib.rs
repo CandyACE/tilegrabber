@@ -19,12 +19,12 @@ use commands::source::{
     parse_wmts_url, validate_tile_url,
 };
 use commands::task::{
-    cancel_download, check_disk_space, create_task, delete_task, estimate_download,
+    cancel_download, cancel_export, check_disk_space, create_task, delete_task, estimate_download,
     export_directory, export_geotiff,
     export_mbtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
     get_export_jobs, get_stored_tile, get_task, get_task_logs, get_task_thumbnail, import_mbtiles,
     import_task, list_tasks, pause_download, resume_download, retry_failed, reveal_in_explorer,
-    start_download, ExportState,
+    start_download, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
 use commands::updater::{check_for_update, download_and_install_update, open_release_url};
@@ -148,6 +148,11 @@ pub fn run() {
             let export_state: ExportState =
                 std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
             app.manage(export_state);
+
+            // 初始化导出取消令牌映射
+            let cancel_map: CancelMap =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+            app.manage(cancel_map);
 
             // 初始化网络暂停任务集合
             let net_paused: NetworkPausedSet = std::sync::Arc::new(std::sync::Mutex::new(
@@ -347,6 +352,7 @@ pub fn run() {
             export_directory,
             export_geotiff,
             get_export_jobs,
+            cancel_export,
             reveal_in_explorer,
             // 任务包导入/导出
             export_task,

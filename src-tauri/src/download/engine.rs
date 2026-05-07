@@ -48,6 +48,8 @@ pub struct ProgressPayload {
     pub eta_secs: Option<f64>,
     /// 当前状态字符串
     pub status: String,
+    /// 批次失败率过高时的重试冷却倒计时（秒），None 表示无冷却
+    pub retry_in_secs: Option<u64>,
 }
 
 /// 单个瓦片的经纬度边界（用于闪烁显示）
@@ -451,6 +453,8 @@ async fn run_download(
     let tile_delay_ms = rules.per_tile_delay_ms();
     let delay_min_ms = rules.delay_min_ms;
     let delay_max_ms = rules.delay_max_ms;
+    // 批次高失败率冷却时长（秒）；来自 download.retry_delay_ms 设置
+    let retry_cooldown_secs = rules.retry_delay_ms / 1000;
 
     // 立即发送初始进度事件，前端立刻将任务状态改为 "downloading"
     let init_prog = tile_store.get_progress().unwrap_or_default();
@@ -465,6 +469,7 @@ async fn run_download(
             bytes_per_sec: 0.0,
             eta_secs: None,
             status: "downloading".to_string(),
+            retry_in_secs: None,
         },
     );
 
@@ -546,6 +551,7 @@ async fn run_download(
                                 bytes_per_sec: 0.0,
                                 eta_secs: None,
                                 status: "paused".to_string(),
+                                retry_in_secs: None,
                             },
                         );
                     }
@@ -643,8 +649,9 @@ async fn run_download(
         }
 
         // 流水线：将本批写入任务发送到后台写入线程，主循环立即开始下一批下载
-        let batch_downloaded = success_tiles.len() as i64;
-        let _batch_failed = failed_tiles.len() as i64;
+        let batch_failed_count = failed_tiles.len();
+        let batch_total = success_tiles.len() + batch_failed_count;
+        let batch_downloaded = (batch_total - batch_failed_count) as i64;
         let _ = write_tx
             .send(WriteBatchMsg {
                 success_tiles,
@@ -745,8 +752,39 @@ async fn run_download(
                         bytes_per_sec,
                         eta_secs,
                         status: "downloading".to_string(),
+                        retry_in_secs: None,
                     },
                 );
+            }
+        }
+
+        // 批次失败率过高时推送重试倒计时（≥75% 失败且至少 4 个失败瓦片）
+        if retry_cooldown_secs > 0
+            && batch_failed_count >= 4
+            && batch_failed_count * 4 >= batch_total
+        {
+            if let Ok(p) = tile_store.get_progress() {
+                for remaining in (1..=retry_cooldown_secs).rev() {
+                    let sig = ctrl_rx.borrow().clone();
+                    if sig == CtrlSignal::Cancel || sig == CtrlSignal::Pause {
+                        break;
+                    }
+                    let _ = app.emit(
+                        "tilegrab-progress",
+                        ProgressPayload {
+                            task_id: task_id.clone(),
+                            total: p.total,
+                            downloaded: p.downloaded,
+                            failed: p.failed,
+                            speed: 0.0,
+                            bytes_per_sec: 0.0,
+                            eta_secs: None,
+                            status: "downloading".to_string(),
+                            retry_in_secs: Some(remaining),
+                        },
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                }
             }
         }
     }
@@ -770,6 +808,7 @@ async fn run_download(
                     bytes_per_sec: 0.0,
                     eta_secs: None,
                     status: "paused".to_string(),
+                    retry_in_secs: None,
                 },
             );
         }
@@ -796,6 +835,7 @@ async fn run_download(
                 bytes_per_sec: 0.0,
                 eta_secs: None,
                 status: "downloading".to_string(),
+                retry_in_secs: None,
             },
         );
     }
@@ -842,6 +882,7 @@ async fn run_download(
                             bytes_per_sec: 0.0,
                             eta_secs: None,
                             status: "processing".to_string(),
+                            retry_in_secs: None,
                         },
                     );
                 },
@@ -900,6 +941,7 @@ async fn run_download(
                 bytes_per_sec: 0.0,
                 eta_secs: None,
                 status: "processing".to_string(),
+                retry_in_secs: None,
             },
         );
 
@@ -936,6 +978,7 @@ async fn run_download(
                             bytes_per_sec: 0.0,
                             eta_secs: None,
                             status: "processing".to_string(),
+                            retry_in_secs: None,
                         },
                     );
                 },
@@ -1034,6 +1077,7 @@ async fn run_download(
             bytes_per_sec: 0.0,
             eta_secs: None,
             status: final_status.to_string(),
+            retry_in_secs: None,
         },
     );
 }
@@ -1553,6 +1597,7 @@ async fn run_mbtiles_import(
                     bytes_per_sec: 0.0,
                     eta_secs: None,
                     status: "downloading".into(),
+                    retry_in_secs: None,
                 },
             )?;
 
@@ -1586,6 +1631,7 @@ async fn run_mbtiles_import(
                                 bytes_per_sec: 0.0,
                                 eta_secs: None,
                                 status: "cancelled".into(),
+                                retry_in_secs: None,
                             },
                         )?;
                         return Ok(());
@@ -1628,6 +1674,7 @@ async fn run_mbtiles_import(
                             bytes_per_sec: 0.0,
                             eta_secs: None,
                             status: "downloading".into(),
+                            retry_in_secs: None,
                         },
                     )?;
                 }
@@ -1653,6 +1700,7 @@ async fn run_mbtiles_import(
                     bytes_per_sec: 0.0,
                     eta_secs: None,
                     status: final_status.into(),
+                    retry_in_secs: None,
                 },
             )?;
 
@@ -1680,6 +1728,7 @@ async fn run_mbtiles_import(
                     bytes_per_sec: 0.0,
                     eta_secs: None,
                     status: "failed".into(),
+                    retry_in_secs: None,
                 },
             )
             .ok();

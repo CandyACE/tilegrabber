@@ -43,6 +43,7 @@ interface ProgressPayload {
   bytes_per_sec: number;
   eta_secs: number | null;
   status: string;
+  retry_in_secs: number | null;
 }
 
 function toFrontendTask(b: BackendTask): Task {
@@ -100,7 +101,7 @@ const filters = computed((): { key: FilterKey; label: string }[] => [
 const tasks = ref<Task[]>([]);
 // 记录各任务的动态速度/ETA（来自进度事件）
 const taskLive = ref<
-  Record<string, { speed: number; speedMb: number; eta: number | null }>
+  Record<string, { speed: number; speedMb: number; eta: number | null; retryIn: number | null }>
 >({});
 
 const { getActiveJobForTask } = useExportJobs();
@@ -136,6 +137,7 @@ onMounted(async () => {
           speed: p.speed,
           speedMb: p.bytes_per_sec / (1024 * 1024),
           eta: p.eta_secs,
+          retryIn: p.retry_in_secs,
         };
       } else {
         // 收到未知任务的进度事件，重新加载任务列表

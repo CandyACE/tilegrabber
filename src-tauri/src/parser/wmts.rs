@@ -92,6 +92,10 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
     let mut path: Vec<String> = Vec::new();
     let mut buf = Vec::new();
 
+    // Temporary bounding box corners while parsing
+    let mut bbox_west: Option<f64> = None;
+    let mut bbox_south: Option<f64> = None;
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
@@ -110,6 +114,8 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                                 resource_url: None,
                                 bounds: None,
                             });
+                            bbox_west = None;
+                            bbox_south = None;
                         }
                     }
                     "ResourceURL" => {
@@ -129,9 +135,6 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                             }
                         }
                     }
-                    "WGS84BoundingBox" => {
-                        // 解析在下面的 Text 事件中
-                    }
                     _ => {}
                 }
                 path.push(tag);
@@ -144,6 +147,8 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                             layers.push(layer);
                         }
                     }
+                    bbox_west = None;
+                    bbox_south = None;
                 }
                 path.pop();
             }
@@ -184,6 +189,29 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                                 layer.tile_matrix_sets.push(text);
                             }
                         }
+                        // 解析 BoundingBox / WGS84BoundingBox 的角点
+                        "LowerCorner" => {
+                            // LowerCorner: "lon lat" → west, south
+                            let mut parts = text.split_whitespace()
+                                .filter_map(|s| s.parse::<f64>().ok());
+                            if let (Some(w), Some(s)) = (parts.next(), parts.next()) {
+                                bbox_west = Some(w);
+                                bbox_south = Some(s);
+                            }
+                        }
+                        "UpperCorner" => {
+                            // UpperCorner: "lon lat" → east, north
+                            let mut parts = text.split_whitespace()
+                                .filter_map(|s| s.parse::<f64>().ok());
+                            if let (Some(e), Some(n)) = (parts.next(), parts.next()) {
+                                if let (Some(w), Some(s)) = (bbox_west, bbox_south) {
+                                    let b = Bounds::new(w, e, s, n);
+                                    if b.is_valid() {
+                                        layer.bounds = Some(b);
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -217,7 +245,11 @@ pub fn wmts_layer_to_source(layer: &WmtsLayer, capabilities_url: &str) -> Option
         .tile_matrix_sets
         .iter()
         .find_map(|tms| {
-            if tms.contains("GoogleMapsCompatible") || tms.contains("EPSG:3857") || tms == "w" {
+            if tms.contains("GoogleMapsCompatible")
+                || tms.contains("EPSG:3857")
+                || tms.contains("WebMercatorQuad")
+                || tms == "w"
+            {
                 Some(CrsType::WebMercator)
             } else if tms.contains("EPSG:4326") || tms == "c" {
                 Some(CrsType::Wgs84)
@@ -237,7 +269,8 @@ pub fn wmts_layer_to_source(layer: &WmtsLayer, capabilities_url: &str) -> Option
         url_template: url,
         crs,
         format,
-        bounds: layer.bounds.clone().unwrap_or_default(),
+        bounds: layer.bounds.clone()
+            .unwrap_or_else(|| Bounds::new(-180.0, 180.0, -85.051129, 85.051129)),
         ..Default::default()
     })
 }

@@ -9,7 +9,7 @@ export interface ExportRecord {
   destPath: string;
   done: number;
   total: number;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   error: string | null;
   startedAt: Date;
   finishedAt?: Date;
@@ -26,7 +26,7 @@ async function ensureListener() {
     jobId: string;
     done: number;
     total: number;
-    status: "running" | "done" | "error";
+    status: "running" | "done" | "error" | "cancelled";
     destPath: string;
     error: string | null;
   }>("export-progress", (ev) => {
@@ -42,7 +42,7 @@ async function ensureListener() {
       error: p.error ?? null,
     };
 
-    if (p.status === "done" || p.status === "error") {
+    if (p.status === "done" || p.status === "error" || p.status === "cancelled") {
       updated.finishedAt = new Date();
       // 加入历史
       const prev = historyByTask.value[job.taskId] ?? [];
@@ -103,6 +103,11 @@ export function useExportJobs() {
     return historyByTask.value[taskId] ?? [];
   }
 
+  /** 取消一个活跃中的导出任务 */
+  async function cancelJob(jobId: string) {
+    await invoke("cancel_export", { jobId }).catch(console.error);
+  }
+
   /** 在资源管理器中定位文件 */
   async function revealInExplorer(path: string) {
     await invoke("reveal_in_explorer", { path }).catch(console.error);
@@ -114,6 +119,7 @@ export function useExportJobs() {
     registerJob,
     getActiveJobForTask,
     getHistoryForTask,
+    cancelJob,
     revealInExplorer,
   };
 }

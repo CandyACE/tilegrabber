@@ -322,6 +322,7 @@ export default {
     retry: 'Retry',
     delete: 'Delete',
     exporting: 'Exporting',
+    cancelExport: 'Cancel export',
     failedBadge: '⚠ {count} failed',
     status: {
       downloading: 'Downloading',
@@ -333,6 +334,7 @@ export default {
       processing: 'Clipping',
     },
     remaining: '{time} left',
+    retryingIn: 'Retrying in {secs}s',
   },
 
   taskDetail: {
@@ -443,6 +445,7 @@ export default {
     mergeZoomDesc: 'z{min}–z{max} available — higher zoom means sharper but larger file',
     compression: 'Compression',
     compressionNone: 'None',
+    outputCrs: 'Output CRS',
     clipOption: 'Strictly clip to task bounding box',
     clipTiffDesc: 'Clip output pixels precisely to task bounding box coordinates',
     clipDefaultDesc: 'Only export tiles fully within the task bounding box, excluding edge-intersecting tiles',
@@ -535,6 +538,9 @@ export default {
     sourceWebDesc: 'Intercept actual browser requests',
     sourceMbtiles: 'MBTiles File',
     sourceMbtilesDesc: 'Import local .mbtiles offline package',
+    sourcePreset: 'Preset Maps',
+    sourcePresetDesc: 'Popular built-in basemaps',
+    presetPreviewHint: 'Click Confirm to create a download task',
     selectFileTitle: 'Select Layer Resource File',
     selectFileFilter: 'Layer Resources',
     urlPlaceholder: 'Enter URL',

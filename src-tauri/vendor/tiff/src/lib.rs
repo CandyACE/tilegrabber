@@ -6,6 +6,8 @@
 //! # Related Links
 //! * <https://web.archive.org/web/20210108073850/https://www.adobe.io/open/standards/TIFF.html> - The TIFF specification
 
+#![allow(mismatched_lifetime_syntaxes)]
+
 extern crate jpeg;
 extern crate weezl;
 

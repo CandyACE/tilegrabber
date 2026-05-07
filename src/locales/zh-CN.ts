@@ -322,6 +322,7 @@ export default {
     retry: '重试',
     delete: '删除',
     exporting: '导出中',
+    cancelExport: '取消导出',
     failedBadge: '⚠ {count} 失败',
     status: {
       downloading: '下载中',
@@ -333,6 +334,7 @@ export default {
       processing: '裁剪中',
     },
     remaining: '剩余 {time}',
+    retryingIn: '重试中，{secs} 秒后继续',
   },
 
   taskDetail: {
@@ -443,6 +445,7 @@ export default {
     mergeZoomDesc: 'z{min}–z{max} 可选，层级越高越清晰但文件越大',
     compression: '压缩方式',
     compressionNone: '无压缩',
+    outputCrs: '输出坐标系',
     clipOption: '严格裁剪至任务选框范围',
     clipTiffDesc: '将输出像素精确裁剪至任务选框经纬度边界',
     clipDefaultDesc: '仅导出完全位于任务选框内的瓦片，排除边缘相交瓦片',
@@ -535,6 +538,9 @@ export default {
     sourceWebDesc: '拦截浏览器实际请求',
     sourceMbtiles: 'MBTiles 文件',
     sourceMbtilesDesc: '导入本地 .mbtiles 离线包',
+    sourcePreset: '预置底图',
+    sourcePresetDesc: '内置常用地图地址',
+    presetPreviewHint: '点击确认即可创建下载任务',
     selectFileTitle: '选择图层资源文件',
     selectFileFilter: '图层资源',
     urlPlaceholder: '输入 URL',

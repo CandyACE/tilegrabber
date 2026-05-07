@@ -8,6 +8,7 @@ import {
   Link,
   Scan,
   Database,
+  Layers,
   PlusCircle,
   X,
   Check,
@@ -21,6 +22,7 @@ import UiInput from "@/components/ui/input/Input.vue";
 import UiButton from "@/components/ui/button/Button.vue";
 import type { TileSource } from "~/types/tile-source";
 import { useI18n } from "vue-i18n";
+import { BASEMAP_PRESETS, BASEMAP_CATEGORIES } from "~/data/basemap-presets";
 
 const emit = defineEmits<{
   confirm: [source: TileSource];
@@ -29,7 +31,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-type SourceType = "file" | "wmts" | "tms" | "web" | "mbtiles";
+type SourceType = "file" | "wmts" | "tms" | "web" | "mbtiles" | "preset";
 type Step = 1 | 2;
 type CaptureStatus = "idle" | "capturing";
 
@@ -134,7 +136,19 @@ const sourceTypeOptions = computed(() => [
     label: t('wizard.sourceMbtiles'),
     desc: t('wizard.sourceMbtilesDesc'),
   },
+  {
+    value: "preset" as const,
+    icon: Layers,
+    label: t('wizard.sourcePreset'),
+    desc: t('wizard.sourcePresetDesc'),
+  },
 ] as const)
+
+function handlePresetSelect(preset: typeof BASEMAP_PRESETS[number]) {
+  parsedSource.value = { ...preset.source, name: preset.name };
+  step.value = 2;
+  loadTilePreview(parsedSource.value);
+}
 
 function stopPolling() {
   if (pollTimer !== null) {
@@ -293,15 +307,11 @@ async function parseWmts() {
     errorMsg.value = t('wizard.errNoLayers');
     return;
   }
-  if (results.length === 1) {
-    emit("confirm", applyRequestConfig(results[0]));
-  } else {
-    wmtsLayers.value = results;
-    parsedSource.value = results[0];
-    selectedLayerIdx.value = 0;
-    step.value = 2;
-    loadTilePreview(results[0]);
-  }
+  wmtsLayers.value = results;
+  parsedSource.value = results[0];
+  selectedLayerIdx.value = 0;
+  step.value = 2;
+  loadTilePreview(results[0]);
 }
 
 async function parseTms() {
@@ -361,15 +371,11 @@ async function finishCapture() {
     errorMsg.value = t('wizard.noCaptured');
     return;
   }
-  if (tiles.length === 1) {
-    emit("confirm", applyRequestConfig(tiles[0]));
-  } else {
-    wmtsLayers.value = tiles;
-    parsedSource.value = tiles[0];
-    selectedLayerIdx.value = 0;
-    step.value = 2;
-    loadTilePreview(tiles[0]);
-  }
+  wmtsLayers.value = tiles;
+  parsedSource.value = tiles[0];
+  selectedLayerIdx.value = 0;
+  step.value = 2;
+  loadTilePreview(tiles[0]);
 }
 
 function onLayerSelect(idx: number) {
@@ -429,7 +435,7 @@ function onLayerSelect(idx: number) {
             <!-- 步骤 1 -->
             <template v-if="step === 1">
               <!-- 类型选择器 -->
-              <div class="grid grid-cols-3 gap-2.5 mb-5 [&>*:nth-child(n+4)]:col-span-1 [&>*:nth-child(4)]:col-start-2">
+              <div class="grid grid-cols-3 gap-2.5 mb-5">
                 <button
                   v-for="opt in sourceTypeOptions"
                   :key="opt.value"
@@ -670,11 +676,47 @@ function onLayerSelect(idx: number) {
                 </div>
               </div>
 
+              <!-- 预置底图 -->
+              <div
+                class="grid transition-[grid-template-rows] duration-300 ease-out"
+                :style="{
+                  gridTemplateRows: sourceType === 'preset' ? '1fr' : '0fr',
+                }"
+              >
+                <div class="overflow-hidden">
+                  <div class="space-y-3 pb-1">
+                    <div
+                      v-for="cat in BASEMAP_CATEGORIES"
+                      :key="cat.id"
+                    >
+                      <p class="text-xs font-semibold text-slate-500 mb-2">
+                        {{ cat.label }}
+                      </p>
+                      <div class="grid grid-cols-2 gap-1.5">
+                        <button
+                          v-for="preset in BASEMAP_PRESETS.filter(p => p.category === cat.id)"
+                          :key="preset.id"
+                          type="button"
+                          class="flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors text-left text-xs bg-white hover:bg-blue-50 hover:border-blue-400 hover:text-blue-700 border-slate-200 text-slate-700"
+                          @click="handlePresetSelect(preset)"
+                        >
+                          <span class="flex-1 font-medium">{{ preset.name }}</span>
+                          <span
+                            v-if="preset.source.coord_type === 'GCJ02'"
+                            class="text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-600 font-bold shrink-0"
+                          >GCJ02</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- ── 请求配置（仅 wmts / tms / web 显示）────────────────────── -->
               <div
                 class="grid transition-[grid-template-rows] duration-300 ease-out mt-3"
                 :style="{
-                  gridTemplateRows: (sourceType !== 'file' && sourceType !== 'mbtiles') ? '1fr' : '0fr',
+                  gridTemplateRows: (sourceType !== 'file' && sourceType !== 'mbtiles' && sourceType !== 'preset') ? '1fr' : '0fr',
                 }"
               >
                 <div class="overflow-hidden">
@@ -901,54 +943,75 @@ function onLayerSelect(idx: number) {
             <!-- 步骤 2：多图层选择（WMTS / 网页抓取）+ 瓦片预览 -->
             <template v-else-if="step === 2">
               <div class="flex gap-5">
-                <!-- 左：图层列表 -->
-                <div class="flex-1 min-w-0">
-                  <p class="text-sm text-slate-600 mb-3">
-                    {{ sourceType === "web" ? t('wizard.webFoundPrefix') : t('wizard.wmtsContainsPrefix') }}
-                    <strong class="text-slate-900">{{
-                      wmtsLayers.length
-                    }}</strong>
-                    {{ sourceType === "web" ? t('wizard.webFoundSuffix') : t('wizard.wmtsContainsSuffix') }}
-                  </p>
-                  <div
-                    class="space-y-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200"
-                  >
-                    <button
-                      v-for="(layer, idx) in wmtsLayers"
-                      :key="idx"
-                      class="w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors"
-                      :class="
-                        selectedLayerIdx === idx
-                          ? 'bg-blue-50 text-blue-700'
-                          : 'hover:bg-slate-50 text-slate-800'
-                      "
-                      @click="onLayerSelect(idx)"
+                <!-- 左：图层列表 or 预置信息 -->
+                <template v-if="wmtsLayers.length > 0">
+                  <div class="flex-1 min-w-0">
+                    <p class="text-sm text-slate-600 mb-3">
+                      {{ sourceType === "web" ? t('wizard.webFoundPrefix') : t('wizard.wmtsContainsPrefix') }}
+                      <strong class="text-slate-900">{{
+                        wmtsLayers.length
+                      }}</strong>
+                      {{ sourceType === "web" ? t('wizard.webFoundSuffix') : t('wizard.wmtsContainsSuffix') }}
+                    </p>
+                    <div
+                      class="space-y-1 max-h-72 overflow-y-auto rounded-xl border border-slate-200"
                     >
-                      <div
-                        class="w-2 h-2 rounded-full shrink-0 mt-1.5 transition-colors"
+                      <button
+                        v-for="(layer, idx) in wmtsLayers"
+                        :key="idx"
+                        class="w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors"
                         :class="
                           selectedLayerIdx === idx
-                            ? 'bg-blue-500'
-                            : 'bg-slate-300'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'hover:bg-slate-50 text-slate-800'
                         "
-                      />
-                      <div class="flex-1 min-w-0">
-                        <div class="text-xs font-medium truncate">
-                          {{ layer.name }}
-                        </div>
-                        <div
-                          class="text-[10px] font-mono text-slate-400 truncate mt-0.5"
-                        >
-                          {{ layer.url_template }}
-                        </div>
-                      </div>
-                      <span
-                        class="text-[11px] text-slate-400 shrink-0 mt-0.5"
-                        >{{ layer.crs }}</span
+                        @click="onLayerSelect(idx)"
                       >
-                    </button>
+                        <div
+                          class="w-2 h-2 rounded-full shrink-0 mt-1.5 transition-colors"
+                          :class="
+                            selectedLayerIdx === idx
+                              ? 'bg-blue-500'
+                              : 'bg-slate-300'
+                          "
+                        />
+                        <div class="flex-1 min-w-0">
+                          <div class="text-xs font-medium truncate">
+                            {{ layer.name }}
+                          </div>
+                          <div
+                            class="text-[10px] font-mono text-slate-400 truncate mt-0.5"
+                          >
+                            {{ layer.url_template }}
+                          </div>
+                        </div>
+                        <span
+                          class="text-[11px] text-slate-400 shrink-0 mt-0.5"
+                          >{{ layer.crs }}</span
+                        >
+                      </button>
+                    </div>
                   </div>
-                </div>
+                </template>
+                <!-- 预置底图信息面板（无图层列表时显示） -->
+                <template v-else>
+                  <div class="flex-1 min-w-0 flex flex-col justify-center">
+                    <div class="rounded-xl border border-slate-200 p-4 bg-slate-50 space-y-3">
+                      <div>
+                        <p class="text-sm font-semibold text-slate-900 mb-1">{{ parsedSource?.name }}</p>
+                        <p class="text-[11px] font-mono text-slate-400 break-all leading-relaxed">{{ parsedSource?.url_template }}</p>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <span class="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{{ parsedSource?.crs }}</span>
+                        <span
+                          v-if="parsedSource?.coord_type === 'GCJ02'"
+                          class="text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold"
+                        >GCJ02 纠偏</span>
+                      </div>
+                      <p class="text-[11px] text-slate-400">{{ t('wizard.presetPreviewHint') }}</p>
+                    </div>
+                  </div>
+                </template>
 
                 <!-- 右：瓦片预览 -->
                 <div class="shrink-0 w-52 flex flex-col">
@@ -1019,7 +1082,7 @@ function onLayerSelect(idx: number) {
                 >{{ t('wizard.cancel') }}</UiButton
               >
               <UiButton
-                v-if="sourceType !== 'file' || step === 2"
+                v-if="(sourceType !== 'file' && sourceType !== 'preset') || step === 2"
                 size="sm"
                 :disabled="
                   isLoading ||

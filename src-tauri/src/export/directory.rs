@@ -16,6 +16,7 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::types::CrsType;
 
@@ -40,6 +41,7 @@ pub fn export_directory<F>(
     crs: &CrsType,
     jpeg_quality: Option<u8>,
     png_level: Option<u8>,
+    cancel: &AtomicBool,
     mut progress_cb: F,
 ) -> Result<u64>
 where
@@ -85,6 +87,9 @@ where
     let mut written: u64 = 0;
 
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            anyhow::bail!("__cancelled__");
+        }
         let batch: Vec<(i64, i64, i64, Vec<u8>)> = {
             let mut stmt = src.prepare(
                 "SELECT zoom_level, tile_column, tile_row, tile_data
