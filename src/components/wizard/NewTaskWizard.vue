@@ -147,6 +147,8 @@ const sourceTypeOptions = computed(() => [
 ] as const)
 
 function handlePresetSelect(preset: typeof BASEMAP_PRESETS[number]) {
+  wmtsLayers.value = [];  // clear any previous WMTS layer list
+  capturedTiles.value = [];
   parsedSource.value = { ...preset.source, name: preset.name };
   step.value = 2;
   loadTilePreview(parsedSource.value);
