@@ -265,6 +265,8 @@ async function handleNext() {
         else await finishCapture();
       } else if (sourceType.value === "mbtiles") await pickAndParseMbtiles();
       else await parseTms();
+    } catch (e: unknown) {
+      errorMsg.value = e instanceof Error ? e.message : String(e);
     } finally {
       isLoading.value = false;
     }

@@ -75,7 +75,14 @@ pub async fn parse_wmts_url(
         .get(&caps_url)
         .send()
         .await
-        .map_err(|e| format!("请求 WMTS 服务失败: {e}"))?;
+        .map_err(|e| {
+            // 提示本地服务未启动
+            if caps_url.starts_with("http://localhost") || caps_url.starts_with("http://127.0.0.1") {
+                format!("无法连接到本地服务（{caps_url}）。请先在发布面板中启动服务后再试。原始错误: {e}")
+            } else {
+                format!("请求 WMTS 服务失败: {e}")
+            }
+        })?;
 
     if !response.status().is_success() {
         return Err(format!("WMTS 服务返回错误状态: {}", response.status()));
