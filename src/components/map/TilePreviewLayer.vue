@@ -111,8 +111,11 @@ function ensureGcj02Protocol() {
   gcj02ProtoRegistered = true;
 
   maplibregl.addProtocol(GCJ02_PROTO, async (params) => {
-    // 还原 https:// URL
-    const url = params.url.replace(`${GCJ02_PROTO}://`, "https://");
+    // 还原 URL：协议格式为 tilegrab-gcj02://{scheme}/{host/path}
+    const rawGcj = params.url.slice(`${GCJ02_PROTO}://`.length);
+    const gcjSlash = rawGcj.indexOf('/');
+    const gcjScheme = gcjSlash > 0 ? rawGcj.slice(0, gcjSlash) : "https";
+    const url = gcjScheme + "://" + rawGcj.slice(gcjSlash + 1);
     const headers = { ...currentHeaders };
 
     const coords = parseTileCoords(url);
@@ -176,8 +179,12 @@ function ensureProtocol() {
   if (protoRegistered) return;
   protoRegistered = true;
   maplibregl.addProtocol(TILE_PROTO, async (params) => {
-    // 将自定义协议 URL 还原为 https:// URL
-    const url = params.url.replace(`${TILE_PROTO}://`, "https://");
+    // 协议 URL 格式：tilegrab-preview://{scheme}/{host/path}
+    // 从中还原完整 HTTP/HTTPS URL
+    const raw = params.url.slice(`${TILE_PROTO}://`.length);
+    const slashIdx = raw.indexOf('/');
+    const scheme = slashIdx > 0 ? raw.slice(0, slashIdx) : "https";
+    const url = scheme + "://" + raw.slice(slashIdx + 1);
     try {
       const bytes = await invoke<number[]>("fetch_tile", {
         url,
@@ -253,10 +260,12 @@ async function addPreviewLayer(map: MaplibreMap, src: TileSource) {
       const isGcj02 = src.coord_type === "GCJ02" && src.north_to_south;
       if (isGcj02) {
         ensureGcj02Protocol();
-        tileUrls = tileUrls.map((u) => u.replace(/^https?:\/\//, `${GCJ02_PROTO}://`));
+        // 保留原始 scheme：tilegrab-gcj02://{http|https}/{host/path}
+        tileUrls = tileUrls.map((u) => u.replace(/^(https?):\/\//, `${GCJ02_PROTO}://$1/`));
       } else {
         ensureProtocol();
-        tileUrls = tileUrls.map((u) => u.replace(/^https?:\/\//, `${TILE_PROTO}://`));
+        // 保留原始 scheme：tilegrab-preview://{http|https}/{host/path}
+        tileUrls = tileUrls.map((u) => u.replace(/^(https?):\/\//, `${TILE_PROTO}://$1/`));
       }
     }
 
