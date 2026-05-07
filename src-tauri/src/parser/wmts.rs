@@ -80,6 +80,8 @@ pub struct WmtsLayer {
     pub tile_matrix_sets: Vec<String>,
     pub resource_url: Option<String>,
     pub bounds: Option<Bounds>,
+    pub min_zoom: Option<u8>,
+    pub max_zoom: Option<u8>,
 }
 
 /// 从 GetCapabilities XML 字符串解析所有图层
@@ -95,6 +97,14 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
     // Temporary bounding box corners while parsing
     let mut bbox_west: Option<f64> = None;
     let mut bbox_south: Option<f64> = None;
+
+    // TileMatrixSet zoom range tracking (outside Layer elements)
+    let mut tms_zoom_ranges: HashMap<String, (u8, u8)> = HashMap::new();
+    let mut current_tms_id: Option<String> = None;
+    let mut current_tms_min_zoom: u8 = 255;
+    let mut current_tms_max_zoom: u8 = 0;
+    let mut in_tile_matrix_set = false;
+    let mut in_tile_matrix = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -113,10 +123,21 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                                 tile_matrix_sets: Vec::new(),
                                 resource_url: None,
                                 bounds: None,
+                                min_zoom: None,
+                                max_zoom: None,
                             });
                             bbox_west = None;
                             bbox_south = None;
                         }
+                    }
+                    "TileMatrixSet" if current_layer.is_none() => {
+                        in_tile_matrix_set = true;
+                        current_tms_id = None;
+                        current_tms_min_zoom = 255;
+                        current_tms_max_zoom = 0;
+                    }
+                    "TileMatrix" if in_tile_matrix_set => {
+                        in_tile_matrix = true;
                     }
                     "ResourceURL" => {
                         if let Some(layer) = &mut current_layer {
@@ -149,6 +170,15 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                     }
                     bbox_west = None;
                     bbox_south = None;
+                } else if tag == "TileMatrixSet" && in_tile_matrix_set {
+                    if let Some(id) = current_tms_id.take() {
+                        if current_tms_min_zoom <= current_tms_max_zoom {
+                            tms_zoom_ranges.insert(id, (current_tms_min_zoom, current_tms_max_zoom));
+                        }
+                    }
+                    in_tile_matrix_set = false;
+                } else if tag == "TileMatrix" && in_tile_matrix_set {
+                    in_tile_matrix = false;
                 }
                 path.pop();
             }
@@ -214,6 +244,24 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
                         }
                         _ => {}
                     }
+                } else if in_tile_matrix_set {
+                    // Parse TileMatrixSet and TileMatrix identifiers to extract zoom range
+                    match current_tag.as_str() {
+                        "Identifier" => {
+                            let parent = path.iter().rev().nth(1).map(|s| s.as_str());
+                            if in_tile_matrix {
+                                // TileMatrix Identifier = zoom level number
+                                if let Ok(z) = text.parse::<u8>() {
+                                    current_tms_min_zoom = current_tms_min_zoom.min(z);
+                                    current_tms_max_zoom = current_tms_max_zoom.max(z);
+                                }
+                            } else if parent == Some("TileMatrixSet") {
+                                // TileMatrixSet Identifier
+                                current_tms_id = Some(text);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
             Ok(Event::Eof) => break,
@@ -221,6 +269,18 @@ pub fn parse_wmts_capabilities(xml: &str) -> Result<Vec<WmtsLayer>> {
             _ => {}
         }
         buf.clear();
+    }
+
+    // Match each layer's TileMatrixSet to the parsed zoom ranges
+    for layer in &mut layers {
+        let zoom_range = layer
+            .tile_matrix_sets
+            .iter()
+            .find_map(|id| tms_zoom_ranges.get(id).copied());
+        if let Some((min_z, max_z)) = zoom_range {
+            layer.min_zoom = Some(min_z);
+            layer.max_zoom = Some(max_z);
+        }
     }
 
     Ok(layers)
@@ -271,6 +331,8 @@ pub fn wmts_layer_to_source(layer: &WmtsLayer, capabilities_url: &str) -> Option
         format,
         bounds: layer.bounds.clone()
             .unwrap_or_else(|| Bounds::new(-180.0, 180.0, -85.051129, 85.051129)),
+        min_zoom: layer.min_zoom.unwrap_or(0),
+        max_zoom: layer.max_zoom.unwrap_or(18),
         ..Default::default()
     })
 }

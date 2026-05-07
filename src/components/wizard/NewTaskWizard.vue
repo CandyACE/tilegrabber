@@ -211,7 +211,11 @@ async function loadTilePreview(src: TileSource) {
   const lat = (b.north + b.south) / 2;
   const lon = (b.east + b.west) / 2;
   const lonSpan = b.east - b.west;
-  const z = lonSpan > 80 ? 4 : lonSpan > 20 ? 6 : 8;
+  // Pick a zoom level appropriate for the area, then clamp to the source's actual range
+  const lonSpanZ = lonSpan > 80 ? 4 : lonSpan > 20 ? 6 : 8;
+  const minZ = src.min_zoom ?? 0;
+  const maxZ = src.max_zoom ?? 18;
+  const z = Math.max(minZ, Math.min(maxZ, lonSpanZ));
 
   const n = Math.pow(2, z);
   const [cx, cy] = latLonToTileXY(lat, lon, z);
