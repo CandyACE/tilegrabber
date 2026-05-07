@@ -57,9 +57,14 @@ pub async fn parse_wmts_url(
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent("TileGrabber/0.1");
-    if let Some(p) = proxy_url.as_deref() {
-        if let Ok(proxy) = reqwest::Proxy::all(p) {
-            builder = builder.proxy(proxy);
+    // 本地地址（TileGrabber 自身 WMTS 服务器）不走代理
+    let is_local = caps_url.starts_with("http://localhost")
+        || caps_url.starts_with("http://127.0.0.1");
+    if !is_local {
+        if let Some(p) = proxy_url.as_deref() {
+            if let Ok(proxy) = reqwest::Proxy::all(p) {
+                builder = builder.proxy(proxy);
+            }
         }
     }
     let client = builder
@@ -120,9 +125,13 @@ pub async fn validate_tile_url(
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .user_agent("TileGrabber/0.1");
-    if let Some(p) = proxy_url.as_deref() {
-        if let Ok(proxy) = reqwest::Proxy::all(p) {
-            builder = builder.proxy(proxy);
+    let is_local = test_url.starts_with("http://localhost")
+        || test_url.starts_with("http://127.0.0.1");
+    if !is_local {
+        if let Some(p) = proxy_url.as_deref() {
+            if let Ok(proxy) = reqwest::Proxy::all(p) {
+                builder = builder.proxy(proxy);
+            }
         }
     }
     let client = builder

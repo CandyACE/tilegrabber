@@ -18,9 +18,13 @@ pub async fn fetch_tile(
 ) -> Result<Vec<u8>, String> {
     let proxy_url = get_active_proxy_url(app_db.inner());
     let mut builder = reqwest::Client::builder().gzip(true);
-    if let Some(p) = proxy_url.as_deref() {
-        if let Ok(proxy) = reqwest::Proxy::all(p) {
-            builder = builder.proxy(proxy);
+    let is_local = url.starts_with("http://localhost")
+        || url.starts_with("http://127.0.0.1");
+    if !is_local {
+        if let Some(p) = proxy_url.as_deref() {
+            if let Ok(proxy) = reqwest::Proxy::all(p) {
+                builder = builder.proxy(proxy);
+            }
         }
     }
     let client = builder.build().map_err(|e| e.to_string())?;
