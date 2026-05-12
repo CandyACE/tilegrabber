@@ -5,14 +5,24 @@ pub mod download;
 pub mod export;
 pub mod gcj02;
 pub mod parser;
+pub mod remote;
 pub mod server;
 pub mod storage;
 pub mod tile_math;
 pub mod types;
 
+use std::sync::Arc;
+
 use commands::layer::{create_layer, delete_layer, list_layers, rename_layer, reorder_layers};
 use commands::math::{calculate_tile_count, generate_tile_grid};
-use commands::server::{get_server_status, get_service_stats, start_tile_server, stop_tile_server};
+use commands::remote::{
+    add_remote_server, generate_remote_token, get_remote_clients, list_remote_servers,
+    remove_remote_server, update_remote_server,
+};
+use commands::server::{
+    get_remote_server_status, get_server_status, get_service_stats,
+    start_remote_server_cmd, start_tile_server, stop_remote_server_cmd, stop_tile_server,
+};
 use commands::settings::{get_all_settings, get_setting, set_all_settings, set_setting};
 use commands::source::{
     fetch_mbtiles_tile, parse_area_file, parse_mbtiles_source, parse_source_file, parse_tms_url,
@@ -32,9 +42,10 @@ use commands::web_capture::{
     clear_captured_tiles, close_capture_window, get_captured_tiles, open_capture_window,
     CaptureSession,
 };
-use download::engine::DownloadEngine;
+use download::engine::{DownloadEngine, ProgressPayload};
+use remote::{RemoteClients, RemoteConfigCache};
 use server::StatsMap;
-use server::{TileServer, TileServerState};
+use server::{TileServer, TileServerState, RemoteServer, RemoteServerState};
 use storage::app_db::AppDb;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
@@ -131,10 +142,25 @@ pub fn run() {
             // 初始化下载引擎
             app.manage(DownloadEngine::new());
 
+            // 初始化远程协作状态
+            let (bcast_tx, _) = tokio::sync::broadcast::channel::<ProgressPayload>(512);
+            // 将广播发送端注入下载引擎（engine 需持有克隆以便 run_download 使用）
+            app.state::<DownloadEngine>().set_broadcast_tx(bcast_tx.clone());
+            let bcast_tx = Arc::new(bcast_tx);
+            app.manage(bcast_tx);
+            let remote_cache: RemoteConfigCache = std::sync::Arc::new(tokio::sync::RwLock::new(None));
+            app.manage(remote_cache);
+            app.manage(RemoteClients::new());
+
             // 初始化瓦片发布服务状态
             let tile_server: TileServerState =
                 std::sync::Arc::new(std::sync::Mutex::new(TileServer::new()));
             app.manage(tile_server);
+
+            // 初始化独立远程协作服务器状态
+            let remote_server: RemoteServerState =
+                std::sync::Arc::new(std::sync::Mutex::new(RemoteServer::new()));
+            app.manage(remote_server.clone());
 
             // 初始化服务请求统计（在 axum 服务器和 Tauri 命令之间共享）
             let stats_map: StatsMap =
@@ -367,6 +393,10 @@ pub fn run() {
             stop_tile_server,
             get_server_status,
             get_service_stats,
+            // 远程协作服务器
+            start_remote_server_cmd,
+            stop_remote_server_cmd,
+            get_remote_server_status,
             // 设置
             get_setting,
             set_setting,
@@ -385,6 +415,13 @@ pub fn run() {
             // 应用控制
             quit_app,
             show_main_window,
+            // 远程协作
+            generate_remote_token,
+            get_remote_clients,
+            list_remote_servers,
+            add_remote_server,
+            remove_remote_server,
+            update_remote_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TileGrabber")

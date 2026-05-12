@@ -81,6 +81,8 @@ pub struct Task {
     pub clip_to_bounds: bool,
     /// 多边形顶点坐标 JSON（[[lng, lat], ...]），非矩形框选时有值；None 表示矩形或导入 bbox
     pub polygon_wgs84: Option<String>,
+    /// 任务来源：`"local"` = 本地创建，`"remote"` = 远程客户端提交
+    pub source: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -139,6 +141,27 @@ pub struct CompletedTaskPreview {
     pub bounds_north: f64,
     pub min_zoom: u8,
     pub max_zoom: u8,
+}
+
+/// 远程服务器配置（客户端侧保存的连接信息）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServer {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub token: String,
+    pub sort_order: i64,
+    pub created_at: String,
+}
+
+/// 创建远程服务器条目的参数
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewRemoteServer {
+    pub name: String,
+    pub url: String,
+    pub token: String,
 }
 
 /// 日志条目
@@ -230,6 +253,24 @@ impl AppDb {
         // 迁移旧数据库：添加 polygon_wgs84 列
         conn.execute_batch("ALTER TABLE tasks ADD COLUMN polygon_wgs84 TEXT;")
             .ok();
+        // 迁移旧数据库：添加 source 列（区分本地 / 远程提交的任务）
+        conn.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN source TEXT NOT NULL DEFAULT 'local';",
+        )
+        .ok();
+        // 创建远程服务器连接表（客户端侧保存的服务器列表）
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS remote_servers (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                url        TEXT NOT NULL,
+                token      TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            "#,
+        )?;
         Ok(())
     }
 
@@ -243,14 +284,25 @@ impl AppDb {
 
     /// 创建任务（调用方负责生成 UUID）
     pub fn create_task(&self, id: &str, new_task: &NewTask, tile_store_path: &str) -> Result<()> {
+        self.create_task_with_source(id, new_task, tile_store_path, "local")
+    }
+
+    /// 创建任务，可指定来源（"local" 或 "remote"）
+    pub fn create_task_with_source(
+        &self,
+        id: &str,
+        new_task: &NewTask,
+        tile_store_path: &str,
+        source: &str,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO tasks
              (id, name, source_config, status,
               bounds_west, bounds_east, bounds_south, bounds_north,
-              min_zoom, max_zoom, clip_to_bounds, polygon_wgs84, tile_store_path, created_at, updated_at)
-             VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13)",
+              min_zoom, max_zoom, clip_to_bounds, polygon_wgs84, tile_store_path, source, created_at, updated_at)
+             VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)",
             params![
                 id,
                 new_task.name,
@@ -264,6 +316,7 @@ impl AppDb {
                 new_task.clip_to_bounds as i32,
                 new_task.polygon_wgs84,
                 tile_store_path,
+                source,
                 now,
             ],
         )?;
@@ -276,7 +329,8 @@ impl AppDb {
             "SELECT id,name,source_config,status,
                     bounds_west,bounds_east,bounds_south,bounds_north,
                     min_zoom,max_zoom,total_tiles,downloaded_tiles,failed_tiles,
-                    tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at
+                    tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at,
+                    COALESCE(source,'local')
              FROM tasks WHERE id=?1",
             params![id],
             row_to_task,
@@ -290,7 +344,8 @@ impl AppDb {
             "SELECT id,name,source_config,status,
                     bounds_west,bounds_east,bounds_south,bounds_north,
                     min_zoom,max_zoom,total_tiles,downloaded_tiles,failed_tiles,
-                    tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at
+                    tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at,
+                    COALESCE(source,'local')
              FROM tasks ORDER BY created_at DESC",
         )?;
         let tasks = stmt
@@ -564,6 +619,62 @@ impl AppDb {
         }
         Ok(())
     }
+
+    // ── 远程服务器 CRUD ────────────────────────────────────────────────────────
+
+    pub fn create_remote_server(&self, id: &str, s: &NewRemoteServer) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.lock()?;
+        let max_order: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) FROM remote_servers",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(-1);
+        conn.execute(
+            "INSERT INTO remote_servers (id, name, url, token, sort_order, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, s.name, s.url, s.token, max_order + 1, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_remote_servers(&self) -> Result<Vec<RemoteServer>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, name, url, token, sort_order, created_at
+             FROM remote_servers ORDER BY sort_order ASC, created_at ASC",
+        )?;
+        let servers = stmt
+            .query_map([], |row| {
+                Ok(RemoteServer {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    url: row.get(2)?,
+                    token: row.get(3)?,
+                    sort_order: row.get(4)?,
+                    created_at: row.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(servers)
+    }
+
+    pub fn update_remote_server(&self, id: &str, s: &NewRemoteServer) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE remote_servers SET name=?1, url=?2, token=?3 WHERE id=?4",
+            params![s.name, s.url, s.token, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_remote_server(&self, id: &str) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM remote_servers WHERE id=?1", params![id])?;
+        Ok(())
+    }
 }
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
@@ -588,5 +699,6 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         polygon_wgs84: row.get(15)?,
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
+        source: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "local".to_string()),
     })
 }

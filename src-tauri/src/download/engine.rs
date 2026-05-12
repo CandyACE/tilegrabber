@@ -85,11 +85,22 @@ struct TaskHandle {
 
 /// 下载引擎（可 Clone，线程安全）
 #[derive(Clone)]
-pub struct DownloadEngine(Arc<Mutex<HashMap<String, TaskHandle>>>);
+pub struct DownloadEngine {
+    handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
+    broadcast_tx: Arc<std::sync::OnceLock<tokio::sync::broadcast::Sender<ProgressPayload>>>,
+}
 
 impl DownloadEngine {
     pub fn new() -> Self {
-        DownloadEngine(Arc::new(Mutex::new(HashMap::new())))
+        DownloadEngine {
+            handles: Arc::new(Mutex::new(HashMap::new())),
+            broadcast_tx: Arc::new(std::sync::OnceLock::new()),
+        }
+    }
+
+    /// 设置进度广播通道（在 lib.rs::setup 中调用一次）
+    pub fn set_broadcast_tx(&self, tx: tokio::sync::broadcast::Sender<ProgressPayload>) {
+        let _ = self.broadcast_tx.set(tx);
     }
 
     /// 启动或新建一个下载任务
@@ -101,7 +112,7 @@ impl DownloadEngine {
         app: AppHandle,
     ) -> Result<()> {
         let mut handles = self
-            .0
+            .handles
             .lock()
             .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?;
 
@@ -114,11 +125,12 @@ impl DownloadEngine {
         handles.insert(task_id.clone(), TaskHandle { ctrl_tx });
 
         // 任务结束后自动清理句柄
-        let engine_ref = self.0.clone();
+        let engine_ref = self.handles.clone();
         let tid = task_id.clone();
+        let bcast = self.broadcast_tx.get().cloned();
 
         tokio::spawn(async move {
-            run_download(task_id, app_db, concurrency, ctrl_rx, app).await;
+            run_download(task_id, app_db, concurrency, ctrl_rx, app, bcast).await;
             if let Ok(mut h) = engine_ref.lock() {
                 h.remove(&tid);
             }
@@ -130,7 +142,7 @@ impl DownloadEngine {
     /// 暂停指定任务
     pub fn pause(&self, task_id: &str) -> Result<()> {
         let handles = self
-            .0
+            .handles
             .lock()
             .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?;
         if let Some(h) = handles.get(task_id) {
@@ -142,7 +154,7 @@ impl DownloadEngine {
     /// 恢复已暂停的任务
     pub fn resume(&self, task_id: &str) -> Result<()> {
         let handles = self
-            .0
+            .handles
             .lock()
             .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?;
         if let Some(h) = handles.get(task_id) {
@@ -154,7 +166,7 @@ impl DownloadEngine {
     /// 取消并终止指定任务
     pub fn cancel(&self, task_id: &str) -> Result<()> {
         let handles = self
-            .0
+            .handles
             .lock()
             .map_err(|_| anyhow::anyhow!("engine lock poisoned"))?;
         if let Some(h) = handles.get(task_id) {
@@ -165,7 +177,7 @@ impl DownloadEngine {
 
     /// 查询任务是否正在运行
     pub fn is_active(&self, task_id: &str) -> bool {
-        self.0
+        self.handles
             .lock()
             .map(|h| h.contains_key(task_id))
             .unwrap_or(false)
@@ -173,7 +185,7 @@ impl DownloadEngine {
 
     /// 统计当前正在实际下载（Run 信号）的任务数（不含已暂停的任务）
     pub fn active_download_count(&self) -> usize {
-        self.0
+        self.handles
             .lock()
             .map(|h| {
                 h.values()
@@ -185,7 +197,7 @@ impl DownloadEngine {
 
     /// 返回所有正在实际下载（Run 信号）的任务 ID 列表
     pub fn running_task_ids(&self) -> Vec<String> {
-        self.0
+        self.handles
             .lock()
             .map(|h| {
                 h.iter()
@@ -205,6 +217,7 @@ async fn run_download(
     concurrency: usize,
     mut ctrl_rx: watch::Receiver<CtrlSignal>,
     app: AppHandle,
+    broadcast_tx: Option<tokio::sync::broadcast::Sender<ProgressPayload>>,
 ) {
     // 1. 从数据库加载任务信息
     app_db.add_log(Some(&task_id), "info", "开始下载任务").ok();
@@ -456,22 +469,31 @@ async fn run_download(
     // 批次高失败率冷却时长（秒）；来自 download.retry_delay_ms 设置
     let retry_cooldown_secs = rules.retry_delay_ms / 1000;
 
+    // 辅助闭包：同时向本地前端和 SSE 客户端广播进度事件
+    let emit_prog = {
+        let app_e = app.clone();
+        let btx = broadcast_tx.clone();
+        move |payload: ProgressPayload| {
+            let _ = app_e.emit("tilegrab-progress", payload.clone());
+            if let Some(ref tx) = btx {
+                tx.send(payload).ok();
+            }
+        }
+    };
+
     // 立即发送初始进度事件，前端立刻将任务状态改为 "downloading"
     let init_prog = tile_store.get_progress().unwrap_or_default();
-    let _ = app.emit(
-        "tilegrab-progress",
-        ProgressPayload {
-            task_id: task_id.clone(),
-            total: init_prog.total,
-            downloaded: init_prog.downloaded,
-            failed: init_prog.failed,
-            speed: 0.0,
-            bytes_per_sec: 0.0,
-            eta_secs: None,
-            status: "downloading".to_string(),
-            retry_in_secs: None,
-        },
-    );
+    emit_prog(ProgressPayload {
+        task_id: task_id.clone(),
+        total: init_prog.total,
+        downloaded: init_prog.downloaded,
+        failed: init_prog.failed,
+        speed: 0.0,
+        bytes_per_sec: 0.0,
+        eta_secs: None,
+        status: "downloading".to_string(),
+        retry_in_secs: None,
+    });
 
     let sem = Arc::new(Semaphore::new(concurrency.max(1)));
     let mut last_downloaded: i64 = 0;
@@ -540,20 +562,17 @@ async fn run_download(
                     // 立即更新 DB 并通知前端，使 UI 立刻脱离"正在暂停"状态
                     app_db.update_task_status(&task_id, "paused").ok();
                     if let Ok(p) = tile_store.get_progress() {
-                        let _ = app.emit(
-                            "tilegrab-progress",
-                            ProgressPayload {
-                                task_id: task_id.clone(),
-                                total: p.total,
-                                downloaded: p.downloaded,
-                                failed: p.failed,
-                                speed: 0.0,
-                                bytes_per_sec: 0.0,
-                                eta_secs: None,
-                                status: "paused".to_string(),
-                                retry_in_secs: None,
-                            },
-                        );
+                        emit_prog(ProgressPayload {
+                            task_id: task_id.clone(),
+                            total: p.total,
+                            downloaded: p.downloaded,
+                            failed: p.failed,
+                            speed: 0.0,
+                            bytes_per_sec: 0.0,
+                            eta_secs: None,
+                            status: "paused".to_string(),
+                            retry_in_secs: None,
+                        });
                     }
                     // 等待恢复或取消信号
                     loop {
@@ -741,20 +760,17 @@ async fn run_download(
                     .update_task_progress(&task_id, progress.downloaded, progress.failed)
                     .ok();
 
-                let _ = app.emit(
-                    "tilegrab-progress",
-                    ProgressPayload {
-                        task_id: task_id.clone(),
-                        total: progress.total,
-                        downloaded: progress.downloaded,
-                        failed: progress.failed,
-                        speed,
-                        bytes_per_sec,
-                        eta_secs,
-                        status: "downloading".to_string(),
-                        retry_in_secs: None,
-                    },
-                );
+                emit_prog(ProgressPayload {
+                    task_id: task_id.clone(),
+                    total: progress.total,
+                    downloaded: progress.downloaded,
+                    failed: progress.failed,
+                    speed,
+                    bytes_per_sec,
+                    eta_secs,
+                    status: "downloading".to_string(),
+                    retry_in_secs: None,
+                });
             }
         }
 
@@ -769,20 +785,17 @@ async fn run_download(
                     if sig == CtrlSignal::Cancel || sig == CtrlSignal::Pause {
                         break;
                     }
-                    let _ = app.emit(
-                        "tilegrab-progress",
-                        ProgressPayload {
-                            task_id: task_id.clone(),
-                            total: p.total,
-                            downloaded: p.downloaded,
-                            failed: p.failed,
-                            speed: 0.0,
-                            bytes_per_sec: 0.0,
-                            eta_secs: None,
-                            status: "downloading".to_string(),
-                            retry_in_secs: Some(remaining),
-                        },
-                    );
+                    emit_prog(ProgressPayload {
+                        task_id: task_id.clone(),
+                        total: p.total,
+                        downloaded: p.downloaded,
+                        failed: p.failed,
+                        speed: 0.0,
+                        bytes_per_sec: 0.0,
+                        eta_secs: None,
+                        status: "downloading".to_string(),
+                        retry_in_secs: Some(remaining),
+                    });
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                 }
             }
@@ -797,20 +810,17 @@ async fn run_download(
     if disk_full_abort {
         app_db.update_task_status(&task_id, "paused").ok();
         if let Ok(p) = tile_store.get_progress() {
-            let _ = app.emit(
-                "tilegrab-progress",
-                ProgressPayload {
-                    task_id: task_id.clone(),
-                    total: p.total,
-                    downloaded: p.downloaded,
-                    failed: p.failed,
-                    speed: 0.0,
-                    bytes_per_sec: 0.0,
-                    eta_secs: None,
-                    status: "paused".to_string(),
-                    retry_in_secs: None,
-                },
-            );
+            emit_prog(ProgressPayload {
+                task_id: task_id.clone(),
+                total: p.total,
+                downloaded: p.downloaded,
+                failed: p.failed,
+                speed: 0.0,
+                bytes_per_sec: 0.0,
+                eta_secs: None,
+                status: "paused".to_string(),
+                retry_in_secs: None,
+            });
         }
         let _ = app.emit(
             "tilegrab-disk-full",
@@ -824,20 +834,17 @@ async fn run_download(
     // 这里先让进度条填满再切换状态，用户体验更连贯。
     {
         let done_progress = tile_store.get_progress().unwrap_or_default();
-        let _ = app.emit(
-            "tilegrab-progress",
-            ProgressPayload {
-                task_id: task_id.clone(),
-                total: done_progress.total,
-                downloaded: done_progress.downloaded,
-                failed: done_progress.failed,
-                speed: 0.0,
-                bytes_per_sec: 0.0,
-                eta_secs: None,
-                status: "downloading".to_string(),
-                retry_in_secs: None,
-            },
-        );
+        emit_prog(ProgressPayload {
+            task_id: task_id.clone(),
+            total: done_progress.total,
+            downloaded: done_progress.downloaded,
+            failed: done_progress.failed,
+            speed: 0.0,
+            bytes_per_sec: 0.0,
+            eta_secs: None,
+            status: "downloading".to_string(),
+            retry_in_secs: None,
+        });
     }
 
     // ── GCJ02 纠偏合成（下载完成后，裁剪之前）──────────────────────────────────
@@ -853,6 +860,7 @@ async fn run_download(
         let gcj02_store_path = tile_store_path.clone();
         let gcj02_app = app.clone();
         let gcj02_task_id = task_id.clone();
+        let gcj02_bcast = broadcast_tx.clone();
         let gcj02_bounds = crate::types::Bounds {
             west: task.bounds_west,
             east: task.bounds_east,
@@ -871,20 +879,21 @@ async fn run_download(
                 gcj02_max_zoom,
                 &gcj02_crs,
                 |done, total| {
-                    let _ = gcj02_app.emit(
-                        "tilegrab-progress",
-                        ProgressPayload {
-                            task_id: gcj02_task_id.clone(),
-                            total: total as i64,
-                            downloaded: done as i64,
-                            failed: 0,
-                            speed: 0.0,
-                            bytes_per_sec: 0.0,
-                            eta_secs: None,
-                            status: "processing".to_string(),
-                            retry_in_secs: None,
-                        },
-                    );
+                    let payload = ProgressPayload {
+                        task_id: gcj02_task_id.clone(),
+                        total: total as i64,
+                        downloaded: done as i64,
+                        failed: 0,
+                        speed: 0.0,
+                        bytes_per_sec: 0.0,
+                        eta_secs: None,
+                        status: "processing".to_string(),
+                        retry_in_secs: None,
+                    };
+                    let _ = gcj02_app.emit("tilegrab-progress", payload.clone());
+                    if let Some(ref tx) = gcj02_bcast {
+                        tx.send(payload).ok();
+                    }
                 },
             )
         })
@@ -930,20 +939,17 @@ async fn run_download(
         // 立即发送裁剪启动事件，让前端切换到"裁剪中"状态；
         // downloaded 保持 total 使进度条暂时停在 100%（等第一遍扫描完毕后再重置）
         let download_total: i64 = tile_store.get_progress().map(|p| p.total).unwrap_or(0);
-        let _ = app.emit(
-            "tilegrab-progress",
-            ProgressPayload {
-                task_id: task_id.clone(),
-                total: download_total,
-                downloaded: download_total,
-                failed: 0,
-                speed: 0.0,
-                bytes_per_sec: 0.0,
-                eta_secs: None,
-                status: "processing".to_string(),
-                retry_in_secs: None,
-            },
-        );
+        emit_prog(ProgressPayload {
+            task_id: task_id.clone(),
+            total: download_total,
+            downloaded: download_total,
+            failed: 0,
+            speed: 0.0,
+            bytes_per_sec: 0.0,
+            eta_secs: None,
+            status: "processing".to_string(),
+            retry_in_secs: None,
+        });
 
         let clip_bounds = Bounds {
             west: task.bounds_west,
@@ -959,6 +965,7 @@ async fn run_download(
         let clip_store_path = tile_store_path.clone();
         let clip_app = app.clone();
         let clip_task_id = task_id.clone();
+        let clip_bcast = broadcast_tx.clone();
 
         let clip_result = tokio::task::spawn_blocking(move || {
             post_clip_tiles(
@@ -967,20 +974,21 @@ async fn run_download(
                 clip_polygon.as_deref(),
                 &clip_crs,
                 |done, total| {
-                    let _ = clip_app.emit(
-                        "tilegrab-progress",
-                        ProgressPayload {
-                            task_id: clip_task_id.clone(),
-                            total: total as i64,
-                            downloaded: done as i64,
-                            failed: 0,
-                            speed: 0.0,
-                            bytes_per_sec: 0.0,
-                            eta_secs: None,
-                            status: "processing".to_string(),
-                            retry_in_secs: None,
-                        },
-                    );
+                    let payload = ProgressPayload {
+                        task_id: clip_task_id.clone(),
+                        total: total as i64,
+                        downloaded: done as i64,
+                        failed: 0,
+                        speed: 0.0,
+                        bytes_per_sec: 0.0,
+                        eta_secs: None,
+                        status: "processing".to_string(),
+                        retry_in_secs: None,
+                    };
+                    let _ = clip_app.emit("tilegrab-progress", payload.clone());
+                    if let Some(ref tx) = clip_bcast {
+                        tx.send(payload).ok();
+                    }
                 },
                 |tiles| {
                     let _ = clip_app.emit(
@@ -1066,20 +1074,17 @@ async fn run_download(
             .ok();
     }
 
-    let _ = app.emit(
-        "tilegrab-progress",
-        ProgressPayload {
-            task_id,
-            total: progress.total,
-            downloaded: progress.downloaded,
-            failed: progress.failed,
-            speed: 0.0,
-            bytes_per_sec: 0.0,
-            eta_secs: None,
-            status: final_status.to_string(),
-            retry_in_secs: None,
-        },
-    );
+    emit_prog(ProgressPayload {
+        task_id,
+        total: progress.total,
+        downloaded: progress.downloaded,
+        failed: progress.failed,
+        speed: 0.0,
+        bytes_per_sec: 0.0,
+        eta_secs: None,
+        status: final_status.to_string(),
+        retry_in_secs: None,
+    });
 }
 
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────

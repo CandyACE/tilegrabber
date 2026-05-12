@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use tauri::State;
 
+use crate::remote::RemoteConfigCache;
 use crate::storage::app_db::AppDb;
 
 // ─── 默认值 ──────────────────────────────────────────────────────────────────
@@ -55,6 +56,13 @@ pub fn default_settings() -> HashMap<&'static str, &'static str> {
         ("network.proxy_enabled", "false"),
         // 代理服务器地址（如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）
         ("network.proxy_url", ""),
+        // ── 远程协作 ──────────────────────────────────────────────────────────
+        // 是否启用远程控制 API
+        ("remote.enabled", "false"),
+        // 访问令牌（空字符串表示未生成，禁止连接）
+        ("remote.token", ""),
+        // 远程协作服务监听端口（与瓦片发布服务独立）
+        ("remote.port", "8766"),
     ]
     .into()
 }
@@ -98,8 +106,17 @@ pub fn get_setting(key: String, app_db: State<'_, AppDb>) -> Result<Option<Strin
 
 /// 写入单个设置
 #[tauri::command]
-pub fn set_setting(key: String, value: String, app_db: State<'_, AppDb>) -> Result<(), String> {
-    app_db.set_setting(&key, &value).map_err(|e| e.to_string())
+pub async fn set_setting(
+    key: String,
+    value: String,
+    app_db: State<'_, AppDb>,
+    remote_cache: State<'_, RemoteConfigCache>,
+) -> Result<(), String> {
+    app_db.set_setting(&key, &value).map_err(|e| e.to_string())?;
+    if key.starts_with("remote.") {
+        *remote_cache.write().await = None;
+    }
+    Ok(())
 }
 
 /// 读取全部设置（合并默认值，数据库中的值优先）
@@ -122,12 +139,20 @@ pub fn get_all_settings(app_db: State<'_, AppDb>) -> Result<HashMap<String, Stri
 
 /// 批量写入设置
 #[tauri::command]
-pub fn set_all_settings(
+pub async fn set_all_settings(
     settings: HashMap<String, String>,
     app_db: State<'_, AppDb>,
+    remote_cache: State<'_, RemoteConfigCache>,
 ) -> Result<(), String> {
+    let mut invalidate = false;
     for (k, v) in &settings {
         app_db.set_setting(k, v).map_err(|e| e.to_string())?;
+        if k.starts_with("remote.") {
+            invalidate = true;
+        }
+    }
+    if invalidate {
+        *remote_cache.write().await = None;
     }
     Ok(())
 }

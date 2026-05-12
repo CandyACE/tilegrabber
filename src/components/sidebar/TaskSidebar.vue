@@ -30,6 +30,7 @@ interface BackendTask {
   downloadedTiles: number;
   failedTiles: number;
   tileStorePath: string | null;
+  source?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -66,6 +67,7 @@ function toFrontendTask(b: BackendTask): Task {
     failedTiles: b.failedTiles,
     createdAt: b.createdAt,
     tileStorePath: b.tileStorePath,
+    source: b.source,
     boundsWest: b.boundsWest,
     boundsEast: b.boundsEast,
     boundsSouth: b.boundsSouth,

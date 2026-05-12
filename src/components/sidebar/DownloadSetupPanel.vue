@@ -14,14 +14,18 @@ import {
   Square,
   Hexagon,
   FolderOpen,
+  Share2,
+  Loader2,
 } from "lucide-vue-next";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import ZoomPicker from "./ZoomPicker.vue";
 import UiInput from "@/components/ui/input/Input.vue";
 import type { TileSource, Bounds, CrsType } from "~/types/tile-source";
+import { useRemoteStore } from "~/composables/useRemoteStore";
 
 const { t } = useI18n();
+const { connectedServer } = useRemoteStore();
 
 // ─── Props & Emits ────────────────────────────────────────────────────────────
 
@@ -41,6 +45,7 @@ const emit = defineEmits<{
       minZoom: number;
       maxZoom: number;
       clipToBounds: boolean;
+      remoteTarget: { url: string; token: string; name: string } | null;
     },
   ];
   "draw-mode-change": [mode: "rectangle" | "polygon"];
@@ -54,6 +59,21 @@ const minZoom = ref(props.source.min_zoom ?? 8);
 const maxZoom = ref(props.source.max_zoom ?? 14);
 const clipToBounds = ref(false);
 const drawMode = ref<"rectangle" | "polygon">("rectangle");
+// 下载目标：null = 本地，否则为远端服务器
+const useRemoteTarget = ref(false);
+const submitLoading = ref(false);
+
+function submitDownload() {
+  emit("start-download", {
+    name: taskName.value,
+    minZoom: minZoom.value,
+    maxZoom: maxZoom.value,
+    clipToBounds: clipToBounds.value,
+    remoteTarget: useRemoteTarget.value && connectedServer.value
+      ? { url: connectedServer.value.url, token: connectedServer.value.token, name: connectedServer.value.name }
+      : null,
+  });
+}
 
 function setDrawMode(mode: "rectangle" | "polygon") {
   drawMode.value = mode;
@@ -435,6 +455,29 @@ watch(() => [props.bounds, minZoom.value, maxZoom.value], scheduleEstimate, {
       class="shrink-0 p-4 border-t space-y-2"
       style="border-color: var(--color-border-subtle)"
     >
+      <!-- 下载目标选择器（有远端连接时才显示） -->
+      <div v-if="connectedServer" class="rounded-lg border overflow-hidden" style="border-color: var(--color-border-subtle)">
+        <button
+          class="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors"
+          :class="!useRemoteTarget ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-500 hover:bg-slate-50'"
+          @click="useRemoteTarget = false"
+        >
+          <span class="size-3 rounded-full border-2 shrink-0" :class="!useRemoteTarget ? 'border-blue-500 bg-blue-500' : 'border-slate-300'" />
+          <Download :size="11" />
+          {{ t('downloadSetup.targetLocal') }}
+        </button>
+        <div class="h-px" style="background: var(--color-border-subtle)" />
+        <button
+          class="w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors"
+          :class="useRemoteTarget ? 'bg-blue-50 text-blue-700 font-medium' : 'text-slate-500 hover:bg-slate-50'"
+          @click="useRemoteTarget = true"
+        >
+          <span class="size-3 rounded-full border-2 shrink-0" :class="useRemoteTarget ? 'border-blue-500 bg-blue-500' : 'border-slate-300'" />
+          <Share2 :size="11" />
+          {{ t('downloadSetup.targetRemote', { name: connectedServer.name }) }}
+        </button>
+      </div>
+
       <!-- 下载规模估算 -->
       <div
         v-if="bounds && estimate"
@@ -448,21 +491,16 @@ watch(() => [props.bounds, minZoom.value, maxZoom.value], scheduleEstimate, {
         class="w-full flex items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition-colors"
         :class="
           bounds
-            ? 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer'
+            ? (useRemoteTarget ? 'bg-violet-600 text-white hover:bg-violet-700 cursor-pointer' : 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer')
             : 'bg-slate-100 text-slate-400 cursor-not-allowed'
         "
-        :disabled="!bounds"
-        @click="
-          emit('start-download', {
-            name: taskName,
-            minZoom,
-            maxZoom,
-            clipToBounds,
-          })
-        "
+        :disabled="!bounds || submitLoading"
+        @click="submitDownload"
       >
-        <Download class="size-4" />
-        {{ t('downloadSetup.startDownload') }}
+        <Loader2 v-if="submitLoading" class="size-4 animate-spin" />
+        <Share2 v-else-if="useRemoteTarget" class="size-4" />
+        <Download v-else class="size-4" />
+        {{ useRemoteTarget ? t('downloadSetup.submitRemote') : t('downloadSetup.startDownload') }}
       </button>
       <button
         class="w-full text-sm py-1 transition-colors"

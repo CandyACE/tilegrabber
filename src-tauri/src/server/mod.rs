@@ -10,14 +10,17 @@
 //! - 状态 ：`GET /api/tasks` (JSON 任务列表)
 
 pub mod handlers;
+pub mod remote;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::{routing::get, Router};
+use axum::{middleware, routing::get, routing::post, routing::delete, Router};
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::download::engine::ProgressPayload;
+use crate::remote::{RemoteClients, RemoteConfigCache};
 use crate::storage::app_db::AppDb;
 
 // ─── 服务统计 ────────────────────────────────────────────────────────────────
@@ -45,6 +48,10 @@ pub struct ServerAppState {
     pub app_db: AppDb,
     pub base_url: String, // e.g. "http://localhost:8765"
     pub stats: StatsMap,
+    pub remote_config_cache: RemoteConfigCache,
+    pub remote_broadcast_tx: Arc<tokio::sync::broadcast::Sender<ProgressPayload>>,
+    pub remote_clients: RemoteClients,
+    pub app_handle: tauri::AppHandle,
 }
 
 // ─── 服务控制 ————————————────————────────────────────────————────────————————
@@ -70,6 +77,28 @@ impl TileServer {
 /// Tauri 管理的服务器状态（Arc<Mutex<TileServer>>）
 pub type TileServerState = Arc<Mutex<TileServer>>;
 
+// ─── 独立远程协作服务器 ──────────────────────────────────────────────────────
+
+pub struct RemoteServer {
+    shutdown_tx: Option<oneshot::Sender<()>>,
+    pub port: u16,
+}
+
+impl RemoteServer {
+    pub fn new() -> Self {
+        Self {
+            shutdown_tx: None,
+            port: 8766,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.shutdown_tx.is_some()
+    }
+}
+
+pub type RemoteServerState = Arc<Mutex<RemoteServer>>;
+
 /// 在后台启动 axum 服务器
 ///
 /// 返回实际监听的端口（若指定端口被占用则返回错误）
@@ -78,6 +107,10 @@ pub async fn start_server(
     port: u16,
     app_db: AppDb,
     stats: StatsMap,
+    remote_config_cache: RemoteConfigCache,
+    remote_broadcast_tx: Arc<tokio::sync::broadcast::Sender<ProgressPayload>>,
+    remote_clients: RemoteClients,
+    app_handle: tauri::AppHandle,
 ) -> Result<u16, String> {
     // 若已在运行，先停止
     {
@@ -94,12 +127,29 @@ pub async fn start_server(
         app_db,
         base_url: base_url.clone(),
         stats,
+        remote_config_cache,
+        remote_broadcast_tx,
+        remote_clients,
+        app_handle,
     };
 
     let cors = CorsLayer::new()
         .allow_methods(Any)
         .allow_headers(Any)
         .allow_origin(Any);
+
+    let remote_router = Router::new()
+        .route("/tasks", post(remote::submit_task))
+        .route("/tasks", get(remote::list_remote_tasks))
+        .route("/tasks/:id", get(remote::get_remote_task))
+        .route("/tasks/:id", delete(remote::cancel_remote_task))
+        .route("/tasks/:id/pause", post(remote::pause_remote_task))
+        .route("/tasks/:id/resume", post(remote::resume_remote_task))
+        .route("/tasks/:id/progress", get(remote::sse_progress))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            remote::auth_middleware,
+        ));
 
     let router: Router = Router::new()
         // TMS 端点
@@ -133,6 +183,7 @@ pub async fn start_server(
         .route("/api/tasks/:id/logs", get(handlers::api_task_logs))
         .route("/api/stats", get(handlers::api_stats))
         .route("/api/info", get(handlers::api_info))
+        .nest("/remote", remote_router)
         .layer(cors)
         .with_state(app_state);
 
@@ -172,5 +223,94 @@ pub fn stop_server(state: &TileServerState) -> Result<(), String> {
         Ok(())
     } else {
         Err("服务器未在运行".into())
+    }
+}
+
+/// 启动独立的远程协作服务器（仅含 /remote/* 路由，不依赖瓦片发布服务）
+pub async fn start_remote_server(
+    state: RemoteServerState,
+    port: u16,
+    app_db: AppDb,
+    remote_config_cache: RemoteConfigCache,
+    remote_broadcast_tx: Arc<tokio::sync::broadcast::Sender<ProgressPayload>>,
+    remote_clients: RemoteClients,
+    app_handle: tauri::AppHandle,
+) -> Result<u16, String> {
+    // 若已在运行，先停止
+    {
+        let mut s = state.lock().map_err(|_| "mutex poisoned")?;
+        if s.is_running() {
+            if let Some(tx) = s.shutdown_tx.take() {
+                let _ = tx.send(());
+            }
+        }
+    }
+
+    let app_state = ServerAppState {
+        app_db,
+        base_url: format!("http://localhost:{port}"),
+        stats: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        remote_config_cache,
+        remote_broadcast_tx,
+        remote_clients,
+        app_handle,
+    };
+
+    let cors = CorsLayer::new()
+        .allow_methods(Any)
+        .allow_headers(Any)
+        .allow_origin(Any);
+
+    let remote_router = Router::new()
+        .route("/tasks", post(remote::submit_task))
+        .route("/tasks", get(remote::list_remote_tasks))
+        .route("/tasks/:id", get(remote::get_remote_task))
+        .route("/tasks/:id", delete(remote::cancel_remote_task))
+        .route("/tasks/:id/pause", post(remote::pause_remote_task))
+        .route("/tasks/:id/resume", post(remote::resume_remote_task))
+        .route("/tasks/:id/progress", get(remote::sse_progress))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            remote::auth_middleware,
+        ));
+
+    let router = Router::new()
+        .nest("/remote", remote_router)
+        .layer(cors)
+        .with_state(app_state);
+
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+        .await
+        .map_err(|e| format!("远程服务端口 {port} 绑定失败: {e}"))?;
+
+    let actual_port = listener.local_addr().map(|a| a.port()).unwrap_or(port);
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .ok();
+    });
+
+    {
+        let mut s = state.lock().map_err(|_| "mutex poisoned")?;
+        s.shutdown_tx = Some(shutdown_tx);
+        s.port = actual_port;
+    }
+
+    Ok(actual_port)
+}
+
+/// 停止独立远程协作服务器
+pub fn stop_remote_server(state: &RemoteServerState) -> Result<(), String> {
+    let mut s = state.lock().map_err(|_| "mutex poisoned")?;
+    if let Some(tx) = s.shutdown_tx.take() {
+        let _ = tx.send(());
+        Ok(())
+    } else {
+        Err("远程服务器未在运行".into())
     }
 }

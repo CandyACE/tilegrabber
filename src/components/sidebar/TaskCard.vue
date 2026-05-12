@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import {
+  Share2,
   Download,
   PauseCircle,
   CheckCircle2,
@@ -44,6 +45,8 @@ export interface Task {
   eta?: number; // seconds remaining
   createdAt: string;
   tileStorePath?: string | null;
+  /// 任务来源: "local" | "remote"
+  source?: string;
   // 用于地图定位
   boundsWest?: number;
   boundsEast?: number;
@@ -208,6 +211,15 @@ watch(
         {{ task.name }}
       </span>
       <div class="shrink-0 flex items-center gap-1">
+        <!-- 远程任务标识 -->
+        <span
+          v-if="task.source === 'remote'"
+          class="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold whitespace-nowrap bg-purple-100 text-purple-600"
+          :title="t('taskCard.remoteBadgeTitle')"
+        >
+          <Share2 class="size-2.5" />
+          {{ t('taskCard.remoteBadge') }}
+        </span>
         <!-- 外部文件标识：tileStorePath 指向 .tgr 文件 -->
         <span
           v-if="task.tileStorePath?.endsWith('.tgr')"

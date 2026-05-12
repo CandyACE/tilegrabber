@@ -79,6 +79,7 @@ impl TargetCrs {
     }
 
     /// 对应的像素网格 CrsType（用于行重映射判断）
+    #[allow(dead_code)]
     fn pixel_crs(&self) -> &'static str {
         match self {
             TargetCrs::WebMercator => "merc",
@@ -893,7 +894,7 @@ fn render_reprojected_strip_utm(
     // 源 CRS 范围（行列映射用）
     let (src_merc_north, src_merc_south) = (merc(geo_north), merc(geo_south));
 
-    let lon_per_px = (geo_east - geo_west) / out_w as f64;
+    let _lon_per_px = (geo_east - geo_west) / out_w as f64;
 
     let mut buf = vec![0u8; strip_rows as usize * out_w as usize * 4];
 

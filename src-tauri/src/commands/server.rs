@@ -1,9 +1,16 @@
 //! 瓦片发布服务 Tauri 命令
 
-use tauri::State;
+use std::sync::Arc;
 
-use crate::server::{start_server, stop_server, ServiceStats, StatsMap, TileServerState};
+use tauri::{AppHandle, State};
+
+use crate::remote::{RemoteClients, RemoteConfigCache};
+use crate::server::{
+    start_remote_server, start_server, stop_remote_server, stop_server,
+    RemoteServerState, ServiceStats, StatsMap, TileServerState,
+};
 use crate::storage::app_db::AppDb;
+use crate::download::engine::ProgressPayload;
 
 /// 服务器当前状态（返回给前端）
 #[derive(Debug, serde::Serialize)]
@@ -40,14 +47,21 @@ fn get_lan_urls(port: u16) -> Vec<String> {
 #[tauri::command]
 pub async fn start_tile_server(
     port: u16,
+    app: AppHandle,
     server_state: State<'_, TileServerState>,
     app_db: State<'_, AppDb>,
     stats: State<'_, StatsMap>,
+    remote_cache: State<'_, RemoteConfigCache>,
+    remote_broadcast_tx: State<'_, Arc<tokio::sync::broadcast::Sender<crate::download::engine::ProgressPayload>>>,
+    remote_clients: State<'_, RemoteClients>,
 ) -> Result<ServerStatus, String> {
     let ss = server_state.inner().clone();
     let db = app_db.inner().clone();
     let st = stats.inner().clone();
-    let actual_port = start_server(ss, port, db, st).await?;
+    let rc = remote_cache.inner().clone();
+    let tx = remote_broadcast_tx.inner().clone();
+    let cl = remote_clients.inner().clone();
+    let actual_port = start_server(ss, port, db, st, rc, tx, cl, app).await?;
     Ok(ServerStatus {
         running: true,
         port: actual_port,
@@ -102,4 +116,66 @@ pub async fn get_service_stats(stats: State<'_, StatsMap>) -> Result<Vec<TaskSta
         })
         .collect();
     Ok(result)
+}
+
+// ─── 远程协作服务器命令 ─────────────────────────────────────────────────────
+
+/// 远程协作服务器状态（返回给前端）
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteServerStatus {
+    pub running: bool,
+    pub port: u16,
+    pub lan_urls: Vec<String>,
+}
+
+/// 启动独立的远程协作服务器
+#[tauri::command]
+pub async fn start_remote_server_cmd(
+    port: u16,
+    app: AppHandle,
+    remote_server_state: State<'_, RemoteServerState>,
+    app_db: State<'_, AppDb>,
+    remote_cache: State<'_, RemoteConfigCache>,
+    remote_broadcast_tx: State<'_, Arc<tokio::sync::broadcast::Sender<ProgressPayload>>>,
+    remote_clients: State<'_, RemoteClients>,
+) -> Result<RemoteServerStatus, String> {
+    let rss = remote_server_state.inner().clone();
+    let db = app_db.inner().clone();
+    let rc = remote_cache.inner().clone();
+    let tx = remote_broadcast_tx.inner().clone();
+    let cl = remote_clients.inner().clone();
+    let actual_port = start_remote_server(rss, port, db, rc, tx, cl, app).await?;
+    Ok(RemoteServerStatus {
+        running: true,
+        port: actual_port,
+        lan_urls: get_lan_urls(actual_port),
+    })
+}
+
+/// 停止独立的远程协作服务器
+#[tauri::command]
+pub async fn stop_remote_server_cmd(
+    remote_server_state: State<'_, RemoteServerState>,
+) -> Result<(), String> {
+    stop_remote_server(remote_server_state.inner())
+}
+
+/// 查询远程协作服务器当前状态
+#[tauri::command]
+pub async fn get_remote_server_status(
+    remote_server_state: State<'_, RemoteServerState>,
+) -> Result<RemoteServerStatus, String> {
+    let s = remote_server_state
+        .lock()
+        .map_err(|_| "mutex poisoned".to_string())?;
+    Ok(RemoteServerStatus {
+        running: s.is_running(),
+        port: s.port,
+        lan_urls: if s.is_running() {
+            get_lan_urls(s.port)
+        } else {
+            Vec::new()
+        },
+    })
 }

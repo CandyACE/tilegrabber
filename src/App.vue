@@ -30,11 +30,13 @@ import SplashScreen from "~/components/SplashScreen.vue";
 import DisclaimerDialog from "~/components/DisclaimerDialog.vue";
 import CloseActionDialog from "~/components/CloseActionDialog.vue";
 import PublishPanel from "~/components/sidebar/PublishPanel.vue";
+import RemotePanel from "~/components/sidebar/RemotePanel.vue";
 import SettingsPanel from "~/components/sidebar/SettingsPanel.vue";
 import HelpPanel from "~/components/sidebar/HelpPanel.vue";
 import AboutPanel from "~/components/sidebar/AboutPanel.vue";
 import NewTaskWizard from "~/components/wizard/NewTaskWizard.vue";
 import ToastContainer from "~/components/ToastContainer.vue";
+import { useSettingsStore } from "~/composables/useSettingsStore";
 
 // ─── 启动时缓存设置（单次 IPC，供 onMounted 和 onSplashDone 共用） ──────────
 let cachedSettings: Record<string, string> = {};
@@ -177,12 +179,19 @@ async function onSplashDone() {
 // ─── 布局 & 导航 ────────────────────────────────────────────────────────────
 const sidebarOpen = ref(true);
 const activeNav = ref("map");
+const { settingsDirty } = useSettingsStore();
 
 function onNavChange(key: string) {
+  // 离开设置页时检查未保存更改
+  if (activeNav.value === "settings" && key !== "settings" && settingsDirty.value) {
+    const ok = window.confirm(t("settings.leaveConfirm"));
+    if (!ok) return;
+    settingsDirty.value = false; // 用户选择放弃
+  }
   const prevNav = activeNav.value;
   // 再次点击同一项则切回地图视图
   activeNav.value = activeNav.value === key ? "map" : key;
-  if (["publish", "settings", "help", "about", "tasks", "map"].includes(key))
+  if (["publish", "remote", "settings", "help", "about", "tasks", "map"].includes(key))
     sidebarOpen.value = true;
   // 离开地图 tab 时清除图层预览
   if (prevNav === "map" && activeNav.value !== "map") {
@@ -363,12 +372,46 @@ async function createAndDownload(config: {
   minZoom: number;
   maxZoom: number;
   clipToBounds: boolean;
+  remoteTarget?: { url: string; token: string; name: string } | null;
 }) {
   if (!drawnBounds.value || !previewSource.value) return;
   const source = previewSource.value;
+  const name = config.name || `${source.name} Z${config.minZoom}-${config.maxZoom}`;
+
+  if (config.remoteTarget) {
+    // ── 提交到远端 ──────────────────────────────────────────────────────────
+    try {
+      const { url, token } = config.remoteTarget;
+      const resp = await fetch(`${url.replace(/\/$/, "")}/remote/tasks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          name,
+          sourceConfig: JSON.stringify(source),
+          boundsWest: drawnBounds.value.west,
+          boundsEast: drawnBounds.value.east,
+          boundsSouth: drawnBounds.value.south,
+          boundsNorth: drawnBounds.value.north,
+          minZoom: config.minZoom,
+          maxZoom: config.maxZoom,
+          clipToBounds: config.clipToBounds,
+          polygonWgs84: drawnPolygon.value
+            ? JSON.stringify(drawnPolygon.value)
+            : null,
+        }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+      exitSetupMode();
+      activeNav.value = "remote";
+      sidebarOpen.value = true;
+    } catch (e: unknown) {
+      console.error("[App] remote submit failed:", e);
+    }
+    return;
+  }
+
+  // ── 本地下载 ────────────────────────────────────────────────────────────
   try {
-    const name =
-      config.name || `${source.name} Z${config.minZoom}-${config.maxZoom}`;
     const taskId = await invoke<string>("create_task", {
       newTask: {
         name,
@@ -491,6 +534,7 @@ function handleDetailDeleted() {
         <div
           v-if="
             activeNav === 'publish' ||
+            activeNav === 'remote' ||
             activeNav === 'settings' ||
             activeNav === 'help' ||
             activeNav === 'about'
@@ -501,6 +545,11 @@ function handleDetailDeleted() {
           <PublishPanel
             v-if="activeNav === 'publish'"
             class="flex-1 flex flex-col overflow-hidden"
+          />
+          <RemotePanel
+            v-else-if="activeNav === 'remote'"
+            class="flex-1 flex flex-col overflow-hidden"
+            @start-task="activeNav = 'map'"
           />
           <SettingsPanel
             v-else-if="activeNav === 'settings'"

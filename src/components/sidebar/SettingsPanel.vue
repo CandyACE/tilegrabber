@@ -15,6 +15,10 @@ import {
   RefreshCw,
   ArrowUpCircle,
   FolderOpen,
+  Share2,
+  Copy,
+  Check,
+  KeyRound,
 } from "lucide-vue-next";
 import { open as openDirectoryPicker } from "@tauri-apps/plugin-dialog";
 import {
@@ -27,6 +31,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import RulesConfig from "./RulesConfig.vue";
 import { useUpdateState } from "~/composables/useUpdateState";
+import { useSettingsStore } from "~/composables/useSettingsStore";
 
 const { t, locale } = useI18n()
 
@@ -120,9 +125,16 @@ const groups = computed(() => [
 
 // ─── 状态 ────────────────────────────────────────────────────────────────────
 const settings = ref<Settings>({});
+const originalSettings = ref<Settings>({});
 const saving = ref(false);
 const saved = ref(false);
 const errorMsg = ref("");
+const isDirty = computed(() =>
+  JSON.stringify(settings.value) !== JSON.stringify(originalSettings.value)
+);
+
+const { settingsDirty } = useSettingsStore();
+watch(isDirty, (v) => { settingsDirty.value = v; }, { immediate: true });
 
 onMounted(async () => {
   await loadSettings();
@@ -134,6 +146,7 @@ async function loadSettings() {
     // 兼容旧版本空字符串存储
     if (!result["app.close_action"]) result["app.close_action"] = "ask";
     settings.value = result;
+    originalSettings.value = { ...result };
     // Apply saved language setting
     const lang = result['app.language']
     if (lang && lang !== 'auto' && lang !== '') {
@@ -165,6 +178,7 @@ async function saveSettings() {
       await floatWin?.hide();
     }
     saved.value = true;
+    originalSettings.value = { ...settings.value };
     setTimeout(() => {
       saved.value = false;
     }, 2000);
@@ -319,37 +333,125 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+// ─── 远程协作 ─────────────────────────────────────────────────────────────────
+interface ClientInfo { id: string; ip: string; connectedAt: number; }
+interface ServerStatus { running: boolean; port: number; baseUrl: string; lanUrls: string[]; }
+
+const generatingToken = ref(false);
+const tokenCopied = ref(false);
+const remoteClients = ref<ClientInfo[]>([]);
+const serverStatus = ref<ServerStatus | null>(null);
+const serverStarting = ref(false);
+let unlistenClients: (() => void) | null = null;
+
+async function refreshServerStatus() {
+  try {
+    serverStatus.value = await invoke<ServerStatus>("get_remote_server_status");
+  } catch {
+    serverStatus.value = null;
+  }
+}
+
+async function startServerForRemote() {
+  serverStarting.value = true;
+  try {
+    const port = parseInt(settings.value["remote.port"] ?? "8766", 10);
+    serverStatus.value = await invoke<ServerStatus>("start_remote_server_cmd", { port });
+  } catch (e) {
+    errorMsg.value = String(e);
+  } finally {
+    serverStarting.value = false;
+  }
+}
+
+onMounted(async () => {
+  await loadRemoteClients();
+  await refreshServerStatus();
+  unlistenClients = await listen<number>("remote:clients-changed", async () => {
+    await loadRemoteClients();
+  });
+});
+
+onUnmounted(() => {
+  unlistenClients?.();
+});
+
+async function loadRemoteClients() {
+  try {
+    remoteClients.value = await invoke<ClientInfo[]>("get_remote_clients");
+  } catch {
+    remoteClients.value = [];
+  }
+}
+
+async function generateToken() {
+  generatingToken.value = true;
+  try {
+    const token = await invoke<string>("generate_remote_token");
+    settings.value = { ...settings.value, "remote.token": token };
+  } catch (e) {
+    errorMsg.value = String(e);
+  } finally {
+    generatingToken.value = false;
+  }
+}
+
+async function copyToken() {
+  const token = settings.value["remote.token"] ?? "";
+  if (!token) return;
+  await navigator.clipboard.writeText(token);
+  tokenCopied.value = true;
+  setTimeout(() => { tokenCopied.value = false; }, 2000);
+}
 </script>
 
 <template>
-  <div class="flex flex-col h-full overflow-y-auto">
-    <div class="flex flex-col gap-4 w-full max-w-2xl mx-auto px-6 py-6 text-sm">
-      <!-- 标题栏 -->
-      <div class="flex items-center gap-2 px-0.5">
-        <Settings2 :size="14" class="text-slate-400 shrink-0" />
-        <span
-          class="text-xs font-semibold text-slate-600 tracking-wide uppercase"
-          >{{ t('settings.title') }}</span
+  <div class="flex flex-col h-full">
+    <!-- ── 固定标题栏（始终可见） ───────────────────────────────────────────── -->
+    <div
+      class="shrink-0 flex items-center gap-2 px-6 py-3 border-b bg-white"
+      style="border-color: var(--color-border-subtle)"
+    >
+      <Settings2 :size="14" class="text-slate-400 shrink-0" />
+      <span class="text-xs font-semibold text-slate-600 tracking-wide uppercase">
+        {{ t('settings.title') }}
+      </span>
+      <!-- 未保存标记 -->
+      <span
+        v-if="isDirty && !saving"
+        class="ml-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-600 font-medium"
+      >
+        {{ t('settings.unsaved') }}
+      </span>
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          @click="resetDefaults"
+          class="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+          title="恢复默认"
         >
-        <div class="ml-auto flex items-center gap-1.5">
-          <button
-            @click="resetDefaults"
-            class="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-            title="恢复默认"
-          >
-            <RotateCcw :size="11" />
-            {{ t('settings.resetDefaults') }}
-          </button>
-          <button
-            @click="saveSettings"
-            :disabled="saving"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Save :size="11" />
-            {{ saved ? t('settings.saved') : t('settings.save') }}
-          </button>
-        </div>
+          <RotateCcw :size="11" />
+          {{ t('settings.resetDefaults') }}
+        </button>
+        <button
+          @click="saveSettings"
+          :disabled="saving || !isDirty"
+          :class="[
+            'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border',
+            isDirty
+              ? 'bg-blue-500 text-white hover:bg-blue-600 border-blue-500 shadow-sm'
+              : 'bg-blue-50 text-blue-400 border-blue-200 cursor-not-allowed opacity-60'
+          ]"
+        >
+          <Save :size="11" />
+          {{ saved ? t('settings.saved') : t('settings.save') }}
+        </button>
       </div>
+    </div>
+
+    <!-- ── 可滚动内容区 ──────────────────────────────────────────────────────── -->
+    <div class="flex-1 overflow-y-auto relative">
+      <div class="flex flex-col gap-4 w-full max-w-2xl mx-auto px-6 py-5 text-sm pb-20">
 
       <!-- 错误提示 -->
       <div
@@ -671,11 +773,202 @@ function formatBytes(bytes: number): string {
           </div>
         </div>
       </div>
+
+      <!-- ── 远程协作 ─────────────────────────────────────────────────────── -->
+      <div
+        class="rounded-xl border bg-white overflow-hidden"
+        style="border-color: var(--color-border-subtle)"
+      >
+        <div
+          class="flex items-center gap-2 px-4 py-2.5 border-b"
+          style="border-color: var(--color-border-subtle)"
+        >
+          <Share2 :size="13" class="text-slate-400 shrink-0" />
+          <span class="text-xs font-semibold text-slate-600">{{ t('settings.groups.remote') }}</span>
+        </div>
+        <div class="p-4 flex flex-col gap-4">
+
+          <!-- 启用开关 -->
+          <div class="flex items-start justify-between gap-4">
+            <div class="flex flex-col gap-0.5 min-w-0">
+              <span class="text-xs font-medium text-slate-700">{{ t('settings.fields.remote_enabled.label') }}</span>
+              <span class="text-[11px] text-slate-400 leading-relaxed">{{ t('settings.fields.remote_enabled.hint') }}</span>
+            </div>
+            <Switch
+              class="shrink-0 mt-0.5"
+              :model-value="toggleVal('remote.enabled')"
+              @update:model-value="setToggle('remote.enabled', $event as boolean)"
+            />
+          </div>
+
+          <template v-if="toggleVal('remote.enabled')">
+            <!-- 端口设置 -->
+            <div class="flex items-start justify-between gap-4">
+              <div class="flex flex-col gap-0.5 min-w-0">
+                <span class="text-xs font-medium text-slate-700">{{ t('settings.fields.remote_port.label') }}</span>
+                <span class="text-[11px] text-slate-400 leading-relaxed">{{ t('settings.fields.remote_port.hint') }}</span>
+              </div>
+              <input
+                type="number"
+                :value="settings['remote.port'] ?? '8766'"
+                @input="settings['remote.port'] = ($event.target as HTMLInputElement).value"
+                min="1024"
+                max="65535"
+                class="w-20 shrink-0 rounded-md border px-2 py-1 text-xs text-center tabular-nums focus:outline-none focus:ring-1 focus:ring-blue-400"
+                style="border-color: var(--color-border-subtle)"
+              />
+            </div>
+
+            <!-- 发布服务状态 -->
+            <div v-if="serverStatus !== null">
+              <!-- 未运行警告 -->
+              <div
+                v-if="!serverStatus.running"
+                class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 flex items-start justify-between gap-3"
+              >
+                <div class="flex items-start gap-2 min-w-0">
+                  <ShieldAlert :size="14" class="text-amber-500 shrink-0 mt-0.5" />
+                  <div class="flex flex-col gap-0.5 min-w-0">
+                    <span class="text-xs font-semibold text-amber-800">{{ t('settings.remote.serverStopped') }}</span>
+                    <span class="text-[11px] text-amber-700 leading-relaxed">{{ t('settings.remote.serverStoppedHint') }}</span>
+                  </div>
+                </div>
+                <button
+                  @click="startServerForRemote"
+                  :disabled="serverStarting"
+                  class="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-60 transition-colors"
+                >
+                  <RefreshCw :size="10" :class="serverStarting ? 'animate-spin' : ''" />
+                  {{ serverStarting ? t('settings.remote.starting') : t('settings.remote.startServer') }}
+                </button>
+              </div>
+              <!-- 运行中：显示 LAN 地址 -->
+              <div
+                v-else
+                class="rounded-lg bg-green-50 border border-green-200 px-3 py-2.5 flex flex-col gap-2"
+              >
+                <div class="flex items-center gap-1.5">
+                  <span class="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0"></span>
+                  <span class="text-xs font-semibold text-green-800">{{ t('settings.remote.serverRunning') }}</span>
+                </div>
+                <div v-if="serverStatus.lanUrls.length" class="flex flex-col gap-1">
+                  <span class="text-[11px] text-green-700 font-medium">{{ t('settings.remote.lanAddress') }}</span>
+                  <div
+                    v-for="url in serverStatus.lanUrls"
+                    :key="url"
+                    class="font-mono text-[11px] text-green-800 bg-green-100 rounded px-2 py-1 select-all break-all"
+                  >{{ url }}</div>
+                </div>
+                <span class="text-[10px] text-green-600">{{ t('settings.remote.firewallHint', { port: serverStatus.port }) }}</span>
+              </div>
+            </div>
+
+            <!-- Token 显示 -->
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5">
+                  <KeyRound :size="12" class="text-slate-400" />
+                  <span class="text-xs font-medium text-slate-700">{{ t('settings.fields.remote_token.label') }}</span>
+                </div>
+                <div class="flex items-center gap-1.5">
+                  <button
+                    @click="copyToken"
+                    :disabled="!settings['remote.token']"
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors"
+                    :class="tokenCopied
+                      ? 'bg-green-50 text-green-600 border border-green-200'
+                      : 'bg-slate-50 text-slate-600 border border-slate-200 hover:bg-slate-100 disabled:opacity-40'"
+                  >
+                    <Check v-if="tokenCopied" :size="10" />
+                    <Copy v-else :size="10" />
+                    {{ tokenCopied ? t('settings.remote.copied') : t('settings.remote.copy') }}
+                  </button>
+                  <button
+                    @click="generateToken"
+                    :disabled="generatingToken"
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium bg-blue-500 text-white hover:bg-blue-600 active:bg-blue-700 disabled:opacity-60 transition-colors"
+                  >
+                    <RefreshCw :size="10" :class="generatingToken ? 'animate-spin' : ''" />
+                    {{ generatingToken ? t('settings.remote.generating') : t('settings.remote.generate') }}
+                  </button>
+                </div>
+              </div>
+              <div
+                class="rounded-lg bg-slate-50 border px-3 py-2 font-mono text-[11px] break-all select-all"
+                :class="settings['remote.token']
+                  ? 'text-slate-700 border-slate-200'
+                  : 'text-slate-400 border-dashed border-slate-200 italic'"
+              >
+                {{ settings['remote.token'] || t('settings.remote.tokenEmpty') }}
+              </div>
+              <span class="text-[11px] text-slate-400">{{ t('settings.fields.remote_token.hint') }}</span>
+            </div>
+
+            <!-- 在线客户端 -->
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-center gap-1.5">
+                <span class="text-xs font-medium text-slate-700">{{ t('settings.remote.connectedClients') }}</span>
+                <span
+                  v-if="remoteClients.length"
+                  class="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-600 font-medium leading-none"
+                >{{ remoteClients.length }}</span>
+              </div>
+              <div
+                v-if="!remoteClients.length"
+                class="text-[11px] text-slate-400 px-1"
+              >{{ t('settings.remote.noClients') }}</div>
+              <div v-else class="flex flex-col gap-1">
+                <div
+                  v-for="client in remoteClients"
+                  :key="client.id"
+                  class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-100 text-[11px]"
+                >
+                  <span class="font-mono text-slate-600">{{ client.ip }}</span>
+                  <span class="text-slate-400">{{ new Date(client.connectedAt * 1000).toLocaleTimeString() }}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
     </div>
+  </div>
+
+    <!-- ── 未保存悬浮提示条 ──────────────────────────────────────────────────── -->
+    <Transition name="slide-up">
+      <div
+        v-if="isDirty"
+        class="shrink-0 flex items-center justify-between gap-3 px-4 py-2.5 bg-amber-50 border-t border-amber-200"
+      >
+        <div class="flex items-center gap-2 text-xs text-amber-700">
+          <Save :size="12" class="shrink-0" />
+          {{ t('settings.unsavedHint') }}
+        </div>
+        <button
+          @click="saveSettings"
+          :disabled="saving"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-white hover:bg-amber-600 transition-colors disabled:opacity-50"
+        >
+          <Save :size="11" />
+          {{ saving ? t('settings.saving') : t('settings.save') }}
+        </button>
+      </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}
+
 .fade-in-enter-active {
   transition:
     opacity 0.2s ease,
