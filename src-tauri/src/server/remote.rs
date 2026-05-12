@@ -280,6 +280,7 @@ pub async fn cancel_remote_task(
 struct SseState {
     rx: tokio::sync::broadcast::Receiver<ProgressPayload>,
     task_id: String,
+    done: bool,
     _guard: ClientGuard,
 }
 
@@ -319,10 +320,13 @@ pub async fn sse_progress(
     let sse_state = SseState {
         rx,
         task_id: task_id.clone(),
+        done: false,
         _guard: guard,
     };
 
     let stream = stream::unfold(sse_state, |mut s| async move {
+        // End stream after we already sent a terminal event
+        if s.done { return None; }
         loop {
             match s.rx.recv().await {
                 Ok(payload) if payload.task_id == s.task_id => {
@@ -332,10 +336,8 @@ pub async fn sse_progress(
                     );
                     let data = serde_json::to_string(&payload).unwrap_or_default();
                     let event = Event::default().event("progress").data(data);
-                    if is_terminal {
-                        return Some((Ok::<_, Infallible>(event), s));
-                    }
-                    return Some((Ok(event), s));
+                    if is_terminal { s.done = true; }
+                    return Some((Ok::<_, Infallible>(event), s));
                 }
                 Ok(_) => continue,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,

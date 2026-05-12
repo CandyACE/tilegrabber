@@ -74,14 +74,34 @@ export async function fetchRemoteTasks(server: ConnectedRemoteServer) {
 }
 
 // ── SSE progress stream ───────────────────────────────────────────────────────
+const TERMINAL_STATUSES = ["completed", "completed_with_errors", "error", "cancelled", "paused"];
+
 function openSse(server: ConnectedRemoteServer, taskId: string) {
   if (sseStreams.has(taskId)) return;
   const ac = new AbortController();
   sseStreams.set(taskId, ac);
+
+  // Immediately fetch the current task state to handle the race condition
+  // where the task completed before our SSE subscription was created.
+  fetch(`${server.url.replace(/\/$/, "")}/remote/tasks/${taskId}`, {
+    headers: { Authorization: `Bearer ${server.token}` },
+    signal: AbortSignal.timeout(5000),
+  }).then(async (r) => {
+    if (!r.ok) return;
+    const t = normalizeTask(await r.json());
+    const idx = remoteTasks.value.findIndex((x) => x.id === taskId);
+    if (idx >= 0) {
+      remoteTasks.value[idx] = { ...remoteTasks.value[idx], ...t };
+      if (TERMINAL_STATUSES.includes(t.status)) {
+        ac.abort(); sseStreams.delete(taskId);
+      }
+    }
+  }).catch(() => {});
+
   fetch(`${server.url.replace(/\/$/, "")}/remote/tasks/${taskId}/progress`, {
     signal: ac.signal, headers: { Authorization: `Bearer ${server.token}` },
   }).then(async (resp) => {
-    if (!resp.ok || !resp.body) return;
+    if (!resp.ok || !resp.body) { sseStreams.delete(taskId); return; }
     const reader = resp.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
@@ -101,15 +121,19 @@ function openSse(server: ConnectedRemoteServer, taskId: string) {
               status: p.status ?? remoteTasks.value[idx].status,
               total: p.total ?? remoteTasks.value[idx].total,
               downloaded: p.downloaded ?? remoteTasks.value[idx].downloaded,
+              failed: p.failed ?? remoteTasks.value[idx].failed,
               speed: p.speed, etaSecs: p.eta_secs,
             };
-            if (["completed", "error", "cancelled", "paused"].includes(p.status ?? "")) {
+            if (TERMINAL_STATUSES.includes(p.status ?? "")) {
               ac.abort(); sseStreams.delete(taskId); return;
             }
           }
         } catch {}
       }
     }
+    // Stream ended naturally — do a fresh fetch to get the final state
+    sseStreams.delete(taskId);
+    if (connectedServer.value?.id === server.id) fetchRemoteTasks(server);
   }).catch(() => { sseStreams.delete(taskId); });
 }
 
@@ -121,7 +145,7 @@ function startPolling(server: ConnectedRemoteServer) {
     for (const task of remoteTasks.value) {
       if (task.status === "downloading" && !sseStreams.has(task.id)) openSse(server, task.id);
     }
-  }, 10_000);
+  }, 3_000);
 }
 
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
