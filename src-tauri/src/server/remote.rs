@@ -68,14 +68,6 @@ pub async fn auth_middleware(
 ) -> Response {
     let cfg = load_remote_config(&state).await;
 
-    if !cfg.enabled {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "远程功能未开启"})),
-        )
-            .into_response();
-    }
-
     if cfg.token.is_empty() {
         return (
             StatusCode::UNAUTHORIZED,

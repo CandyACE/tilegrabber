@@ -99,9 +99,11 @@ async function toggleRemoteServer() {
   serverError.value = "";
   try {
     if (serverStatus.value?.running) {
+      await invoke("set_setting", { key: "remote.enabled", value: "false" });
       await stopRemoteServer();
     } else {
       const port = parseInt(serverPort.value, 10) || 8766;
+      await invoke("set_setting", { key: "remote.enabled", value: "true" });
       await invoke("set_setting", { key: "remote.port", value: String(port) });
       serverStatus.value = await invoke<ServerStatus>("start_remote_server_cmd", { port });
     }
