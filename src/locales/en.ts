@@ -542,6 +542,8 @@ export default {
     mbtitlesDesc: 'Single SQLite file, compatible with QGIS, Cesium, etc.',
     directoryDesc: 'File tree, usable as a static XYZ tile server.',
     tiffDesc: 'Georeferenced raster, supported by QGIS/ArcGIS.',
+    pmtilesDesc: 'Modern single-file format, served directly via HTTP/CDN.',
+    pmtilesWgs84Hint: 'PMTiles only supports WebMercator; this task uses WGS84',
     savePath: 'Save Path',
     exportDir: 'Export Directory',
     noPath: 'No path selected…',

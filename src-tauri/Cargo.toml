@@ -69,6 +69,7 @@ tower = { version = "0.4" }
 roxmltree = "0.21.1"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+pmtiles = { version = "0.23", default-features = false, features = ["write", "tilejson"] }
 
 [profile.release]
 panic = "abort"

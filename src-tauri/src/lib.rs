@@ -31,7 +31,7 @@ use commands::source::{
 use commands::task::{
     cancel_download, cancel_export, check_disk_space, create_task, delete_task, estimate_download,
     export_directory, export_geotiff,
-    export_mbtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
+    export_mbtiles, export_pmtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
     get_export_jobs, get_stored_tile, get_task, get_task_logs, get_task_thumbnail, import_mbtiles,
     import_task, list_tasks, pause_download, resume_download, retry_failed, reveal_in_explorer,
     start_download, CancelMap, ExportState,
@@ -372,6 +372,7 @@ pub fn run() {
             get_task_thumbnail,
             // 导出
             export_mbtiles,
+            export_pmtiles,
             export_directory,
             export_geotiff,
             get_export_jobs,

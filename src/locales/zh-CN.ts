@@ -543,6 +543,8 @@ export default {
     mbtitlesDesc: '单文件 SQLite，兼容 QGIS、Cesium 等。',
     directoryDesc: '文件树，可作静态 XYZ 服务。',
     tiffDesc: '地理参考栅格图，支持 QGIS/ArcGIS。',
+    pmtilesDesc: '现代 Web 单文件，浏览器直读、可托管 CDN。',
+    pmtilesWgs84Hint: 'PMTiles 仅支持 WebMercator，当前任务为 WGS84 不可用',
     savePath: '保存位置',
     exportDir: '导出目录',
     noPath: '未选择保存路径…',

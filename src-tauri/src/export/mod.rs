@@ -8,6 +8,7 @@
 pub mod directory;
 pub mod geotiff;
 pub mod mbtiles;
+pub mod pmtiles;
 pub mod tile_clip;
 pub mod utm;
 

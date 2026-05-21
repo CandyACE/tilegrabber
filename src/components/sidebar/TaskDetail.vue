@@ -799,6 +799,7 @@ function logTime(iso: string) {
         boundsEast: task.boundsEast,
         boundsSouth: task.boundsSouth,
         boundsNorth: task.boundsNorth,
+        crs: (() => { try { return JSON.parse(task.sourceConfig)?.crs ?? 'WEB_MERCATOR'; } catch { return 'WEB_MERCATOR'; } })(),
       }"
       @close="showExport = false"
     />

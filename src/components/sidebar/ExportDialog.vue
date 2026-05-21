@@ -18,7 +18,7 @@ import {
 import { useExportJobs } from "~/composables/useExportJobs";
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
-type ExportFormat = "mbtiles" | "directory" | "tiff";
+type ExportFormat = "mbtiles" | "directory" | "tiff" | "pmtiles";
 
 interface TaskInfo {
   id: string;
@@ -30,6 +30,7 @@ interface TaskInfo {
   boundsEast: number;
   boundsSouth: number;
   boundsNorth: number;
+  crs?: string;
 }
 
 // ─── Props / Emits ─────────────────────────────────────────────────────────
@@ -58,6 +59,10 @@ const { t } = useI18n();
 
 const tiffCompression = ref<"none" | "lzw" | "deflate">("none");
 const tiffOutputCrs = ref<string>("3857");
+
+const pmtilesDisabled = computed(
+  () => (props.task.crs ?? "WEB_MERCATOR") !== "WEB_MERCATOR",
+);
 
 watch(
   () => props.open,
@@ -106,9 +111,19 @@ async function pickTiffPath() {
   if (p) destPath.value = p;
 }
 
+async function pickPmtilesPath() {
+  const p = await saveDialog({
+    title: "导出为 PMTiles",
+    defaultPath: `${props.task.name}.pmtiles`,
+    filters: [{ name: "PMTiles 瓦片包", extensions: ["pmtiles"] }],
+  });
+  if (p) destPath.value = p;
+}
+
 async function pickPath() {
   if (format.value === "mbtiles") await pickMbtilesPath();
   else if (format.value === "directory") await pickDirectory();
+  else if (format.value === "pmtiles") await pickPmtilesPath();
   else await pickTiffPath();
 }
 
@@ -133,6 +148,14 @@ async function doExport() {
       jobId = await invoke<string>("export_directory", {
         taskId: props.task.id,
         destDir: destPath.value,
+        clipToBounds: clipToBounds.value,
+        jpegQuality: reEncodeEnabled.value ? jpegQuality.value : null,
+        pngLevel: reEncodeEnabled.value ? pngLevel.value : null,
+      });
+    } else if (format.value === "pmtiles") {
+      jobId = await invoke<string>("export_pmtiles", {
+        taskId: props.task.id,
+        destPath: destPath.value,
         clipToBounds: clipToBounds.value,
         jpegQuality: reEncodeEnabled.value ? jpegQuality.value : null,
         pngLevel: reEncodeEnabled.value ? pngLevel.value : null,
@@ -166,6 +189,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
   mbtiles: "MBTiles",
   directory: t("taskDetail.exportFormat.directory"),
   tiff: "GeoTIFF",
+  pmtiles: "PMTiles",
 }));
 </script>
 
@@ -242,7 +266,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               >
                 {{ t('export.selectFormat') }}
               </p>
-              <div class="grid grid-cols-3 gap-2.5">
+              <div class="grid grid-cols-2 gap-2.5">
                 <!-- MBTiles -->
                 <button
                   class="group relative flex flex-col gap-2 rounded-xl p-3 border-2 text-left transition-all duration-200"
@@ -401,6 +425,65 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
                     {{ t('export.tiffDesc') }}
+                  </p>
+                </button>
+
+                <!-- PMTiles -->
+                <button
+                  class="group relative flex flex-col gap-2 rounded-xl p-3 border-2 text-left transition-all duration-200"
+                  :class="[
+                    pmtilesDisabled
+                      ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
+                      : format === 'pmtiles'
+                        ? 'border-violet-500 bg-violet-50 shadow-sm shadow-violet-100'
+                        : 'border-slate-200 hover:border-slate-300 bg-white',
+                  ]"
+                  :disabled="pmtilesDisabled"
+                  :title="pmtilesDisabled ? t('export.pmtilesWgs84Hint') : ''"
+                  @click="
+                    if (!pmtilesDisabled) {
+                      format = 'pmtiles';
+                      destPath = '';
+                    }
+                  "
+                >
+                  <div class="flex items-center gap-2">
+                    <div
+                      class="w-7 h-7 rounded-lg flex items-center justify-center transition-colors duration-200"
+                      :class="
+                        format === 'pmtiles'
+                          ? 'bg-violet-100'
+                          : 'bg-slate-100 group-hover:bg-slate-200'
+                      "
+                    >
+                      <Layers
+                        class="size-3.5 transition-colors duration-200"
+                        :class="
+                          format === 'pmtiles'
+                            ? 'text-violet-600'
+                            : 'text-slate-500'
+                        "
+                      />
+                    </div>
+                    <Transition name="scale-in">
+                      <div
+                        v-if="format === 'pmtiles'"
+                        class="ml-auto size-4 rounded-full bg-violet-500 flex items-center justify-center shrink-0"
+                      >
+                        <span class="block size-1.5 rounded-full bg-white" />
+                      </div>
+                    </Transition>
+                  </div>
+                  <span
+                    class="text-xs font-semibold transition-colors duration-200 leading-tight"
+                    :class="
+                      format === 'pmtiles' ? 'text-violet-700' : 'text-slate-800'
+                    "
+                  >
+                    PMTiles
+                  </span>
+                  <p class="text-[10px] leading-relaxed text-slate-400">
+                    {{ pmtilesDisabled ? t('export.pmtilesWgs84Hint') : t('export.pmtilesDesc') }}
                   </p>
                 </button>
               </div>

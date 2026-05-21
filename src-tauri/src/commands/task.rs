@@ -547,6 +547,153 @@ pub async fn export_mbtiles(
     Ok(job_id)
 }
 
+/// 将任务瓦片包导出为 PMTiles v3 单文件
+///
+/// 在后台启动导出任务，立即返回 job_id。
+/// 导出进度通过 `export-progress` Tauri 事件推送。
+#[tauri::command]
+pub async fn export_pmtiles(
+    task_id: String,
+    dest_path: String,
+    clip_to_bounds: bool,
+    jpeg_quality: Option<u8>,
+    png_level: Option<u8>,
+    app_db: State<'_, AppDb>,
+    export_state: State<'_, ExportState>,
+    cancel_map: State<'_, CancelMap>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let src_path = task
+        .tile_store_path
+        .as_ref()
+        .ok_or("该任务尚无瓦片存储文件（可能未开始下载）")?
+        .clone();
+
+    if !std::path::Path::new(&src_path).exists() {
+        return Err(format!("瓦片文件不存在: {}", src_path));
+    }
+
+    let format = serde_json::from_str::<serde_json::Value>(&task.source_config)
+        .ok()
+        .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "png".into());
+    let bounds = [
+        task.bounds_west,
+        task.bounds_south,
+        task.bounds_east,
+        task.bounds_north,
+    ];
+    let polygon: Option<Vec<[f64; 2]>> = task
+        .polygon_wgs84
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
+    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
+        .map(|s| s.crs)
+        .unwrap_or_default();
+
+    if !matches!(crs, crate::types::CrsType::WebMercator) {
+        return Err("PMTiles 仅支持 WebMercator (EPSG:3857) 坐标系；当前任务为 WGS84，请改用 MBTiles 或目录导出".into());
+    }
+
+    let task_name = task.name.clone();
+
+    let job_id = Uuid::new_v4().to_string();
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    cancel_map
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(job_id.clone(), Arc::clone(&cancel_token));
+    let job = ExportJob {
+        job_id: job_id.clone(),
+        task_id: task_id.clone(),
+        format: "pmtiles".into(),
+        dest_path: dest_path.clone(),
+        done: 0,
+        total: 0,
+        status: "running".into(),
+        error: None,
+    };
+    export_state
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(job_id.clone(), job);
+
+    let state_clone = export_state.inner().clone();
+    let cancel_map_clone = cancel_map.inner().clone();
+    let app_clone = app.clone();
+    let jid = job_id.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let result = crate::export::pmtiles::export_pmtiles(
+            std::path::Path::new(&src_path),
+            std::path::Path::new(&dest_path),
+            &task_name,
+            bounds,
+            task.min_zoom,
+            task.max_zoom,
+            &format,
+            clip_to_bounds,
+            polygon.as_deref(),
+            &crs,
+            jpeg_quality,
+            png_level,
+            &cancel_token,
+            |done, total| {
+                if let Ok(mut map) = state_clone.lock() {
+                    if let Some(j) = map.get_mut(&jid) {
+                        j.done = done;
+                        j.total = total;
+                    }
+                }
+                let _ = app_clone.emit(
+                    "export-progress",
+                    ExportProgressPayload {
+                        job_id: jid.clone(),
+                        done,
+                        total,
+                        status: "running".into(),
+                        dest_path: dest_path.clone(),
+                        error: None,
+                    },
+                );
+            },
+        );
+        cancel_map_clone
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&jid);
+        let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
+        let (status, error, done): (String, Option<String>, u64) = match result {
+            Ok(n) => ("done".into(), None, n),
+            Err(_) if cancelled => ("cancelled".into(), None, 0),
+            Err(e) => ("error".into(), Some(e.to_string()), 0),
+        };
+        if let Ok(mut map) = state_clone.lock() {
+            if let Some(j) = map.get_mut(&jid) {
+                j.status = status.clone();
+                j.error = error.clone();
+                if done > 0 {
+                    j.done = done;
+                }
+            }
+        }
+        let _ = app_clone.emit(
+            "export-progress",
+            ExportProgressPayload {
+                job_id: jid.clone(),
+                done,
+                total: done,
+                status,
+                dest_path: dest_path.clone(),
+                error,
+            },
+        );
+    });
+
+    Ok(job_id)
+}
+
 /// 在后台启动目录格式导出任务，立即返回 job_id。
 /// 导出进度通过 `export-progress` Tauri 事件推送。
 #[tauri::command]
