@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use fs2::available_space as fs2_available_space;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -462,7 +462,7 @@ pub async fn export_mbtiles(
 
     let job_id = Uuid::new_v4().to_string();
     let cancel_token = Arc::new(AtomicBool::new(false));
-    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
+    cancel_map.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -473,7 +473,7 @@ pub async fn export_mbtiles(
         status: "running".into(),
         error: None,
     };
-    export_state.lock().unwrap().insert(job_id.clone(), job);
+    export_state.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
     let cancel_map_clone = cancel_map.inner().clone();
@@ -515,7 +515,7 @@ pub async fn export_mbtiles(
                 );
             },
         );
-        cancel_map_clone.lock().unwrap().remove(&jid);
+        cancel_map_clone.lock().unwrap_or_else(PoisonError::into_inner).remove(&jid);
         let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
@@ -592,7 +592,7 @@ pub async fn export_directory(
 
     let job_id = Uuid::new_v4().to_string();
     let cancel_token = Arc::new(AtomicBool::new(false));
-    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
+    cancel_map.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -603,7 +603,7 @@ pub async fn export_directory(
         status: "running".into(),
         error: None,
     };
-    export_state.lock().unwrap().insert(job_id.clone(), job);
+    export_state.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
     let cancel_map_clone = cancel_map.inner().clone();
@@ -643,7 +643,7 @@ pub async fn export_directory(
                 );
             },
         );
-        cancel_map_clone.lock().unwrap().remove(&jid);
+        cancel_map_clone.lock().unwrap_or_else(PoisonError::into_inner).remove(&jid);
         let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
@@ -739,7 +739,7 @@ pub async fn export_geotiff(
 
     let job_id = Uuid::new_v4().to_string();
     let cancel_token = Arc::new(AtomicBool::new(false));
-    cancel_map.lock().unwrap().insert(job_id.clone(), Arc::clone(&cancel_token));
+    cancel_map.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), Arc::clone(&cancel_token));
     let job = ExportJob {
         job_id: job_id.clone(),
         task_id: task_id.clone(),
@@ -750,7 +750,7 @@ pub async fn export_geotiff(
         status: "running".into(),
         error: None,
     };
-    export_state.lock().unwrap().insert(job_id.clone(), job);
+    export_state.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), job);
 
     let state_clone = export_state.inner().clone();
     let cancel_map_clone = cancel_map.inner().clone();
@@ -795,7 +795,7 @@ pub async fn export_geotiff(
                 );
             },
         );
-        cancel_map_clone.lock().unwrap().remove(&jid);
+        cancel_map_clone.lock().unwrap_or_else(PoisonError::into_inner).remove(&jid);
         let cancelled = matches!(&result, Err(e) if e.to_string().contains("__cancelled__"));
         let (status, error, done): (String, Option<String>, u64) = match result {
             Ok(n) => ("done".into(), None, n),
@@ -1349,7 +1349,7 @@ pub async fn import_mbtiles(
         status: "running".into(),
         error: None,
     };
-    export_state.lock().unwrap().insert(job_id.clone(), job);
+    export_state.lock().unwrap_or_else(PoisonError::into_inner).insert(job_id.clone(), job);
 
     // 后台执行：大文件拷贝放在 spawn_blocking 中
     let state_arc = export_state.inner().clone();

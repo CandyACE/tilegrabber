@@ -131,6 +131,30 @@ sudo apt-get install -y \
   patchelf
 ```
 
+### Fork 后自建发布通道（自动更新签名）
+
+御图使用 [tauri-plugin-updater](https://v2.tauri.app/plugin/updater/) 实现端到端 minisign 签名，确保自动更新通道无法被篡改。**Fork 仓库后**如需启用自动更新，必须替换为自己的密钥对：
+
+```bash
+# 1. 生成专属密钥对（仅在自己机器上运行一次）
+npx tauri signer generate -w "$HOME/.tauri/yourproject.key"
+# Windows PowerShell:
+# npx tauri signer generate -w "$env:USERPROFILE\.tauri\yourproject.key"
+```
+
+命令会输出：
+- 一个 `.key` 文件 — **私钥**，永远不要提交到代码仓库或泄漏
+- 控制台打印的 base64 字符串 — **公钥**
+
+然后：
+
+1. 把 `.key` 文件**整个内容**配置到仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`
+2. 生成密钥时输入的**密码**配置到仓库 Secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+3. 把**公钥**字符串替换到 `src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`
+4. 在 U 盘 / 密码管理器再额外离线备份一份 `.key` 文件
+
+> ⚠️ 私钥丢失即不可恢复：旧客户端将拒绝任何用新密钥签的更新，所有用户必须手动下载新版重新基线。
+
 ---
 
 ## 技术栈

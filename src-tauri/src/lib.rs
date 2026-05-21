@@ -269,29 +269,29 @@ pub fn run() {
                 });
             }
 
-            // 创建系统托盘图标
-            let icon = app
-                .default_window_icon()
-                .cloned()
-                .expect("no window icon configured");
-            TrayIconBuilder::new()
-                .icon(icon)
-                .tooltip("御图 — 点击显示主界面")
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        let app = tray.app_handle();
-                        if let Some(win) = app.get_webview_window("main") {
-                            let _ = win.show();
-                            let _ = win.set_focus();
+            // 创建系统托盘图标（缺图标时仅记录日志，不阻断启动）
+            if let Some(icon) = app.default_window_icon().cloned() {
+                TrayIconBuilder::new()
+                    .icon(icon)
+                    .tooltip("御图 — 点击显示主界面")
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event
+                        {
+                            let app = tray.app_handle();
+                            if let Some(win) = app.get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
                         }
-                    }
-                })
-                .build(app)?;
+                    })
+                    .build(app)?;
+            } else {
+                eprintln!("[tray] 应用未配置默认图标，跳过托盘创建");
+            }
 
             // 崩溃自动续传：延迟 5 秒后自动恢复被中断的任务（如设置允许）
             if !interrupted_ids.is_empty() {

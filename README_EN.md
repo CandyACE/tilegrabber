@@ -131,6 +131,30 @@ sudo apt-get install -y \
   patchelf
 ```
 
+### Self-hosted Release Channel After Fork (Updater Signing)
+
+TileGrabber uses [tauri-plugin-updater](https://v2.tauri.app/plugin/updater/) for end-to-end minisign signing, so the auto-update channel can't be tampered with. **After forking**, if you want to enable auto-update, you must use your own key pair:
+
+```bash
+# 1. Generate your own key pair (run once on your local machine)
+npx tauri signer generate -w "$HOME/.tauri/yourproject.key"
+# Windows PowerShell:
+# npx tauri signer generate -w "$env:USERPROFILE\.tauri\yourproject.key"
+```
+
+This produces:
+- A `.key` file — your **private key**. Never commit or share it.
+- A base64 string printed to the console — your **public key**.
+
+Then:
+
+1. Put the **entire content** of the `.key` file into your repo secret `TAURI_SIGNING_PRIVATE_KEY`
+2. Put the **password** you entered during generation into repo secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+3. Paste the **public key** string into `src-tauri/tauri.conf.json` → `plugins.updater.pubkey`
+4. Keep one offline backup of the `.key` file (USB drive / password manager)
+
+> ⚠️ Losing the private key is unrecoverable: existing clients will reject any update signed with a new key, so every user must manually download a fresh build.
+
 ---
 
 ## Tech Stack

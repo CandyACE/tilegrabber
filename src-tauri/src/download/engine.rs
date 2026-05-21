@@ -613,7 +613,12 @@ async fn run_download(
             if *ctrl_rx.borrow() == CtrlSignal::Cancel {
                 break;
             }
-            let permit = sem.clone().acquire_owned().await.unwrap();
+            // 信号量永不显式关闭，acquire 失败仅可能是 sem 被 drop —— 此处理论不可达
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("download semaphore unexpectedly closed");
             let client = client.clone();
             let source = source.clone();
             let ctrl = ctrl_rx.clone();

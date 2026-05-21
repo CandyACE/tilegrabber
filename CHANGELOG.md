@@ -4,6 +4,33 @@
 
 ---
 
+## [v0.5.0] - 待发布
+
+### 安全
+
+- **更新通道端到端签名**：移除自实现 updater，改用官方 `tauri-plugin-updater` + minisign 签名。CI 用仓库 Secret 注入私钥签所有 updater 产物，客户端用编译期内置公钥校验，篡改 latest.json 或中间人替换 exe 会被直接拒绝
+- **WMTS / WMS 服务端 XML 转义**：所有用户提供的任务名 / format 字段在 GetCapabilities XML 中转义，杜绝 XML 注入；输出格式与 ResourceURL.format / WMTS Format / ArcGIS tileInfo.format 跟随任务实际格式，避免格式不一致导致的客户端解析异常
+- **隐藏未上线的远程协作功能**：避免误用，相关入口已从 UI 与服务端路由暂时下架
+
+### 新增
+
+- **Windows 静默更新**：使用 NSIS passive 模式，更新过程仅显示进度条无需点击，安装完成后自动重启
+- **macOS / Linux 在应用内自动替换**：plugin-updater 解压 `.app.tar.gz` / `.AppImage.tar.gz` 直接覆盖原可执行文件
+- **更新进度事件**：UI 显示下载已传输字节 / 总大小，回滚到内置百分比模型
+
+### 修复
+
+- **托盘构建失败导致启动崩溃**：缺图标时改为日志告警并跳过托盘创建，不阻断主窗口
+- **下载信号量错误处理**：`.unwrap()` → `.expect()` 并加注释；mutex 中毒时优雅恢复（`PoisonError::into_inner`），避免链式 panic 让导出任务半成品状态卡死
+
+### 破坏性变更
+
+- **`commands/updater.rs` 整个移除**：旧的 `check_for_update` / `download_and_install_update` / `open_release_url` Tauri 命令不再存在
+- **`latest.json` schema 双写**：本版本同时输出旧 schema（`assets.{windows,macos,linux}`）和新 schema（`version` / `notes` / `pub_date` / `platforms.{target}.{signature,url}`）。等所有用户从 v0.4.8 升上来后，下一个 minor 版本可清理旧 `assets` 字段
+- **必须配置签名密钥**：fork 本仓库后，必须按 README → 「Fork 后自建发布通道」生成自己的 minisign 密钥对，否则 CI 不会产出可用的更新
+
+---
+
 ## [v0.4.8] - 2026-04-29
 
 ### 新增
