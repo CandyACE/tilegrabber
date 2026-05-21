@@ -37,7 +37,6 @@ use commands::task::{
     start_download, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
-use commands::updater::{check_for_update, download_and_install_update, open_release_url};
 use commands::web_capture::{
     clear_captured_tiles, close_capture_window, get_captured_tiles, open_capture_window,
     CaptureSession,
@@ -118,6 +117,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // 初始化应用数据目录
             let data_dir = app.path().app_data_dir()?;
@@ -325,15 +326,11 @@ pub fn run() {
                 }
             }
 
-            // 启动后静默检查更新（延迟 12 秒，避免干扰应用启动）
+            // 启动后静默检查更新（延迟 12 秒，由前端 plugin-updater 触发实际检查并 emit "update-available"）
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-                if let Ok(result) = check_for_update().await {
-                    if result.has_update {
-                        let _ = app_handle.emit("update-available", &result);
-                    }
-                }
+                let _ = app_handle.emit("update-check-trigger", ());
             });
 
             Ok(())
@@ -402,10 +399,6 @@ pub fn run() {
             set_setting,
             get_all_settings,
             set_all_settings,
-            // 自动更新
-            check_for_update,
-            open_release_url,
-            download_and_install_update,
             // 图层管理
             create_layer,
             list_layers,

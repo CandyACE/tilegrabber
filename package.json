@@ -12,7 +12,7 @@
     "tauri:build": "tauri build"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0",
+    "@tauri-apps/cli": "^2.11.2",
     "typescript": "^5.8.0",
     "vue-tsc": "^2.2.0"
   },
@@ -24,7 +24,9 @@
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-shell": "^2.0.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "@vitejs/plugin-vue": "^5.2.4",
     "@vueuse/core": "^14.2.1",
     "class-variance-authority": "^0.7.1",

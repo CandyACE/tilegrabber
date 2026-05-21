@@ -18,6 +18,40 @@ use axum::{
 use rusqlite::{params, Connection};
 
 use super::{ServerAppState, StatsMap};
+use crate::storage::app_db::Task;
+
+// ─── XML / 格式辅助 ───────────────────────────────────────────────────────────
+
+/// XML 文本节点 / 属性值转义。覆盖 `<>&"'` 五个字符，
+/// 适用于 `<elem>{}</elem>` 和 `attr="{}"` 两种位置。
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// 从 task.source_config(JSON) 中提取 `format` 字段（小写化），失败回退 `"png"`。
+fn task_format(task: &Task) -> String {
+    serde_json::from_str::<serde_json::Value>(&task.source_config)
+        .ok()
+        .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(|s| s.to_lowercase()))
+        .filter(|s| matches!(s.as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .unwrap_or_else(|| "png".to_string())
+}
+
+/// 把 task 的输出格式映射到 MIME（用于 WMTS/OGC Capabilities 的 Format 节点）。
+fn task_mime(task: &Task) -> &'static str {
+    format_to_mime(&task_format(task))
+}
 
 // ─── 统计辅助 ─────────────────────────────────────────────────────────────────
 
@@ -179,6 +213,8 @@ async fn wmts_get_capabilities(state: &ServerAppState, task_id: &str) -> Respons
     let base = &state.base_url;
     let min_z = task.min_zoom;
     let max_z = task.max_zoom;
+    let mime = task_mime(&task);
+    let layer_title = xml_escape(&task.name);
 
     // 生成 TileMatrix 条目
     let mut tile_matrices = String::new();
@@ -219,11 +255,11 @@ async fn wmts_get_capabilities(state: &ServerAppState, task_id: &str) -> Respons
         <ows:UpperCorner>{east} {north}</ows:UpperCorner>
       </ows:BoundingBox>
       <Style isDefault="true"><ows:Identifier>default</ows:Identifier></Style>
-      <Format>image/png</Format>
+      <Format>{mime}</Format>
       <TileMatrixSetLink>
         <TileMatrixSet>WebMercatorQuad</TileMatrixSet>
       </TileMatrixSetLink>
-      <ResourceURL format="image/png" resourceType="tile"
+      <ResourceURL format="{mime}" resourceType="tile"
         template="{base}/wmts/{task_id}?SERVICE=WMTS&amp;REQUEST=GetTile&amp;VERSION=1.0.0&amp;LAYER={task_id}&amp;TILEMATRIXSET=WebMercatorQuad&amp;TILEMATRIX={{TileMatrix}}&amp;TILEROW={{TileRow}}&amp;TILECOL={{TileCol}}"/>
     </Layer>
     <TileMatrixSet>
@@ -235,12 +271,13 @@ async fn wmts_get_capabilities(state: &ServerAppState, task_id: &str) -> Respons
   <ServiceMetadataURL xlink:href="{base}/wmts/{task_id}?SERVICE=WMTS&amp;REQUEST=GetCapabilities"/>
 </Capabilities>"#,
         task_id = task_id,
-        name = task.name,
+        name = layer_title,
         west = task.bounds_west,
         south = task.bounds_south,
         east = task.bounds_east,
         north = task.bounds_north,
         base = base,
+        mime = mime,
         tile_matrices = tile_matrices,
     );
 
@@ -441,7 +478,7 @@ async fn wms_get_capabilities(state: &ServerAppState, task_id: &str) -> Response
 </WMT_MS_Capabilities>"#,
         online_resource = online_resource,
         task_id = task_id,
-        name = task.name,
+        name = xml_escape(&task.name),
         west = task.bounds_west,
         south = task.bounds_south,
         east = task.bounds_east,
@@ -712,6 +749,7 @@ pub async fn ogc_tiles_tileset(
     let tile_url = format!(
         "{base}/ogc-tiles/{task_id}/tiles/WebMercatorQuad/{{tileMatrix}}/{{tileRow}}/{{tileCol}}"
     );
+    let mime = task_mime(&task);
     let info = serde_json::json!({
         "tileMatrixSetURI": "http://www.opengis.net/def/tilematrixset/OGC/1.0/WebMercatorQuad",
         "dataType": "map",
@@ -726,7 +764,7 @@ pub async fn ogc_tiles_tileset(
         }).collect::<Vec<_>>(),
         "links": [
             { "rel": "self", "type": "application/json", "href": format!("{base}/ogc-tiles/{task_id}/tiles/WebMercatorQuad") },
-            { "rel": "item", "type": "image/png", "href": tile_url }
+            { "rel": "item", "type": mime, "href": tile_url }
         ]
     });
     json_response(&info)
@@ -775,6 +813,13 @@ pub async fn arcgis_mapserver(
         })
         .collect();
 
+    // ArcGIS tileInfo.format 取值：PNG / PNG24 / PNG32 / JPEG / MIXED
+    let (arcgis_fmt, arcgis_supported) = match task_format(&task).as_str() {
+        "jpg" | "jpeg" => ("JPEG", "JPEG"),
+        "webp" => ("PNG", "PNG,PNG32,PNG24,PNG8"), // ArcGIS 客户端不识别 WEBP；按 PNG 回退
+        _ => ("PNG", "PNG,PNG32,PNG24,PNG8"),
+    };
+
     let info = serde_json::json!({
         "currentVersion": 10.81,
         "serviceDescription": task.name,
@@ -788,7 +833,7 @@ pub async fn arcgis_mapserver(
         "singleFusedMapCache": true,
         "tileInfo": {
             "rows": 256, "cols": 256, "dpi": 96,
-            "format": "PNG",
+            "format": arcgis_fmt,
             "compressionQuality": 75,
             "origin": { "x": -20037508.342787, "y": 20037508.342787 },
             "spatialReference": { "wkid": 3857, "latestWkid": 3857 },
@@ -807,7 +852,7 @@ pub async fn arcgis_mapserver(
         "minScale": scale_base / (1 << task.min_zoom) as f64,
         "maxScale": scale_base / (1 << task.max_zoom) as f64,
         "units": "esriMeters",
-        "supportedImageFormatTypes": "PNG,PNG32,PNG24,PNG8",
+        "supportedImageFormatTypes": arcgis_supported,
         "documentInfo": { "Title": task.name },
         "capabilities": "Map,TilesOnly",
         "tileServers": [],

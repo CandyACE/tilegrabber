@@ -14,7 +14,7 @@ import {
   Square,
   X as XIcon,
   ListTodo,
-  Radio,
+  // Radio,  // 远程协作功能暂时隐藏，保留导入以便后续恢复
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
 import logoUrl from "~/assets/logo.png";
@@ -43,7 +43,8 @@ const navItems = computed(() => [
   { key: "map" as const, label: t('nav.map'), icon: Map },
   { key: "tasks" as const, label: t('nav.tasks'), icon: ListTodo },
   { key: "publish" as const, label: t('nav.publish'), icon: Share2 },
-  { key: "remote" as const, label: t('nav.remote'), icon: Radio },
+  // 远程协作功能暂时隐藏，待评估后再决定是否启用：
+  // { key: "remote" as const, label: t('nav.remote'), icon: Radio },
   { key: "settings" as const, label: t('nav.settings'), icon: Settings },
   { key: "help" as const, label: t('nav.help'), icon: HelpCircle },
   { key: "about" as const, label: t('nav.about'), icon: Info },

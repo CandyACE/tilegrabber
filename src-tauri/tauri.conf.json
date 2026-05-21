@@ -46,6 +46,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -61,6 +62,18 @@
         "installMode": "currentUser",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDgxRDlFNERGNTc2RDY4RDYKUldUV2FHMVgzK1RaZ2ZqcEw1YjBkWC9KNTl2cEZtUWIxNW9rRnNiN1RKQXY1anpGQlJCRGcrU3oK",
+      "endpoints": [
+        "https://github.com/CandyACE/tilegrabber/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

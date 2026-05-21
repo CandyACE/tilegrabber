@@ -132,9 +132,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 编译期注入更新检查地址，指向本仓库 releases/latest/download/latest.json
-          # 应用启动后将从该 URL 获取最新版本信息
+          # 编译期注入更新检查地址（旧版客户端读 latest.json 时仍使用此 URL）
           TILEGRABBER_UPDATE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/latest.json
+          # tauri-plugin-updater 的 minisign 签名密钥（CI 期间签 updater 产物）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: "御图 ${{ env.RELEASE_TAG }}"
@@ -276,26 +278,72 @@ jobs:
           MACOS_X64_URL=$(echo "$RELEASE_JSON" | jq -r \
             '[.assets[] | select(.name | test("_x64\\.dmg$"))] | sort_by(.name) | last | .browser_download_url // ""')
 
-          echo "发布后资产 URL："
-          echo "Windows  : $WIN_URL"
-          echo "macOS arm: $MACOS_ARM_URL"
-          echo "macOS x64: $MACOS_X64_URL"
-          echo "Linux    : $LINUX_URL"
+          # ── 获取 tauri-plugin-updater 专用产物 + minisign 签名 ─────
+          # Windows：updater 产物为 NSIS .exe（与安装包同一文件），签名 = 同名 .sig
+          # macOS：updater 产物为 .app.tar.gz（不是 .dmg）；签名 = 同名 .sig
+          # Linux：updater 产物为 .AppImage 或 .AppImage.tar.gz，签名 = 同名 .sig
+          WIN_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("-setup\\.exe$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          WIN_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("-setup\\.exe\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
 
-          # ── 重新生成 latest.json（使用真实 tag URL）──────────────
+          MACOS_ARM_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("aarch64.*\\.app\\.tar\\.gz$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          MACOS_ARM_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("aarch64.*\\.app\\.tar\\.gz\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+
+          # AppImage.tar.gz 是更新专用归档；若无则回退到 .AppImage 本体
+          LINUX_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("\\.AppImage\\.tar\\.gz$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
+            '[.assets[] | select(.name | test("\\.AppImage\\.tar\\.gz\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          if [ -z "$LINUX_UPD_URL" ]; then
+            LINUX_UPD_URL="$LINUX_URL"
+            LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
+              '[.assets[] | select(.name | test("\\.AppImage\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          fi
+
+          echo "发布后资产 URL："
+          echo "Windows  : $WIN_URL  (updater: $WIN_UPD_URL, sig: $WIN_SIG_URL)"
+          echo "macOS arm: $MACOS_ARM_URL  (updater: $MACOS_ARM_UPD_URL, sig: $MACOS_ARM_SIG_URL)"
+          echo "macOS x64: $MACOS_X64_URL"
+          echo "Linux    : $LINUX_URL  (updater: $LINUX_UPD_URL, sig: $LINUX_SIG_URL)"
+
+          # ── 下载 .sig 文件读取签名内容（plugin-updater 需要 inline 签名）─
+          fetch_sig() {
+            local url="$1"
+            if [ -z "$url" ]; then echo ""; return; fi
+            curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$url" || true
+          }
+          WIN_SIG=$(fetch_sig "$WIN_SIG_URL")
+          MACOS_ARM_SIG=$(fetch_sig "$MACOS_ARM_SIG_URL")
+          LINUX_SIG=$(fetch_sig "$LINUX_SIG_URL")
+
+          # ── 生成 latest.json（双 schema：旧 assets + 新 platforms）──
           MACOS_URL="$MACOS_ARM_URL"
           if [ -z "$MACOS_URL" ]; then
             MACOS_URL="$MACOS_X64_URL"
           fi
 
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          VERSION="${TAG#v}"
+
           jq -n \
             --arg tag    "$TAG" \
+            --arg ver    "$VERSION" \
+            --arg date   "$PUB_DATE" \
             --arg html   "https://github.com/$REPO/releases/tag/$TAG" \
             --arg body   "$CHANGELOG_NOTES" \
             --arg win    "$WIN_URL" \
             --arg mac    "$MACOS_URL" \
             --arg mac_x64 "$MACOS_X64_URL" \
             --arg linux  "$LINUX_URL" \
+            --arg win_upd_url "$WIN_UPD_URL" \
+            --arg win_sig     "$WIN_SIG" \
+            --arg mac_arm_url "$MACOS_ARM_UPD_URL" \
+            --arg mac_arm_sig "$MACOS_ARM_SIG" \
+            --arg linux_url   "$LINUX_UPD_URL" \
+            --arg linux_sig   "$LINUX_SIG" \
             '{
               tag_name: $tag,
               html_url: $html,
@@ -305,7 +353,16 @@ jobs:
                 macos:   (if $mac   != "" then $mac   else null end),
                 macos_x64: (if $mac_x64 != "" then $mac_x64 else null end),
                 linux:   (if $linux != "" then $linux else null end)
-              }
+              },
+              version: $ver,
+              notes: $body,
+              pub_date: $date,
+              platforms: (
+                {} +
+                (if ($win_upd_url != "" and $win_sig != "") then {"windows-x86_64": {signature: $win_sig, url: $win_upd_url}} else {} end) +
+                (if ($mac_arm_url != "" and $mac_arm_sig != "") then {"darwin-aarch64": {signature: $mac_arm_sig, url: $mac_arm_url}} else {} end) +
+                (if ($linux_url != "" and $linux_sig != "") then {"linux-x86_64": {signature: $linux_sig, url: $linux_url}} else {} end)
+              )
             }' > latest.json
 
           echo "::group::生成的 latest.json（发布后）"

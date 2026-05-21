@@ -2,8 +2,8 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   Save,
   RotateCcw,
@@ -248,7 +248,7 @@ const updateError = ref("");
 const updateFromAutoCheck = ref(false);
 
 // 接收后台静默检查结果：面板挂载时若已有结果则直接填充
-const { autoCheckResult, setUpdateResult } = useUpdateState();
+const { autoCheckResult, setUpdateResult, runUpdateCheck, getPendingUpdate, clearPendingUpdate } = useUpdateState();
 
 onMounted(() => {
   if (autoCheckResult.value && !updateResult.value) {
@@ -271,10 +271,9 @@ const downloadPercent = ref(0);
 const downloadedBytes = ref(0);
 const totalBytes = ref(0);
 const installError = ref("");
-let unlistenProgress: UnlistenFn | null = null;
 
 onUnmounted(() => {
-  unlistenProgress?.();
+  clearPendingUpdate();
 });
 
 async function checkUpdate() {
@@ -283,9 +282,10 @@ async function checkUpdate() {
   updateError.value = "";
   updateFromAutoCheck.value = false;
   try {
-    const result = await invoke<UpdateCheckResult>("check_for_update");
+    const result = await runUpdateCheck();
     updateResult.value = result;
     setUpdateResult(result);
+    if (result.error) updateError.value = result.error;
   } catch (e) {
     updateError.value = String(e);
   } finally {
@@ -293,34 +293,43 @@ async function checkUpdate() {
   }
 }
 
-async function startDownloadAndInstall(url: string) {
+async function startDownloadAndInstall() {
+  const update = getPendingUpdate();
+  if (!update) {
+    installError.value = "未找到可用的更新句柄，请重新检查更新";
+    return;
+  }
   downloading.value = true;
   downloadPercent.value = 0;
   downloadedBytes.value = 0;
   totalBytes.value = 0;
   installError.value = "";
 
-  // 监听进度事件
-  unlistenProgress?.();
-  unlistenProgress = await listen<{
-    downloaded: number;
-    total: number;
-    percent: number;
-  }>("update-download-progress", (event) => {
-    downloadPercent.value = event.payload.percent;
-    downloadedBytes.value = event.payload.downloaded;
-    totalBytes.value = event.payload.total;
-  });
-
   try {
-    await invoke("download_and_install_update", { url });
-    // 正常情况下 invoke 返回后 app 已 exit，此行不会执行
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case "Started":
+          totalBytes.value = event.data.contentLength ?? 0;
+          break;
+        case "Progress":
+          downloadedBytes.value += event.data.chunkLength;
+          if (totalBytes.value > 0) {
+            downloadPercent.value = Math.min(
+              100,
+              Math.floor((downloadedBytes.value * 100) / totalBytes.value),
+            );
+          }
+          break;
+        case "Finished":
+          downloadPercent.value = 100;
+          break;
+      }
+    });
+    // 下载安装完成 → 重启应用替换为新版本
+    await relaunch();
   } catch (e) {
     installError.value = String(e);
     downloading.value = false;
-  } finally {
-    unlistenProgress?.();
-    unlistenProgress = null;
   }
 }
 
@@ -631,27 +640,12 @@ function formatBytes(bytes: number): string {
 
                 <!-- 操作按钮 -->
                 <div v-if="!downloading" class="flex items-center gap-2">
-                  <!-- 有直链：直接在应用内下载安装 -->
                   <button
-                    v-if="updateResult.downloadUrl"
-                    @click="startDownloadAndInstall(updateResult.downloadUrl!)"
+                    @click="startDownloadAndInstall()"
                     class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-500 text-white hover:bg-blue-600 active:bg-blue-700 transition-colors"
                   >
                     <Download :size="12" />
                     {{ t('settings.update.downloadInstall') }}
-                  </button>
-                  <!-- 无直链：回退到打开浏览器 -->
-                  <button
-                    v-else-if="updateResult.releaseUrl"
-                    @click="
-                      invoke('open_release_url', {
-                        url: updateResult.releaseUrl,
-                      })
-                    "
-                    class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200 transition-colors"
-                  >
-                    <Download :size="12" />
-                    {{ t('settings.update.goToDownload') }}
                   </button>
                 </div>
               </div>

@@ -138,18 +138,20 @@ pub async fn start_server(
         .allow_headers(Any)
         .allow_origin(Any);
 
-    let remote_router = Router::new()
-        .route("/tasks", post(remote::submit_task))
-        .route("/tasks", get(remote::list_remote_tasks))
-        .route("/tasks/:id", get(remote::get_remote_task))
-        .route("/tasks/:id", delete(remote::cancel_remote_task))
-        .route("/tasks/:id/pause", post(remote::pause_remote_task))
-        .route("/tasks/:id/resume", post(remote::resume_remote_task))
-        .route("/tasks/:id/progress", get(remote::sse_progress))
-        .layer(middleware::from_fn_with_state(
-            app_state.clone(),
-            remote::auth_middleware,
-        ));
+    // 远程协作功能暂时隐藏：主瓦片发布服务不再挂载 /remote 路由。
+    // 若需恢复，取消下方 remote_router 与 .nest("/remote", ...) 的注释即可。
+    // let remote_router = Router::new()
+    //     .route("/tasks", post(remote::submit_task))
+    //     .route("/tasks", get(remote::list_remote_tasks))
+    //     .route("/tasks/:id", get(remote::get_remote_task))
+    //     .route("/tasks/:id", delete(remote::cancel_remote_task))
+    //     .route("/tasks/:id/pause", post(remote::pause_remote_task))
+    //     .route("/tasks/:id/resume", post(remote::resume_remote_task))
+    //     .route("/tasks/:id/progress", get(remote::sse_progress))
+    //     .layer(middleware::from_fn_with_state(
+    //         app_state.clone(),
+    //         remote::auth_middleware,
+    //     ));
 
     let router: Router = Router::new()
         // TMS 端点
@@ -183,7 +185,7 @@ pub async fn start_server(
         .route("/api/tasks/:id/logs", get(handlers::api_task_logs))
         .route("/api/stats", get(handlers::api_stats))
         .route("/api/info", get(handlers::api_info))
-        .nest("/remote", remote_router)
+        // .nest("/remote", remote_router) // 远程协作隐藏期间不挂载
         .layer(cors)
         .with_state(app_state);
 
