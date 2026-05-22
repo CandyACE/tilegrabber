@@ -14,6 +14,11 @@
 
 ### 新增
 
+- **H 套件（H1 + H2）— 矢量瓦片基础支持**：下载链接含 `pbf` / `mvt` / `vector` 关键字时自动识别为矢量格式 (format=pbf)
+  - **下载流水线**：矢量任务跳过 GCJ02 像素纠偏与 tile_clip 像素裁剪（这些后处理仅对栅格图像有意义）；若同时是 GCJ02 坐标会写入警告日志
+  - **预览**：`LocalTaskTileLayer` 自动按 task.format 切换 raster / vector 数据源；矢量分支会对首块瓦片做「样式内省」，按 source-layer 与几何类型（点/线/面）自动生成灰白骨架样式（fill + line + circle）
+  - **依赖**：新增 `@mapbox/vector-tile` + `pbf` 两个前端依赖用于 MVT 内省
+  - **暂未支持**（H3-H5 后续）：MBTiles/PMTiles 矢量导出、GeoJSON 导出
 - **G 套件 — 存储占用面板**：设置页顶部新增可折叠的「存储占用」卡片，展示磁盘使用率（本应用 vs 其他占用 双层进度条）、各任务 .tiles 文件大小（按大小排序，默认显示前 5 个）；自动扫描默认目录的孤儿 .tiles 文件（已删任务残留），支持一键清理
   - **后端**：新增 `storage_stats` 命令汇总每任务存储 + 容量 + 孤儿；新增 `cleanup_orphan_tiles` 命令带白名单保护（仅删默认目录内未被引用的 .tiles，含 WAL/SHM 兄弟文件）
   - **前端**：新增 `StorageStatsCard.vue` 组件，集成于 SettingsPanel 顶部

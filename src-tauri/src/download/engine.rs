@@ -311,6 +311,22 @@ async fn run_download(
         .unwrap_or_else(|| "png".to_string());
     tile_store.write_meta(&[("format", &tile_format)]).ok();
 
+    // 矢量瓦片（Mapbox Vector Tile / Protobuf）旁路：跳过 GCJ02 像素纠偏与像素级裁剪
+    // —— 这些后处理基于栅格像素，对 protobuf 几何无意义。
+    let is_vector_format = matches!(
+        tile_format.to_ascii_lowercase().as_str(),
+        "pbf" | "mvt"
+    );
+    if is_vector_format && source.coord_type == crate::types::CoordType::Gcj02 {
+        app_db
+            .add_log(
+                Some(&task_id),
+                "warn",
+                "矢量瓦片暂不支持 GCJ02 几何级纠偏；瓦片将按原坐标保存，预览/导出时可能存在 100–700 m 偏移",
+            )
+            .ok();
+    }
+
     // 5. 首次运行：枚举瓦片并写入 download_state
     let init_total = tile_store.get_progress().map(|p| p.total).unwrap_or(0);
 
@@ -324,7 +340,8 @@ async fn run_download(
 
         // GCJ02 源显示纠偏需要访问邻接瓦片（最多 7 块）进行合成。
         // 下载时扩大约 0.01°（≈ zoom 18 下 7 块），保证边缘区域合成所需瓦片完整。
-        let bounds = if source.coord_type == crate::types::CoordType::Gcj02 {
+        // 矢量瓦片不做像素合成，无需扩边。
+        let bounds = if source.coord_type == crate::types::CoordType::Gcj02 && !is_vector_format {
             const GCJ02_PAD: f64 = 0.01;
             Bounds {
                 west: (base_bounds.west - GCJ02_PAD).max(-180.0),
@@ -343,7 +360,7 @@ async fn run_download(
             .and_then(|s| serde_json::from_str(s).ok());
 
         let tiles = if let Some(ref poly) = polygon {
-            if source.coord_type == crate::types::CoordType::Gcj02 {
+            if source.coord_type == crate::types::CoordType::Gcj02 && !is_vector_format {
                 // GCJ02 纠偏合成需要从目标瓦片东/北方向读取 2×2 源瓦片拼合。
                 // 若仅按多边形过滤下载，多边形东/北边缘以外的源瓦片将缺失，
                 // 导致合成时 has_data=false，边缘瓦片保留 GCJ02 偏移。
@@ -854,7 +871,9 @@ async fn run_download(
 
     // ── GCJ02 纠偏合成（下载完成后，裁剪之前）──────────────────────────────────
     // 将下载的原始高德瓦片合成为 WGS84 对齐的纠偏瓦片，使本地服务器无需额外处理。
+    // 矢量瓦片不走该像素合成流水线。
     if source.coord_type == crate::types::CoordType::Gcj02
+        && !is_vector_format
         && *ctrl_rx.borrow() != CtrlSignal::Cancel
     {
         app_db
@@ -934,7 +953,8 @@ async fn run_download(
     // ── 下载完成后的精确裁剪 ─────────────────────────────────────────────────
     // 先保存原始瓦片，确保数据完整；下载全部结束后再统一做像素级裁剪，
     // 这样既不影响下载速度，又能保证裁剪结果一致。
-    if task.clip_to_bounds && *ctrl_rx.borrow() != CtrlSignal::Cancel {
+    // 矢量瓦片不做像素级裁剪（几何级裁剪在后续阶段考虑）。
+    if task.clip_to_bounds && !is_vector_format && *ctrl_rx.borrow() != CtrlSignal::Cancel {
         app_db
             .add_log(Some(&task_id), "info", "开始精确裁剪瓦片…")
             .ok();

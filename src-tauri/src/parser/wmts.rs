@@ -391,7 +391,13 @@ fn build_wmts_kvp_url(base_url: &str, layer_id: &str, layer: &WmtsLayer) -> Stri
 
 fn detect_url_format(s: &str) -> &str {
     let lower = s.to_lowercase();
-    if lower.contains("jpg") || lower.contains("jpeg") {
+    if lower.contains(".pbf") || lower.contains("/pbf") || lower.contains("=pbf")
+        || lower.contains(".mvt") || lower.contains("/mvt") || lower.contains("=mvt")
+        || lower.contains("vectortile") || lower.contains("vector_tile")
+        || (lower.contains("vector") && (lower.contains("tile") || lower.contains("mapservice")))
+    {
+        "pbf"
+    } else if lower.contains("jpg") || lower.contains("jpeg") {
         "jpg"
     } else if lower.contains("webp") {
         "webp"

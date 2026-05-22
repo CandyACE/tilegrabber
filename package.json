@@ -19,6 +19,7 @@
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.1.0",
     "@fontsource/sora": "^5.1.0",
+    "@mapbox/vector-tile": "^2.0.4",
     "@radix-icons/vue": "^1.0.0",
     "@tailwindcss/vite": "^4.2.2",
     "@tauri-apps/api": "^2.0.0",
@@ -34,6 +35,7 @@
     "lucide-vue-next": "^1.0.0",
     "maplibre-gl": "^4.7.0",
     "marked": "^17.0.5",
+    "pbf": "^4.0.1",
     "radix-vue": "^1.9.17",
     "reka-ui": "^2.9.2",
     "tailwind-merge": "^3.5.0",
