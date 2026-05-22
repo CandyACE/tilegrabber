@@ -298,6 +298,55 @@ impl TileStore {
         Ok(count as i64)
     }
 
+    /// E 套件：仅重置指定 zoom 的失败瓦片（用于"重试某一层"）。
+    pub fn reset_failed_at_zoom(&self, zoom: i32) -> Result<i64> {
+        let conn = self.lock()?;
+        let count = conn.execute(
+            "UPDATE download_state SET status='pending'
+             WHERE status='failed' AND zoom_level=?1",
+            params![zoom],
+        )?;
+        Ok(count as i64)
+    }
+
+    /// E 套件：按 zoom_level 统计失败瓦片数量（仅返回 count > 0 的层级）。
+    pub fn failed_summary_by_zoom(&self) -> Result<Vec<(i32, i64)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT zoom_level, COUNT(*) FROM download_state
+             WHERE status='failed'
+             GROUP BY zoom_level
+             ORDER BY zoom_level ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)? as i32, r.get::<_, i64>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// E 套件：列出指定 zoom 的所有失败瓦片坐标。
+    /// 返回 (x, y) 列表，按行优先排序。
+    pub fn list_failed_tiles(&self, zoom: i32) -> Result<Vec<(u32, u32)>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT tile_column, tile_row FROM download_state
+             WHERE status='failed' AND zoom_level=?1
+             ORDER BY tile_row ASC, tile_column ASC",
+        )?;
+        let rows = stmt.query_map(params![zoom], |r| {
+            Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u32))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// 将早于 `cutoff_unix_secs` 的瓦片对应 download_state 重置为 pending（保留供未来 F3 复用）。
     /// 返回被重置的瓦片数量。
     #[allow(dead_code)]

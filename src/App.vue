@@ -27,6 +27,7 @@ import TaskDetail from "~/components/sidebar/TaskDetail.vue";
 import TaskBoundsOverlay from "~/components/map/TaskBoundsOverlay.vue";
 import LocalTaskTileLayer from "~/components/map/LocalTaskTileLayer.vue";
 import DownloadProgressLayer from "~/components/map/DownloadProgressLayer.vue";
+import FailedTilesLayer from "~/components/map/FailedTilesLayer.vue";
 import ClipProgressLayer from "~/components/map/ClipProgressLayer.vue";
 import SplashScreen from "~/components/SplashScreen.vue";
 import DisclaimerDialog from "~/components/DisclaimerDialog.vue";
@@ -804,6 +805,8 @@ function handleDetailDeleted() {
             :map="mapRef"
             :task-id="selectedTaskId"
           />
+          <!-- E 套件：失败瓦片可视化（用户在 TaskDetail 选层级触发） -->
+          <FailedTilesLayer v-if="mapRef" :map="mapRef" />
 
           <NewTaskWizard
             v-if="showWizard"

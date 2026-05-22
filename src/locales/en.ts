@@ -590,6 +590,12 @@ export default {
     resumeDownload: "Resume Download",
     exportTiles: "Export Tiles",
     retryFailed: "Retry {count} Failed Tiles",
+    failedView: {
+      title: "Failed Tile Distribution",
+      hint: "Click a zoom level to highlight failed tiles on the map, or retry that level alone.",
+      previewing: "previewing",
+      retryThisLevel: "Retry this level",
+    },
     deleteTask: "Delete Task",
     confirmDelete:
       "Delete this task? All tile data will be cleared. This action cannot be undone.",

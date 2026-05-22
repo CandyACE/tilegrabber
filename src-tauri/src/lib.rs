@@ -31,11 +31,11 @@ use commands::source::{
 use commands::task::{
     cancel_download, cancel_export, check_disk_space, count_reusable_tiles, create_task,
     delete_task, estimate_download, export_directory, export_geotiff, export_mbtiles,
-    export_pmtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
-    get_export_jobs, get_stored_tile, get_task, get_task_logs, get_task_thumbnail,
-    import_mbtiles, import_task, import_tiles_from_source, list_tasks, pause_download,
-    resume_download, retry_failed, reveal_in_explorer, start_download,
-    update_task_geometry, CancelMap, ExportState,
+    export_pmtiles, export_task, failed_tiles_summary, find_completed_task_for_source,
+    get_download_progress_geojson, get_export_jobs, get_stored_tile, get_task, get_task_logs,
+    get_task_thumbnail, import_mbtiles, import_task, import_tiles_from_source, list_failed_tiles,
+    list_tasks, pause_download, resume_download, retry_failed, retry_failed_tiles,
+    reveal_in_explorer, start_download, update_task_geometry, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
 use commands::web_capture::{
@@ -365,6 +365,10 @@ pub fn run() {
             resume_download,
             cancel_download,
             retry_failed,
+            // 失败瓦片可视化（E 套件）
+            failed_tiles_summary,
+            list_failed_tiles,
+            retry_failed_tiles,
             // 增量下载（F 套件）
             update_task_geometry,
             count_reusable_tiles,

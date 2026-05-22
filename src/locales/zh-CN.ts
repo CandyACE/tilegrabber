@@ -580,6 +580,12 @@ export default {
     resumeDownload: "继续下载",
     exportTiles: "导出瓦片",
     retryFailed: "重试 {count} 个失败瓦片",
+    failedView: {
+      title: "失败瓦片分布",
+      hint: "点击层级在地图上高亮失败瓦片；或单独重试该层级。",
+      previewing: "正在预览",
+      retryThisLevel: "重试本层",
+    },
     deleteTask: "删除任务",
     confirmDelete: "确定删除此任务？瓦片数据将一并清除，此操作不可撤销。",
     confirmDeleteBtn: "确认删除",

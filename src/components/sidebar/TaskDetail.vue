@@ -23,6 +23,7 @@ import MiniMapPreview from "./MiniMapPreview.vue";
 import { useTaskDetail } from "~/composables/useTaskDetail";
 import { useExportJobs } from "~/composables/useExportJobs";
 import { useExtendMode } from "~/composables/useExtendMode";
+import { useFailedTilesView } from "~/composables/useFailedTilesView";
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 interface BackendTask {
@@ -111,6 +112,7 @@ async function loadTask() {
       taskId: props.taskId,
     });
     selectedTaskStatus.value = task.value?.status ?? null;
+    await loadFailedSummary();
   } catch (e) {
     console.error("[TaskDetail] get_task failed:", e);
   }
@@ -202,12 +204,60 @@ onUnmounted(() => {
     pollTimer = null;
   }
   unlistenProgress?.();
+  // 切换/卸载任务时清理失败瓦片图层
+  hideFailedView();
 });
 
 // ─── 操作 ──────────────────────────────────────────────────────────────────
 async function retryFailed() {
   await invoke("retry_failed", { taskId: props.taskId }).catch(console.error);
   await loadTask();
+  // 重试后清掉失败可视化层
+  hideFailedView();
+  failedSummary.value = [];
+}
+
+// ─── E 套件：失败瓦片可视化 ────────────────────────────────────────────────
+interface FailedZoomStat {
+  zoom: number;
+  count: number;
+}
+const failedSummary = ref<FailedZoomStat[]>([]);
+const { view: failedView, show: showFailedView, hide: hideFailedView } =
+  useFailedTilesView();
+
+async function loadFailedSummary() {
+  if (!task.value || task.value.failedTiles <= 0) {
+    failedSummary.value = [];
+    return;
+  }
+  try {
+    failedSummary.value = await invoke<FailedZoomStat[]>(
+      "failed_tiles_summary",
+      { taskId: props.taskId },
+    );
+  } catch (e) {
+    console.error("[TaskDetail] failed_tiles_summary failed:", e);
+    failedSummary.value = [];
+  }
+}
+
+function toggleFailedZoom(zoom: number) {
+  if (failedView.value?.taskId === props.taskId && failedView.value.zoom === zoom) {
+    hideFailedView();
+  } else {
+    showFailedView(props.taskId, zoom);
+  }
+}
+
+async function retryFailedAtZoom(zoom: number) {
+  await invoke("retry_failed_tiles", {
+    taskId: props.taskId,
+    zoom,
+  }).catch(console.error);
+  hideFailedView();
+  await loadTask();
+  await loadFailedSummary();
 }
 
 // ─── F 套件：增量下载 ──────────────────────────────────────────────────────
@@ -896,6 +946,58 @@ function logTime(iso: string) {
             {{ t("taskDetail.deleteTask") }}
           </button>
         </template>
+      </div>
+
+      <!-- E 套件：失败瓦片可视化 -->
+      <div
+        v-if="task.failedTiles > 0 && failedSummary.length > 0"
+        class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
+        style="border-color: var(--color-border); background: var(--color-surface)"
+      >
+        <div class="flex items-center justify-between">
+          <p class="text-xs font-semibold" style="color: var(--color-text-primary)">
+            {{ t("taskDetail.failedView.title") }}
+          </p>
+          <span
+            v-if="failedView && failedView.taskId === task.id"
+            class="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 border border-red-200"
+          >
+            z{{ failedView.zoom }} {{ t("taskDetail.failedView.previewing") }}
+          </span>
+        </div>
+        <p class="text-[11px]" style="color: var(--color-text-muted)">
+          {{ t("taskDetail.failedView.hint") }}
+        </p>
+        <ul class="flex flex-col gap-1">
+          <li
+            v-for="row in failedSummary"
+            :key="row.zoom"
+            class="flex items-center justify-between gap-2 rounded px-2 py-1 border"
+            :class="
+              failedView && failedView.taskId === task.id && failedView.zoom === row.zoom
+                ? 'border-red-300 bg-red-50'
+                : 'border-slate-200 bg-white'
+            "
+          >
+            <button
+              class="flex items-center gap-2 flex-1 text-left"
+              @click="toggleFailedZoom(row.zoom)"
+            >
+              <span class="font-mono text-xs" style="color: var(--color-text-primary)">
+                z{{ row.zoom }}
+              </span>
+              <span class="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-semibold">
+                {{ row.count }}
+              </span>
+            </button>
+            <button
+              class="text-[11px] px-2 py-0.5 rounded border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors"
+              @click="retryFailedAtZoom(row.zoom)"
+            >
+              {{ t("taskDetail.failedView.retryThisLevel") }}
+            </button>
+          </li>
+        </ul>
       </div>
 
       <!-- F 套件：增量更新入口（仅当任务已完成时显示） -->

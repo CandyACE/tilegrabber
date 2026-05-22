@@ -617,6 +617,106 @@ fn extract_host(url_template: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+// ─── E 套件：失败瓦片可视化 ──────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedZoomStat {
+    pub zoom: i32,
+    pub count: i64,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedTileCoord {
+    pub x: u32,
+    pub y: u32,
+}
+
+/// E1：返回任务每个 zoom 层级的失败瓦片数量（仅 count>0 的层级）。
+#[tauri::command]
+pub async fn failed_tiles_summary(
+    task_id: String,
+    app_db: State<'_, AppDb>,
+) -> Result<Vec<FailedZoomStat>, String> {
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let path = task
+        .tile_store_path
+        .as_deref()
+        .ok_or("tile_store_path not set")?;
+    let store = crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &task_id)
+        .map_err(|e| e.to_string())?;
+    let rows = store.failed_summary_by_zoom().map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(zoom, count)| FailedZoomStat { zoom, count })
+        .collect())
+}
+
+/// E2：列出指定 zoom 的失败瓦片坐标，供前端在地图上绘制覆盖层。
+#[tauri::command]
+pub async fn list_failed_tiles(
+    task_id: String,
+    zoom: i32,
+    app_db: State<'_, AppDb>,
+) -> Result<Vec<FailedTileCoord>, String> {
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let path = task
+        .tile_store_path
+        .as_deref()
+        .ok_or("tile_store_path not set")?;
+    let store = crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &task_id)
+        .map_err(|e| e.to_string())?;
+    let rows = store.list_failed_tiles(zoom).map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(x, y)| FailedTileCoord { x, y })
+        .collect())
+}
+
+/// E3：将失败瓦片重置为 pending 并恢复下载任务。
+/// 当 `zoom` 为 None 时重置所有 zoom；否则仅重置该层。
+/// 返回被重置的瓦片数量。
+#[tauri::command]
+pub async fn retry_failed_tiles(
+    task_id: String,
+    zoom: Option<i32>,
+    app_db: State<'_, AppDb>,
+    engine: State<'_, DownloadEngine>,
+    app: AppHandle,
+) -> Result<i64, String> {
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let path = task
+        .tile_store_path
+        .as_deref()
+        .ok_or("tile_store_path not set")?;
+    let store = crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &task_id)
+        .map_err(|e| e.to_string())?;
+    let count = match zoom {
+        Some(z) => store.reset_failed_at_zoom(z).map_err(|e| e.to_string())?,
+        None => store.reset_failed().map_err(|e| e.to_string())?,
+    };
+    if count > 0 {
+        // 同步 tasks 表进度
+        let progress = store.get_progress().map_err(|e| e.to_string())?;
+        app_db
+            .update_task_progress(&task_id, progress.downloaded, progress.failed)
+            .map_err(|e| e.to_string())?;
+
+        // 触发下载：若引擎已有句柄则发 Run 信号；否则按 resume_download 同款逻辑重新 start
+        if engine.is_active(&task_id) {
+            engine.resume(&task_id).map_err(|e| e.to_string())?;
+        } else {
+            check_concurrent_limit(&engine, app_db.inner())?;
+            let concurrency = get_concurrency(app_db.inner());
+            engine
+                .start(task_id.clone(), app_db.inner().clone(), concurrency, app)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(count)
+}
+
 
 
 // ─── 日志 ────────────────────────────────────────────────────────────────────
