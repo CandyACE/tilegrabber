@@ -149,9 +149,66 @@ const sourceTypeOptions = computed(() => [
 function handlePresetSelect(preset: typeof BASEMAP_PRESETS[number]) {
   wmtsLayers.value = [];  // clear any previous WMTS layer list
   capturedTiles.value = [];
+  if (preset.requiresToken) {
+    openTokenDialog(preset);
+    return;
+  }
   parsedSource.value = { ...preset.source, name: preset.name };
   step.value = 2;
   loadTilePreview(parsedSource.value);
+}
+
+// ── token 弹层（用于天地图等需要凭证的预设）─────────────────────────────────
+const tokenDialogOpen = ref(false);
+const tokenDialogPreset = ref<typeof BASEMAP_PRESETS[number] | null>(null);
+const tokenDialogValue = ref("");
+const tokenDialogLoading = ref(false);
+
+async function openTokenDialog(preset: typeof BASEMAP_PRESETS[number]) {
+  tokenDialogPreset.value = preset;
+  tokenDialogOpen.value = true;
+  tokenDialogValue.value = "";
+  const settingKey = preset.requiresToken?.settingKey;
+  if (settingKey) {
+    try {
+      const saved = await invoke<string | null>("get_setting", { key: settingKey });
+      if (saved) tokenDialogValue.value = saved;
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function closeTokenDialog() {
+  tokenDialogOpen.value = false;
+  tokenDialogPreset.value = null;
+  tokenDialogValue.value = "";
+}
+
+async function confirmTokenDialog() {
+  const preset = tokenDialogPreset.value;
+  const token = tokenDialogValue.value.trim();
+  if (!preset || !preset.requiresToken || !token) return;
+  tokenDialogLoading.value = true;
+  try {
+    await invoke("set_setting", {
+      key: preset.requiresToken.settingKey,
+      value: token,
+    });
+  } catch {
+    // 持久化失败不阻塞，本次仍可用
+  }
+  const tokenKey = preset.requiresToken.tokenKey;
+  const merged: TileSource = {
+    ...preset.source,
+    name: preset.name,
+    extra_params: { ...preset.source.extra_params, [tokenKey]: token },
+  };
+  parsedSource.value = merged;
+  tokenDialogLoading.value = false;
+  closeTokenDialog();
+  step.value = 2;
+  loadTilePreview(merged);
 }
 
 function stopPolling() {
@@ -1164,6 +1221,84 @@ function onLayerSelect(idx: number) {
           </div>
         </div>
       </Transition>
+    </div>
+  </Transition>
+
+  <!-- ── Token 输入弹层（天地图等需 token 的预设）──────────────────────────── -->
+  <Transition
+    enter-active-class="transition duration-150 ease-out"
+    enter-from-class="opacity-0"
+    enter-to-class="opacity-100"
+    leave-active-class="transition duration-150 ease-in"
+    leave-from-class="opacity-100"
+    leave-to-class="opacity-0"
+  >
+    <div
+      v-if="tokenDialogOpen && tokenDialogPreset"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+      @click.self="closeTokenDialog"
+    >
+      <div class="w-[420px] bg-white rounded-xl shadow-2xl p-5 space-y-4">
+        <div class="flex items-start gap-3">
+          <div class="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+            <Layers class="w-5 h-5 text-blue-600" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-semibold text-slate-800">
+              {{ tokenDialogPreset.name }}
+            </p>
+            <p class="text-xs text-slate-500 mt-0.5">
+              {{ t('wizard.presetTokenHint', { label: tokenDialogPreset.requiresToken?.label }) }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="text-slate-400 hover:text-slate-600 transition-colors"
+            @click="closeTokenDialog"
+          >
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div class="space-y-2">
+          <label class="text-xs font-medium text-slate-700">
+            {{ tokenDialogPreset.requiresToken?.label }}
+          </label>
+          <UiInput
+            v-model="tokenDialogValue"
+            type="text"
+            :placeholder="t('wizard.presetTokenPlaceholder')"
+            class="text-sm font-mono"
+            autofocus
+            @keydown.enter.prevent="confirmTokenDialog"
+          />
+          <a
+            v-if="tokenDialogPreset.requiresToken?.helpUrl"
+            :href="tokenDialogPreset.requiresToken.helpUrl"
+            target="_blank"
+            rel="noopener"
+            class="text-[11px] text-blue-600 hover:underline inline-flex items-center gap-1"
+          >
+            {{ t('wizard.presetTokenApply') }}
+            <ArrowRight class="w-3 h-3" />
+          </a>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-1">
+          <UiButton variant="ghost" size="sm" @click="closeTokenDialog">
+            {{ t('common.cancel') }}
+          </UiButton>
+          <UiButton
+            variant="default"
+            size="sm"
+            :disabled="!tokenDialogValue.trim() || tokenDialogLoading"
+            @click="confirmTokenDialog"
+          >
+            <Loader2 v-if="tokenDialogLoading" class="w-3.5 h-3.5 mr-1 animate-spin" />
+            {{ t('common.confirm') }}
+          </UiButton>
+        </div>
+      </div>
     </div>
   </Transition>
 </template>

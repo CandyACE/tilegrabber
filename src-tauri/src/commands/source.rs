@@ -121,7 +121,8 @@ pub async fn validate_tile_url(
         .replace("{z}", "1")
         .replace("{x}", "0")
         .replace("{y}", "0")
-        .replace("{s}", "a");
+        .replace("{s}", "a")
+        .replace("{q}", "0");
 
     // 跳过非 HTTP URL
     if !test_url.starts_with("http://") && !test_url.starts_with("https://") {

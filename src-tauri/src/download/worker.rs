@@ -68,7 +68,7 @@ pub fn build_client_with_proxy(
 
 /// 将 TileSource URL 模板展开为指定瓦片的完整请求 URL
 ///
-/// 支持占位符：`{z}` `{x}` `{y}` `{s}` `{tk}`
+/// 支持占位符：`{z}` `{x}` `{y}` `{s}` `{q}`（Bing 风格 quadkey）以及 `{{key}}`（extra_params）
 pub fn build_tile_url(source: &TileSource, coord: TileCoord) -> String {
     let mut url = source.url_template.clone();
 
@@ -93,12 +93,41 @@ pub fn build_tile_url(source: &TileSource, coord: TileCoord) -> String {
     url = url.replace("{y}", &tile_y.to_string());
     url = url.replace("{s}", subdomain);
 
+    // Bing 风格 quadkey：仅当 URL 中包含 {q} 时计算
+    if url.contains("{q}") {
+        let quadkey = tile_to_quadkey(coord.x, coord.y, coord.z as u32);
+        url = url.replace("{q}", &quadkey);
+    }
+
     // 替换前端预计算的额外参数（如 Token、时间戳等）
     for (k, v) in &source.extra_params {
         url = url.replace(&format!("{{{{{}}}}}", k), v);
     }
 
     url
+}
+
+/// 计算 Bing 风格 quadkey
+///
+/// 每级 z 编码一位四进制数字，从最高位到最低位：
+/// - bit y=0,x=0 → 0
+/// - bit y=0,x=1 → 1
+/// - bit y=1,x=0 → 2
+/// - bit y=1,x=1 → 3
+fn tile_to_quadkey(x: u32, y: u32, z: u32) -> String {
+    let mut s = String::with_capacity(z as usize);
+    for i in (1..=z).rev() {
+        let mask = 1u32 << (i - 1);
+        let mut digit: u8 = b'0';
+        if (x & mask) != 0 {
+            digit += 1;
+        }
+        if (y & mask) != 0 {
+            digit += 2;
+        }
+        s.push(digit as char);
+    }
+    s
 }
 
 // ─── 下载 ────────────────────────────────────────────────────────────────────
