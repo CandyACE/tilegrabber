@@ -14,6 +14,9 @@
 
 ### 新增
 
+- **G 套件 — 存储占用面板**：设置页顶部新增可折叠的「存储占用」卡片，展示磁盘使用率（本应用 vs 其他占用 双层进度条）、各任务 .tiles 文件大小（按大小排序，默认显示前 5 个）；自动扫描默认目录的孤儿 .tiles 文件（已删任务残留），支持一键清理
+  - **后端**：新增 `storage_stats` 命令汇总每任务存储 + 容量 + 孤儿；新增 `cleanup_orphan_tiles` 命令带白名单保护（仅删默认目录内未被引用的 .tiles，含 WAL/SHM 兄弟文件）
+  - **前端**：新增 `StorageStatsCard.vue` 组件，集成于 SettingsPanel 顶部
 - **E 套件 — 失败瓦片可视化**：任务详情新增「失败瓦片分布」卡片，按 zoom 层级显示失败瓦片数量徽章；点击层级在地图上以红色透明矩形高亮该层级的所有失败瓦片位置；可单独「重试本层」或沿用旧的「重试全部失败瓦片」
   - **后端**：新增 `failed_tiles_summary` / `list_failed_tiles` / `retry_failed_tiles` 三个命令；`reset_failed_at_zoom` 支持按层级重置失败状态后续传
   - **前端**：新增 `FailedTilesLayer` 地图覆盖层 + `useFailedTilesView` 共享状态；切换任务自动清理可视化

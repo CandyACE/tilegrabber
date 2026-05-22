@@ -1560,7 +1560,7 @@ fn generate_thumbnail(
 
 /// 返回瓦片存储根目录
 /// 读取设置中的 app.tiles_dir；若为空，则使用用户文档目录下的 御图/tiles（可写，非安装目录）
-fn get_tiles_dir(app: &AppHandle, app_db: &AppDb) -> Result<PathBuf, String> {
+pub(crate) fn get_tiles_dir(app: &AppHandle, app_db: &AppDb) -> Result<PathBuf, String> {
     let custom = app_db
         .get_setting("app.tiles_dir")
         .ok()

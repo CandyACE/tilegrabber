@@ -211,6 +211,26 @@ export default {
     },
 
     selectFolder: "Select Directory",
+
+    storage: {
+      title: "Storage Usage",
+      diskUsage: "Disk Usage",
+      available: "Available",
+      appUsage: "This App",
+      otherUsage: "Other Usage",
+      openDir: "Open Folder",
+      perTask: "Per-Task Usage (sorted by size)",
+      showMore: "Show more ({count})",
+      showLess: "Show less",
+      refresh: "Refresh",
+      orphansTitle: "{count} orphan tile file(s) found · {size}",
+      orphansHint:
+        "These .tiles files exist in the default directory but aren't referenced by any task — likely leftovers from deleted tasks.",
+      cleanupAll: "Clean All",
+      cleaning: "Cleaning…",
+      confirmCleanup:
+        "This will permanently delete {count} orphan tile file(s) ({size}). Continue?",
+    },
   },
 
   remote: {

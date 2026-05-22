@@ -207,6 +207,24 @@ export default {
     },
 
     selectFolder: "选择目录",
+
+    storage: {
+      title: "存储占用",
+      diskUsage: "磁盘占用",
+      available: "可用",
+      appUsage: "本应用",
+      otherUsage: "其他占用",
+      openDir: "打开目录",
+      perTask: "各任务占用（按大小排序）",
+      showMore: "显示更多（{count}）",
+      showLess: "收起",
+      refresh: "刷新",
+      orphansTitle: "发现孤儿瓦片文件 {count} 个 · {size}",
+      orphansHint: "这些 .tiles 文件位于默认目录中但未被任何任务引用，可能是误删任务后残留。",
+      cleanupAll: "全部清理",
+      cleaning: "清理中…",
+      confirmCleanup: "将永久删除 {count} 个孤儿瓦片文件（{size}），确定继续？",
+    },
   },
 
   remote: {

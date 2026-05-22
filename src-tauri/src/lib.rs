@@ -38,6 +38,7 @@ use commands::task::{
     reveal_in_explorer, start_download, update_task_geometry, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
+use commands::storage::{storage_stats, cleanup_orphan_tiles};
 use commands::web_capture::{
     clear_captured_tiles, close_capture_window, get_captured_tiles, open_capture_window,
     CaptureSession,
@@ -376,6 +377,9 @@ pub fn run() {
             get_task_logs,
             check_disk_space,
             estimate_download,
+            // 存储统计（G 套件）
+            storage_stats,
+            cleanup_orphan_tiles,
             // 本地瓦片读取（地图预览）
             get_stored_tile,
             get_task_thumbnail,

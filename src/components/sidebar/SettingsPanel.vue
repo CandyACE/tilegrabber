@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import RulesConfig from "./RulesConfig.vue";
+import StorageStatsCard from "./StorageStatsCard.vue";
 import { useUpdateState } from "~/composables/useUpdateState";
 import { useSettingsStore } from "~/composables/useSettingsStore";
 
@@ -486,6 +487,9 @@ function formatBytes(bytes: number): string {
         >
           {{ errorMsg }}
         </div>
+
+        <!-- 存储统计（G 套件） -->
+        <StorageStatsCard />
 
         <!-- 分组卡片 -->
         <div
