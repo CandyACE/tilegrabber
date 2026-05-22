@@ -13,6 +13,10 @@ import {
   Pause,
   Play,
   FolderOpen,
+  Clock,
+  Expand,
+  Download,
+  X,
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
 import ExportDialog from "./ExportDialog.vue";
@@ -81,11 +85,13 @@ const { getActiveJobForTask, getHistoryForTask, revealInExplorer } =
 const activeExportJob = computed(() => getActiveJobForTask(props.taskId));
 const exportHistory = computed(() => getHistoryForTask(props.taskId));
 
-const exportFormatLabel = computed((): Record<string, string> => ({
-  mbtiles: t('taskDetail.exportFormat.mbtiles'),
-  directory: t('taskDetail.exportFormat.directory'),
-  tiff: t('taskDetail.exportFormat.tiff'),
-}));
+const exportFormatLabel = computed(
+  (): Record<string, string> => ({
+    mbtiles: t("taskDetail.exportFormat.mbtiles"),
+    directory: t("taskDetail.exportFormat.directory"),
+    tiff: t("taskDetail.exportFormat.tiff"),
+  }),
+);
 
 function fmtExportCount(n: number) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -201,6 +207,161 @@ async function retryFailed() {
   await invoke("retry_failed", { taskId: props.taskId }).catch(console.error);
   await loadTask();
 }
+
+// ─── F 套件：增量下载 ──────────────────────────────────────────────────────
+type IncrementalDialog = null | "refresh" | "extend" | "import";
+const incrementalDialog = ref<IncrementalDialog>(null);
+const incrementalBusy = ref(false);
+const incrementalMessage = ref<string>("");
+
+// F3 — 刷新过期
+const refreshTtlDays = ref(180);
+async function runRefresh() {
+  if (!task.value) return;
+  incrementalBusy.value = true;
+  incrementalMessage.value = "";
+  try {
+    const count = await invoke<number>("refresh_expired_tiles", {
+      taskId: props.taskId,
+      ttlDays: refreshTtlDays.value,
+    });
+    incrementalMessage.value = t("taskDetail.incremental.refreshedHint", {
+      count,
+    });
+    await loadTask();
+  } catch (e: any) {
+    incrementalMessage.value = String(e);
+  } finally {
+    incrementalBusy.value = false;
+  }
+}
+
+// F2 — 扩展任务
+const extendWest = ref(0);
+const extendEast = ref(0);
+const extendSouth = ref(0);
+const extendNorth = ref(0);
+const extendMinZoom = ref(0);
+const extendMaxZoom = ref(0);
+function openExtendDialog() {
+  if (!task.value) return;
+  extendWest.value = task.value.boundsWest;
+  extendEast.value = task.value.boundsEast;
+  extendSouth.value = task.value.boundsSouth;
+  extendNorth.value = task.value.boundsNorth;
+  extendMinZoom.value = task.value.minZoom;
+  extendMaxZoom.value = task.value.maxZoom;
+  incrementalMessage.value = "";
+  incrementalDialog.value = "extend";
+}
+async function runExtend() {
+  if (!task.value) return;
+  incrementalBusy.value = true;
+  incrementalMessage.value = "";
+  try {
+    const [added, total] = await invoke<[number, number]>(
+      "update_task_geometry",
+      {
+        args: {
+          taskId: props.taskId,
+          boundsWest: extendWest.value,
+          boundsEast: extendEast.value,
+          boundsSouth: extendSouth.value,
+          boundsNorth: extendNorth.value,
+          minZoom: extendMinZoom.value,
+          maxZoom: extendMaxZoom.value,
+          polygonWgs84: null,
+        },
+      },
+    );
+    incrementalMessage.value = t("taskDetail.incremental.extendedHint", {
+      added,
+      total,
+    });
+    await loadTask();
+  } catch (e: any) {
+    incrementalMessage.value = String(e);
+  } finally {
+    incrementalBusy.value = false;
+  }
+}
+
+// F4 — 从其他任务导入
+const importCandidates = ref<BackendTask[]>([]);
+const importSourceId = ref<string | null>(null);
+const importReusableCount = ref<number | null>(null);
+const importCountLoading = ref(false);
+async function openImportDialog() {
+  if (!task.value) return;
+  incrementalMessage.value = "";
+  importSourceId.value = null;
+  importReusableCount.value = null;
+  // 列出所有任务，前端筛选同源（粗略：源 URL 相同 + format 相同）
+  try {
+    const all = await invoke<BackendTask[]>("list_tasks");
+    const me = task.value;
+    const myCfg = JSON.parse(me.sourceConfig);
+    importCandidates.value = all.filter((t) => {
+      if (t.id === me.id) return false;
+      if (!t.tileStorePath) return false;
+      if (t.downloadedTiles <= 0) return false;
+      try {
+        const c = JSON.parse(t.sourceConfig);
+        return (
+          c.urlTemplate === myCfg.urlTemplate &&
+          c.format === myCfg.format &&
+          c.crs === myCfg.crs &&
+          c.coordType === myCfg.coordType
+        );
+      } catch {
+        return false;
+      }
+    });
+  } catch (e) {
+    console.error(e);
+    importCandidates.value = [];
+  }
+  incrementalDialog.value = "import";
+}
+async function previewImport() {
+  if (!importSourceId.value) return;
+  importCountLoading.value = true;
+  importReusableCount.value = null;
+  try {
+    importReusableCount.value = await invoke<number>("count_reusable_tiles", {
+      targetTaskId: props.taskId,
+      sourceTaskId: importSourceId.value,
+    });
+  } catch (e: any) {
+    incrementalMessage.value = String(e);
+  } finally {
+    importCountLoading.value = false;
+  }
+}
+async function runImport() {
+  if (!importSourceId.value) return;
+  incrementalBusy.value = true;
+  incrementalMessage.value = "";
+  try {
+    const [imported, pendingBefore] = await invoke<[number, number]>(
+      "import_tiles_from_source",
+      {
+        targetTaskId: props.taskId,
+        sourceTaskId: importSourceId.value,
+      },
+    );
+    incrementalMessage.value = t("taskDetail.incremental.importedHint", {
+      imported,
+      pendingBefore,
+    });
+    await loadTask();
+  } catch (e: any) {
+    incrementalMessage.value = String(e);
+  } finally {
+    incrementalBusy.value = false;
+  }
+}
+
 async function pauseTask() {
   pausing.value = true;
   await invoke("pause_download", { taskId: props.taskId }).catch(console.error);
@@ -246,19 +407,42 @@ function flyToTask() {
 }
 
 // ─── 样式工具 ──────────────────────────────────────────────────────────────
-const statusMap = computed((): Record<string, { label: string; cls: string }> => ({
-  pending: { label: t('taskDetail.status.pending'), cls: "bg-slate-100 text-slate-500" },
-  downloading: { label: t('taskDetail.status.downloading'), cls: "bg-blue-50 text-blue-700" },
-  processing: { label: t('taskDetail.status.processing'), cls: "bg-purple-50 text-purple-700" },
-  paused: { label: t('taskDetail.status.paused'), cls: "bg-amber-50 text-amber-700" },
-  completed: { label: t('taskDetail.status.completed'), cls: "bg-green-50 text-green-700" },
-  completed_with_errors: {
-    label: t('taskDetail.status.completed_with_errors'),
-    cls: "bg-orange-50 text-orange-700",
-  },
-  failed: { label: t('taskDetail.status.failed'), cls: "bg-red-50 text-red-700" },
-  cancelled: { label: t('taskDetail.status.cancelled'), cls: "bg-slate-100 text-slate-500" },
-}));
+const statusMap = computed(
+  (): Record<string, { label: string; cls: string }> => ({
+    pending: {
+      label: t("taskDetail.status.pending"),
+      cls: "bg-slate-100 text-slate-500",
+    },
+    downloading: {
+      label: t("taskDetail.status.downloading"),
+      cls: "bg-blue-50 text-blue-700",
+    },
+    processing: {
+      label: t("taskDetail.status.processing"),
+      cls: "bg-purple-50 text-purple-700",
+    },
+    paused: {
+      label: t("taskDetail.status.paused"),
+      cls: "bg-amber-50 text-amber-700",
+    },
+    completed: {
+      label: t("taskDetail.status.completed"),
+      cls: "bg-green-50 text-green-700",
+    },
+    completed_with_errors: {
+      label: t("taskDetail.status.completed_with_errors"),
+      cls: "bg-orange-50 text-orange-700",
+    },
+    failed: {
+      label: t("taskDetail.status.failed"),
+      cls: "bg-red-50 text-red-700",
+    },
+    cancelled: {
+      label: t("taskDetail.status.cancelled"),
+      cls: "bg-slate-100 text-slate-500",
+    },
+  }),
+);
 
 const logLevelMap: Record<string, string> = {
   info: "text-slate-500",
@@ -311,7 +495,7 @@ function logTime(iso: string) {
         @click="emit('close')"
       >
         <ArrowLeft class="size-3.5" />
-        <span>{{ t('taskDetail.back') }}</span>
+        <span>{{ t("taskDetail.back") }}</span>
       </button>
       <!-- 地图定位 -->
       <button
@@ -356,7 +540,7 @@ function logTime(iso: string) {
         <div class="grid grid-cols-3 gap-2 text-center">
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              {{ t('taskDetail.downloaded') }}
+              {{ t("taskDetail.downloaded") }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -367,7 +551,7 @@ function logTime(iso: string) {
           </div>
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              {{ t('taskDetail.failed') }}
+              {{ t("taskDetail.failed") }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -378,7 +562,7 @@ function logTime(iso: string) {
           </div>
           <div>
             <p class="text-[11px]" style="color: var(--color-text-muted)">
-              {{ t('taskDetail.total') }}
+              {{ t("taskDetail.total") }}
             </p>
             <p
               class="text-sm font-semibold"
@@ -404,7 +588,7 @@ function logTime(iso: string) {
                 ? liveSpeedTiles.toFixed(1)
                 : Math.round(liveSpeedTiles)
             }}
-            {{ t('taskDetail.tilesPerSec') }}
+            {{ t("taskDetail.tilesPerSec") }}
           </span>
           <span>
             {{
@@ -426,8 +610,10 @@ function logTime(iso: string) {
           <span class="flex items-center gap-1.5 font-medium text-indigo-600">
             <PackageCheck class="size-3.5" />
             {{
-              t('taskDetail.exporting', {
-                format: exportFormatLabel[activeExportJob.format] ?? activeExportJob.format,
+              t("taskDetail.exporting", {
+                format:
+                  exportFormatLabel[activeExportJob.format] ??
+                  activeExportJob.format,
               })
             }}
           </span>
@@ -467,7 +653,7 @@ function logTime(iso: string) {
           class="text-xs font-semibold mb-2"
           style="color: var(--color-text-primary)"
         >
-          {{ t('taskDetail.exportHistory') }}
+          {{ t("taskDetail.exportHistory") }}
         </p>
         <div class="space-y-2">
           <div
@@ -501,7 +687,7 @@ function logTime(iso: string) {
               <span
                 v-else-if="rec.status === 'error'"
                 class="text-[11px] text-red-500"
-                >{{ t('taskDetail.failed') }}</span
+                >{{ t("taskDetail.failed") }}</span
               >
             </div>
             <p
@@ -521,7 +707,7 @@ function logTime(iso: string) {
                 @click="revealInExplorer(rec.destPath)"
               >
                 <FolderOpen class="size-3" />
-                {{ t('taskDetail.openLocation') }}
+                {{ t("taskDetail.openLocation") }}
               </button>
               <p
                 v-else-if="rec.error"
@@ -537,13 +723,17 @@ function logTime(iso: string) {
       <!-- 元信息 -->
       <dl class="space-y-1.5 text-xs">
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.zoomRange') }}</dt>
+          <dt style="color: var(--color-text-muted)">
+            {{ t("taskDetail.zoomRange") }}
+          </dt>
           <dd class="font-mono" style="color: var(--color-text-primary)">
             z{{ task.minZoom }} – z{{ task.maxZoom }}
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.bbox') }}</dt>
+          <dt style="color: var(--color-text-muted)">
+            {{ t("taskDetail.bbox") }}
+          </dt>
           <dd
             class="font-mono text-[10px]"
             style="color: var(--color-text-primary)"
@@ -554,13 +744,17 @@ function logTime(iso: string) {
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.createdAt') }}</dt>
+          <dt style="color: var(--color-text-muted)">
+            {{ t("taskDetail.createdAt") }}
+          </dt>
           <dd style="color: var(--color-text-primary)">
             {{ formatDate(task.createdAt) }}
           </dd>
         </div>
         <div class="flex justify-between">
-          <dt style="color: var(--color-text-muted)">{{ t('taskDetail.updatedAt') }}</dt>
+          <dt style="color: var(--color-text-muted)">
+            {{ t("taskDetail.updatedAt") }}
+          </dt>
           <dd style="color: var(--color-text-primary)">
             {{ formatDate(task.updatedAt) }}
           </dd>
@@ -576,22 +770,30 @@ function logTime(iso: string) {
             style="background: var(--color-surface)"
           >
             <div class="flex items-center justify-between text-xs">
-              <span class="flex items-center gap-1.5 text-purple-600 font-medium">
+              <span
+                class="flex items-center gap-1.5 text-purple-600 font-medium"
+              >
                 <Loader class="size-3.5 animate-spin" />
-                {{ t('taskDetail.clipping') }}
+                {{ t("taskDetail.clipping") }}
               </span>
               <span
                 v-if="liveClipTotal > 0"
                 class="font-mono tabular-nums"
                 style="color: var(--color-text-muted)"
               >
-                {{ formatCount(liveClipDone) }} / {{ formatCount(liveClipTotal) }}
+                {{ formatCount(liveClipDone) }} /
+                {{ formatCount(liveClipTotal) }}
               </span>
             </div>
             <div class="h-1.5 w-full rounded-full overflow-hidden bg-slate-100">
               <div
                 class="h-full rounded-full bg-purple-500 transition-all duration-300"
-                :style="{ width: liveClipTotal > 0 ? `${Math.min(100, Math.round(liveClipDone / liveClipTotal * 100))}%` : '0%' }"
+                :style="{
+                  width:
+                    liveClipTotal > 0
+                      ? `${Math.min(100, Math.round((liveClipDone / liveClipTotal) * 100))}%`
+                      : '0%',
+                }"
               />
             </div>
           </div>
@@ -611,7 +813,9 @@ function logTime(iso: string) {
           >
             <Loader v-if="pausing" class="size-3.5 animate-spin" />
             <Pause v-else class="size-3.5" />
-            {{ pausing ? t('taskDetail.pausing') : t('taskDetail.pauseDownload') }}
+            {{
+              pausing ? t("taskDetail.pausing") : t("taskDetail.pauseDownload")
+            }}
           </button>
         </template>
 
@@ -622,7 +826,7 @@ function logTime(iso: string) {
             @click="resumeTask"
           >
             <Play class="size-3.5" />
-            {{ t('taskDetail.resumeDownload') }}
+            {{ t("taskDetail.resumeDownload") }}
           </button>
           <button
             v-if="task.downloadedTiles > 0"
@@ -630,7 +834,7 @@ function logTime(iso: string) {
             @click="openExport"
           >
             <PackageOpen class="size-3.5" />
-            {{ t('taskDetail.exportTiles') }}
+            {{ t("taskDetail.exportTiles") }}
           </button>
           <!-- 删除确认 -->
           <div
@@ -638,7 +842,7 @@ function logTime(iso: string) {
             class="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 flex flex-col gap-2"
           >
             <p class="text-xs text-red-600 font-medium">
-              {{ t('taskDetail.confirmDelete') }}
+              {{ t("taskDetail.confirmDelete") }}
             </p>
             <div class="flex gap-2">
               <button
@@ -646,13 +850,17 @@ function logTime(iso: string) {
                 :disabled="deleting"
                 @click="deleteTask"
               >
-                {{ deleting ? t('taskDetail.deleting') : t('taskDetail.confirmDeleteBtn') }}
+                {{
+                  deleting
+                    ? t("taskDetail.deleting")
+                    : t("taskDetail.confirmDeleteBtn")
+                }}
               </button>
               <button
                 class="flex-1 py-1 rounded-md text-xs font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="showDeleteConfirm = false"
               >
-                {{ t('taskDetail.cancelDelete') }}
+                {{ t("taskDetail.cancelDelete") }}
               </button>
             </div>
           </div>
@@ -662,7 +870,7 @@ function logTime(iso: string) {
             @click="showDeleteConfirm = true"
           >
             <Trash2 class="size-3.5" />
-            {{ t('taskDetail.deleteTask') }}
+            {{ t("taskDetail.deleteTask") }}
           </button>
         </template>
 
@@ -674,7 +882,7 @@ function logTime(iso: string) {
             @click="retryFailed"
           >
             <RefreshCw class="size-3.5" />
-            {{ t('taskDetail.retryFailed', { count: task.failedTiles }) }}
+            {{ t("taskDetail.retryFailed", { count: task.failedTiles }) }}
           </button>
           <button
             v-if="task.downloadedTiles > 0"
@@ -682,7 +890,7 @@ function logTime(iso: string) {
             @click="openExport"
           >
             <PackageOpen class="size-3.5" />
-            {{ t('taskDetail.exportTiles') }}
+            {{ t("taskDetail.exportTiles") }}
           </button>
           <!-- 删除确认 -->
           <div
@@ -690,7 +898,7 @@ function logTime(iso: string) {
             class="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 flex flex-col gap-2"
           >
             <p class="text-xs text-red-600 font-medium">
-              {{ t('taskDetail.confirmDelete') }}
+              {{ t("taskDetail.confirmDelete") }}
             </p>
             <div class="flex gap-2">
               <button
@@ -698,13 +906,17 @@ function logTime(iso: string) {
                 :disabled="deleting"
                 @click="deleteTask"
               >
-                {{ deleting ? t('taskDetail.deleting') : t('taskDetail.confirmDeleteBtn') }}
+                {{
+                  deleting
+                    ? t("taskDetail.deleting")
+                    : t("taskDetail.confirmDeleteBtn")
+                }}
               </button>
               <button
                 class="flex-1 py-1 rounded-md text-xs font-medium border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="showDeleteConfirm = false"
               >
-                {{ t('taskDetail.cancelDelete') }}
+                {{ t("taskDetail.cancelDelete") }}
               </button>
             </div>
           </div>
@@ -714,9 +926,170 @@ function logTime(iso: string) {
             @click="showDeleteConfirm = true"
           >
             <Trash2 class="size-3.5" />
-            {{ t('taskDetail.deleteTask') }}
+            {{ t("taskDetail.deleteTask") }}
           </button>
         </template>
+      </div>
+
+      <!-- F 套件：增量下载入口（下载中状态不可用） -->
+      <div
+        v-if="task.status !== 'downloading' && task.status !== 'processing'"
+        class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
+        style="border-color: var(--color-border); background: var(--color-surface)"
+      >
+        <p class="text-xs font-semibold" style="color: var(--color-text-primary)">
+          {{ t("taskDetail.incremental.title") }}
+        </p>
+        <div class="grid grid-cols-3 gap-1.5">
+          <button
+            class="flex flex-col items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
+            @click="incrementalMessage = ''; incrementalDialog = 'refresh'"
+          >
+            <Clock class="size-3.5" />
+            <span>{{ t("taskDetail.incremental.refresh") }}</span>
+          </button>
+          <button
+            class="flex flex-col items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
+            @click="openExtendDialog"
+          >
+            <Expand class="size-3.5" />
+            <span>{{ t("taskDetail.incremental.extend") }}</span>
+          </button>
+          <button
+            class="flex flex-col items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
+            @click="openImportDialog"
+          >
+            <Download class="size-3.5" />
+            <span>{{ t("taskDetail.incremental.import") }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- F 套件：增量操作弹层 -->
+      <div
+        v-if="incrementalDialog"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+        @click.self="incrementalDialog = null"
+      >
+        <div
+          class="w-[420px] max-w-[92vw] rounded-xl border bg-white p-4 shadow-xl flex flex-col gap-3"
+          style="border-color: var(--color-border)"
+        >
+          <div class="flex items-center justify-between">
+            <p class="text-sm font-semibold" style="color: var(--color-text-primary)">
+              <template v-if="incrementalDialog === 'refresh'">{{ t("taskDetail.incremental.refreshTitle") }}</template>
+              <template v-else-if="incrementalDialog === 'extend'">{{ t("taskDetail.incremental.extendTitle") }}</template>
+              <template v-else>{{ t("taskDetail.incremental.importTitle") }}</template>
+            </p>
+            <button class="p-1 rounded hover:bg-slate-100" @click="incrementalDialog = null">
+              <X class="size-4" />
+            </button>
+          </div>
+
+          <!-- 刷新过期 -->
+          <template v-if="incrementalDialog === 'refresh'">
+            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
+              {{ t("taskDetail.incremental.refreshDesc") }}
+            </p>
+            <label class="text-xs flex items-center gap-2">
+              <span style="color: var(--color-text-primary)">{{ t("taskDetail.incremental.ttlLabel") }}</span>
+              <select v-model.number="refreshTtlDays" class="rounded border border-slate-300 px-2 py-1 text-xs">
+                <option :value="30">30</option>
+                <option :value="90">90</option>
+                <option :value="180">180</option>
+                <option :value="365">365</option>
+              </select>
+              <input v-model.number="refreshTtlDays" type="number" min="1" max="3650" class="w-20 rounded border border-slate-300 px-2 py-1 text-xs" />
+              <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.days") }}</span>
+            </label>
+            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
+            <div class="flex justify-end gap-2 mt-1">
+              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
+              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy" @click="runRefresh">
+                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.refreshConfirm") }}
+              </button>
+            </div>
+          </template>
+
+          <!-- 扩展任务 -->
+          <template v-else-if="incrementalDialog === 'extend'">
+            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
+              {{ t("taskDetail.incremental.extendDesc") }}
+            </p>
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.west") }}</span>
+                <input v-model.number="extendWest" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.east") }}</span>
+                <input v-model.number="extendEast" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.south") }}</span>
+                <input v-model.number="extendSouth" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.north") }}</span>
+                <input v-model.number="extendNorth" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.minZoom") }}</span>
+                <input v-model.number="extendMinZoom" type="number" min="0" max="22" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+              <label class="flex flex-col gap-0.5">
+                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.maxZoom") }}</span>
+                <input v-model.number="extendMaxZoom" type="number" min="0" max="22" class="rounded border border-slate-300 px-2 py-1" />
+              </label>
+            </div>
+            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
+            <div class="flex justify-end gap-2 mt-1">
+              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
+              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy" @click="runExtend">
+                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.extendConfirm") }}
+              </button>
+            </div>
+          </template>
+
+          <!-- 从其他任务导入 -->
+          <template v-else>
+            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
+              {{ t("taskDetail.incremental.importDesc") }}
+            </p>
+            <p v-if="importCandidates.length === 0" class="text-xs italic" style="color: var(--color-text-muted)">
+              {{ t("taskDetail.incremental.importNoneFound") }}
+            </p>
+            <div v-else class="max-h-60 overflow-y-auto rounded border border-slate-200 divide-y divide-slate-100">
+              <label
+                v-for="cand in importCandidates"
+                :key="cand.id"
+                class="flex items-center gap-2 px-2 py-1.5 text-xs cursor-pointer hover:bg-slate-50"
+              >
+                <input
+                  type="radio"
+                  :value="cand.id"
+                  v-model="importSourceId"
+                  @change="previewImport"
+                />
+                <span class="flex-1 truncate" style="color: var(--color-text-primary)">{{ cand.name }}</span>
+                <span class="font-mono tabular-nums" style="color: var(--color-text-muted)">{{ formatCount(cand.downloadedTiles) }}</span>
+              </label>
+            </div>
+            <p v-if="importReusableCount !== null" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700">
+              {{ t("taskDetail.incremental.importReusable", { count: importReusableCount }) }}
+            </p>
+            <p v-else-if="importCountLoading" class="text-xs" style="color: var(--color-text-muted)">
+              {{ t("taskDetail.incremental.importCounting") }}
+            </p>
+            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
+            <div class="flex justify-end gap-2 mt-1">
+              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
+              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy || !importSourceId" @click="runImport">
+                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.importConfirm") }}
+              </button>
+            </div>
+          </template>
+        </div>
       </div>
 
       <!-- 运行日志 -->
@@ -799,7 +1172,13 @@ function logTime(iso: string) {
         boundsEast: task.boundsEast,
         boundsSouth: task.boundsSouth,
         boundsNorth: task.boundsNorth,
-        crs: (() => { try { return JSON.parse(task.sourceConfig)?.crs ?? 'WEB_MERCATOR'; } catch { return 'WEB_MERCATOR'; } })(),
+        crs: (() => {
+          try {
+            return JSON.parse(task.sourceConfig)?.crs ?? 'WEB_MERCATOR';
+          } catch {
+            return 'WEB_MERCATOR';
+          }
+        })(),
       }"
       @close="showExport = false"
     />

@@ -86,6 +86,29 @@ impl TileStore {
                 ON download_state(status, zoom_level);
             "#,
         )?;
+
+        // ── F1 迁移：为旧库 tiles 表追加 fetched_at 字段 ─────────────────────
+        // SQLite 不支持 IF NOT EXISTS 加列；用 PRAGMA 查存在列后再决定是否 ALTER。
+        let has_fetched_at: bool = {
+            let mut stmt = conn.prepare("PRAGMA table_info(tiles)")?;
+            let cols: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            cols.iter().any(|c| c == "fetched_at")
+        };
+        if !has_fetched_at {
+            conn.execute_batch(
+                "ALTER TABLE tiles ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0;
+                 UPDATE tiles SET fetched_at = strftime('%s','now') WHERE fetched_at = 0;
+                 CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);",
+            )?;
+        } else {
+            // 确保索引存在
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);",
+            )?;
+        }
         Ok(())
     }
 
@@ -164,8 +187,8 @@ impl TileStore {
     pub fn save_tile(&self, coord: &TileCoord, data: &[u8]) -> Result<()> {
         let conn = self.lock()?;
         conn.execute(
-            "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data, fetched_at)
+             VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))",
             params![coord.z as i64, coord.x as i64, coord.y as i64, data],
         )?;
         conn.execute(
@@ -185,8 +208,8 @@ impl TileStore {
         let tx = conn.transaction()?;
         {
             let mut insert_stmt = tx.prepare_cached(
-                "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data, fetched_at)
+                 VALUES (?1, ?2, ?3, ?4, strftime('%s','now'))",
             )?;
             let mut update_stmt = tx.prepare_cached(
                 "UPDATE download_state SET status='downloaded', error_message=NULL
@@ -273,6 +296,102 @@ impl TileStore {
             [],
         )?;
         Ok(count as i64)
+    }
+
+    /// 将早于 `cutoff_unix_secs` 的瓦片对应 download_state 重置为 pending（F3 过期重抓）。
+    /// 返回被重置的瓦片数量。
+    pub fn reset_expired(&self, cutoff_unix_secs: i64) -> Result<i64> {
+        let conn = self.lock()?;
+        let count = conn.execute(
+            "UPDATE download_state
+             SET status='pending', retry_count=0, error_message=NULL
+             WHERE (zoom_level, tile_column, tile_row) IN (
+                 SELECT zoom_level, tile_column, tile_row FROM tiles
+                 WHERE fetched_at < ?1
+             )",
+            params![cutoff_unix_secs],
+        )?;
+        Ok(count as i64)
+    }
+
+    /// F4 借数据预检：统计源 .tiles 库中可被目标当前 pending/failed 列表复用的瓦片数。
+    pub fn count_reusable_from(&self, source_path: &Path) -> Result<i64> {
+        let conn = self.lock()?;
+        let src_path_str = source_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("源路径包含非法字符"))?;
+        conn.execute(
+            &format!(
+                "ATTACH DATABASE '{}' AS src",
+                src_path_str.replace('\'', "''")
+            ),
+            [],
+        )?;
+        let result: rusqlite::Result<i64> = conn.query_row(
+            "SELECT COUNT(*) FROM src.tiles s
+             JOIN download_state d
+               ON d.zoom_level = s.zoom_level
+              AND d.tile_column = s.tile_column
+              AND d.tile_row = s.tile_row
+             WHERE d.status IN ('pending','failed')",
+            [],
+            |r| r.get(0),
+        );
+        let _ = conn.execute("DETACH DATABASE src", []);
+        Ok(result?)
+    }
+
+    /// 从另一个 .tiles 数据库导入瓦片（F4 借数据）。
+    /// 仅导入目标当前 download_state 中状态为 pending / failed 的瓦片，且源端已有数据的。
+    /// 导入后对应 download_state 置为 'downloaded'。
+    /// 返回 (imported_count, total_pending_before)。
+    pub fn import_from_external(&self, source_path: &Path) -> Result<(i64, i64)> {
+        let conn = self.lock()?;
+
+        let pending_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM download_state WHERE status IN ('pending','failed')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+
+        let src_path_str = source_path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("源路径包含非法字符"))?;
+        // ATTACH 源库为 src
+        conn.execute(&format!("ATTACH DATABASE '{}' AS src", src_path_str.replace('\'', "''")), [])?;
+
+        let result: rusqlite::Result<i64> = (|| {
+            // 1) 把源库的瓦片 INSERT OR REPLACE 进目标 tiles 表（仅那些目标当前是 pending/failed 的）
+            let copied = conn.execute(
+                "INSERT OR REPLACE INTO tiles (zoom_level, tile_column, tile_row, tile_data, fetched_at)
+                 SELECT s.zoom_level, s.tile_column, s.tile_row, s.tile_data,
+                        COALESCE(s.fetched_at, strftime('%s','now'))
+                 FROM src.tiles s
+                 JOIN download_state d
+                   ON d.zoom_level = s.zoom_level
+                  AND d.tile_column = s.tile_column
+                  AND d.tile_row = s.tile_row
+                 WHERE d.status IN ('pending','failed')",
+                [],
+            )?;
+            // 2) 对应 download_state 置 downloaded
+            conn.execute(
+                "UPDATE download_state SET status='downloaded', error_message=NULL, retry_count=0
+                 WHERE status IN ('pending','failed')
+                   AND (zoom_level, tile_column, tile_row) IN (
+                       SELECT zoom_level, tile_column, tile_row FROM src.tiles
+                   )",
+                [],
+            )?;
+            Ok(copied as i64)
+        })();
+
+        // 无论成功失败都尝试 DETACH
+        let _ = conn.execute("DETACH DATABASE src", []);
+        let imported = result?;
+        Ok((imported, pending_before))
     }
 
     /// 将"下载中"状态回退为 pending（应用重启后恢复用）

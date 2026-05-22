@@ -399,6 +399,274 @@ pub async fn retry_failed(
     Ok(count)
 }
 
+// ─── F3 / F2 / F4：增量下载相关 ──────────────────────────────────────────────
+
+/// F3 过期重抓：将早于 `ttl_days` 天前下载的瓦片重置为 pending，并启动续传。
+/// 返回被重置的瓦片数量。
+#[tauri::command]
+pub async fn refresh_expired_tiles(
+    task_id: String,
+    ttl_days: u32,
+    app_db: State<'_, AppDb>,
+    engine: State<'_, DownloadEngine>,
+    app: AppHandle,
+) -> Result<i64, String> {
+    if ttl_days == 0 {
+        return Err("ttl_days 必须大于 0".into());
+    }
+    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
+    let path = task
+        .tile_store_path
+        .as_deref()
+        .ok_or("tile store path not set")?;
+
+    let now = chrono::Utc::now().timestamp();
+    let cutoff = now - (ttl_days as i64) * 86_400;
+
+    let tile_store =
+        crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &task_id)
+            .map_err(|e| e.to_string())?;
+    let count = tile_store
+        .reset_expired(cutoff)
+        .map_err(|e| e.to_string())?;
+
+    if count > 0 {
+        // 同步更新 tasks 表的 downloaded_tiles 计数
+        let progress = tile_store.get_progress().map_err(|e| e.to_string())?;
+        app_db
+            .update_task_progress(&task_id, progress.downloaded, progress.failed)
+            .map_err(|e| e.to_string())?;
+        app_db
+            .update_task_status(&task_id, "pending")
+            .map_err(|e| e.to_string())?;
+        check_concurrent_limit(&engine, app_db.inner())?;
+        let concurrency = get_concurrency(app_db.inner());
+        engine
+            .start(task_id, app_db.inner().clone(), concurrency, app)
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(count)
+}
+
+/// F2 扩展任务参数（前端传入）。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskGeometryArgs {
+    pub task_id: String,
+    pub bounds_west: f64,
+    pub bounds_east: f64,
+    pub bounds_south: f64,
+    pub bounds_north: f64,
+    pub min_zoom: u8,
+    pub max_zoom: u8,
+    /// 可选的新多边形 JSON（[[lng, lat], ...]）。若为 None 且原任务有多边形，将保留原多边形。
+    pub polygon_wgs84: Option<String>,
+}
+
+/// F2 扩展任务（仅允许扩大）：合并 bounds、扩展 zoom 范围，重新枚举瓦片并 INSERT OR IGNORE。
+/// 返回 (新增 pending 瓦片数, 任务当前 total_tiles)。
+#[tauri::command]
+pub async fn update_task_geometry(
+    args: UpdateTaskGeometryArgs,
+    app_db: State<'_, AppDb>,
+) -> Result<(i64, i64), String> {
+    let task = app_db.get_task(&args.task_id).map_err(|e| e.to_string())?;
+
+    // 仅允许扩大 zoom 范围
+    if args.min_zoom > task.min_zoom {
+        return Err(format!(
+            "最小缩放级别只能扩大或保持（当前 {}，新值 {}）",
+            task.min_zoom, args.min_zoom
+        ));
+    }
+    if args.max_zoom < task.max_zoom {
+        return Err(format!(
+            "最大缩放级别只能扩大或保持（当前 {}，新值 {}）",
+            task.max_zoom, args.max_zoom
+        ));
+    }
+
+    // bounds 取并集
+    let new_west = args.bounds_west.min(task.bounds_west);
+    let new_east = args.bounds_east.max(task.bounds_east);
+    let new_south = args.bounds_south.min(task.bounds_south);
+    let new_north = args.bounds_north.max(task.bounds_north);
+
+    // 多边形：若前端未提供且原有，则保留；若前端提供则替换（暂不支持真正的 polygon union，
+    // 此简化策略下重新枚举使用 bbox，因此即使保留多边形也只影响后续 UI 展示）
+    let new_polygon = args.polygon_wgs84.as_deref().or(task.polygon_wgs84.as_deref());
+
+    app_db
+        .update_task_geometry(
+            &args.task_id,
+            new_west,
+            new_east,
+            new_south,
+            new_north,
+            args.min_zoom,
+            args.max_zoom,
+            new_polygon,
+        )
+        .map_err(|e| e.to_string())?;
+
+    // 解析 TileSource，取 CRS
+    let source: crate::types::TileSource =
+        serde_json::from_str(&task.source_config).map_err(|e| e.to_string())?;
+    let bounds = crate::types::Bounds {
+        west: new_west,
+        east: new_east,
+        south: new_south,
+        north: new_north,
+    };
+    let tiles = crate::tile_math::enumerate_tiles(
+        &bounds,
+        args.min_zoom,
+        args.max_zoom,
+        &source.crs,
+        Some(50_000_000),
+    );
+
+    let path = task
+        .tile_store_path
+        .as_deref()
+        .ok_or("tile store path not set")?;
+    let tile_store =
+        crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &args.task_id)
+            .map_err(|e| e.to_string())?;
+
+    let progress_before = tile_store.get_progress().map_err(|e| e.to_string())?;
+    let total_after = tile_store
+        .init_download_state(&tiles)
+        .map_err(|e| e.to_string())?;
+    let added = total_after - progress_before.total;
+
+    app_db
+        .update_task_total(&args.task_id, total_after)
+        .map_err(|e| e.to_string())?;
+
+    Ok((added.max(0), total_after))
+}
+
+/// F4 借数据预检：返回源任务可复用的瓦片数量（与目标 pending/failed 瓦片的交集）。
+#[tauri::command]
+pub async fn count_reusable_tiles(
+    target_task_id: String,
+    source_task_id: String,
+    app_db: State<'_, AppDb>,
+) -> Result<i64, String> {
+    let target = app_db
+        .get_task(&target_task_id)
+        .map_err(|e| e.to_string())?;
+    let source = app_db
+        .get_task(&source_task_id)
+        .map_err(|e| e.to_string())?;
+    validate_same_source(&target, &source)?;
+
+    let target_path = target
+        .tile_store_path
+        .as_deref()
+        .ok_or("target tile store path not set")?;
+    let source_path = source
+        .tile_store_path
+        .as_deref()
+        .ok_or("source tile store path not set")?;
+
+    let tile_store = crate::storage::tile_store::TileStore::open(
+        std::path::Path::new(target_path),
+        &target_task_id,
+    )
+    .map_err(|e| e.to_string())?;
+    tile_store
+        .count_reusable_from(std::path::Path::new(source_path))
+        .map_err(|e| e.to_string())
+}
+
+/// F4 借数据：从源任务的 .tiles 数据库导入目标任务待下载的瓦片。
+/// 返回 (imported_count, total_pending_before)。
+#[tauri::command]
+pub async fn import_tiles_from_source(
+    target_task_id: String,
+    source_task_id: String,
+    app_db: State<'_, AppDb>,
+) -> Result<(i64, i64), String> {
+    let target = app_db
+        .get_task(&target_task_id)
+        .map_err(|e| e.to_string())?;
+    let source = app_db
+        .get_task(&source_task_id)
+        .map_err(|e| e.to_string())?;
+    validate_same_source(&target, &source)?;
+
+    let target_path = target
+        .tile_store_path
+        .as_deref()
+        .ok_or("target tile store path not set")?;
+    let source_path = source
+        .tile_store_path
+        .as_deref()
+        .ok_or("source tile store path not set")?;
+
+    let tile_store = crate::storage::tile_store::TileStore::open(
+        std::path::Path::new(target_path),
+        &target_task_id,
+    )
+    .map_err(|e| e.to_string())?;
+    let (imported, pending_before) = tile_store
+        .import_from_external(std::path::Path::new(source_path))
+        .map_err(|e| e.to_string())?;
+
+    // 同步 tasks 表进度
+    let progress = tile_store.get_progress().map_err(|e| e.to_string())?;
+    app_db
+        .update_task_progress(&target_task_id, progress.downloaded, progress.failed)
+        .map_err(|e| e.to_string())?;
+
+    Ok((imported, pending_before))
+}
+
+/// 校验两任务来自同一数据源（host + format + CRS + coord_type）。
+fn validate_same_source(target: &Task, source: &Task) -> Result<(), String> {
+    let t_src: crate::types::TileSource =
+        serde_json::from_str(&target.source_config).map_err(|e| e.to_string())?;
+    let s_src: crate::types::TileSource =
+        serde_json::from_str(&source.source_config).map_err(|e| e.to_string())?;
+
+    if t_src.crs != s_src.crs {
+        return Err("源任务与目标任务的 CRS 不一致，无法直接复用瓦片".into());
+    }
+    if t_src.coord_type != s_src.coord_type {
+        return Err("源任务与目标任务的坐标系（GCJ02/WGS84）不一致".into());
+    }
+    if t_src.format != s_src.format {
+        return Err(format!(
+            "瓦片格式不一致（源 {} vs 目标 {}），无法直接复用",
+            s_src.format, t_src.format
+        ));
+    }
+    // host 比对：从 URL 模板中提取域名
+    let t_host = extract_host(&t_src.url_template);
+    let s_host = extract_host(&s_src.url_template);
+    if t_host != s_host {
+        return Err(format!(
+            "数据源域名不一致（源 {} vs 目标 {}），瓦片切片方案可能不同",
+            s_host.unwrap_or("?"),
+            t_host.unwrap_or("?")
+        ));
+    }
+    Ok(())
+}
+
+/// 从 URL 模板提取 host（忽略 {s} 占位符）。
+fn extract_host(url_template: &str) -> Option<&str> {
+    let start = url_template.find("://")? + 3;
+    let rest = &url_template[start..];
+    let end = rest.find('/').unwrap_or(rest.len());
+    Some(&rest[..end])
+}
+
+
+
 // ─── 日志 ────────────────────────────────────────────────────────────────────
 
 #[tauri::command]

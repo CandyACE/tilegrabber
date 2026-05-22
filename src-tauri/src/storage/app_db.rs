@@ -445,6 +445,40 @@ impl AppDb {
         Ok(())
     }
 
+    /// F2 任务扩区：更新 bounds / zoom 范围 / polygon。仅允许扩大（zoom 范围）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_task_geometry(
+        &self,
+        id: &str,
+        bounds_west: f64,
+        bounds_east: f64,
+        bounds_south: f64,
+        bounds_north: f64,
+        min_zoom: u8,
+        max_zoom: u8,
+        polygon_wgs84: Option<&str>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE tasks SET bounds_west=?1, bounds_east=?2, bounds_south=?3, bounds_north=?4,
+                              min_zoom=?5, max_zoom=?6, polygon_wgs84=?7, updated_at=?8
+             WHERE id=?9",
+            params![
+                bounds_west,
+                bounds_east,
+                bounds_south,
+                bounds_north,
+                min_zoom as i64,
+                max_zoom as i64,
+                polygon_wgs84,
+                now,
+                id
+            ],
+        )?;
+        Ok(())
+    }
+
     /// 应用重启时调用：将所有遗留的 downloading 状态重置为 paused，
     /// 避免任务卡在 downloading 却无法暂停/取消的问题
     pub fn reset_downloading_to_paused(&self) -> Result<()> {
