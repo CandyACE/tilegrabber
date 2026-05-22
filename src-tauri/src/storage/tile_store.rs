@@ -298,8 +298,9 @@ impl TileStore {
         Ok(count as i64)
     }
 
-    /// 将早于 `cutoff_unix_secs` 的瓦片对应 download_state 重置为 pending（F3 过期重抓）。
+    /// 将早于 `cutoff_unix_secs` 的瓦片对应 download_state 重置为 pending（保留供未来 F3 复用）。
     /// 返回被重置的瓦片数量。
+    #[allow(dead_code)]
     pub fn reset_expired(&self, cutoff_unix_secs: i64) -> Result<i64> {
         let conn = self.lock()?;
         let count = conn.execute(

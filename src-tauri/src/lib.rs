@@ -34,7 +34,7 @@ use commands::task::{
     export_pmtiles, export_task, find_completed_task_for_source, get_download_progress_geojson,
     get_export_jobs, get_stored_tile, get_task, get_task_logs, get_task_thumbnail,
     import_mbtiles, import_task, import_tiles_from_source, list_tasks, pause_download,
-    refresh_expired_tiles, resume_download, retry_failed, reveal_in_explorer, start_download,
+    resume_download, retry_failed, reveal_in_explorer, start_download,
     update_task_geometry, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
@@ -366,7 +366,6 @@ pub fn run() {
             cancel_download,
             retry_failed,
             // 增量下载（F 套件）
-            refresh_expired_tiles,
             update_task_geometry,
             count_reusable_tiles,
             import_tiles_from_source,

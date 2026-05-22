@@ -399,55 +399,7 @@ pub async fn retry_failed(
     Ok(count)
 }
 
-// ─── F3 / F2 / F4：增量下载相关 ──────────────────────────────────────────────
-
-/// F3 过期重抓：将早于 `ttl_days` 天前下载的瓦片重置为 pending，并启动续传。
-/// 返回被重置的瓦片数量。
-#[tauri::command]
-pub async fn refresh_expired_tiles(
-    task_id: String,
-    ttl_days: u32,
-    app_db: State<'_, AppDb>,
-    engine: State<'_, DownloadEngine>,
-    app: AppHandle,
-) -> Result<i64, String> {
-    if ttl_days == 0 {
-        return Err("ttl_days 必须大于 0".into());
-    }
-    let task = app_db.get_task(&task_id).map_err(|e| e.to_string())?;
-    let path = task
-        .tile_store_path
-        .as_deref()
-        .ok_or("tile store path not set")?;
-
-    let now = chrono::Utc::now().timestamp();
-    let cutoff = now - (ttl_days as i64) * 86_400;
-
-    let tile_store =
-        crate::storage::tile_store::TileStore::open(std::path::Path::new(path), &task_id)
-            .map_err(|e| e.to_string())?;
-    let count = tile_store
-        .reset_expired(cutoff)
-        .map_err(|e| e.to_string())?;
-
-    if count > 0 {
-        // 同步更新 tasks 表的 downloaded_tiles 计数
-        let progress = tile_store.get_progress().map_err(|e| e.to_string())?;
-        app_db
-            .update_task_progress(&task_id, progress.downloaded, progress.failed)
-            .map_err(|e| e.to_string())?;
-        app_db
-            .update_task_status(&task_id, "pending")
-            .map_err(|e| e.to_string())?;
-        check_concurrent_limit(&engine, app_db.inner())?;
-        let concurrency = get_concurrency(app_db.inner());
-        engine
-            .start(task_id, app_db.inner().clone(), concurrency, app)
-            .map_err(|e| e.to_string())?;
-    }
-
-    Ok(count)
-}
+// ─── F2 / F4：增量下载相关 ──────────────────────────────────────────────
 
 /// F2 扩展任务参数（前端传入）。
 #[derive(Debug, serde::Deserialize)]
