@@ -14,6 +14,10 @@
 
 ### 新增
 
+- **F 套件 — 增量更新（仅限已完成的任务）**：在任务详情底部新增「增量更新」卡片，含 2 个入口：
+  - **扩展任务（F2）**：点击后进入地图绘制模式，顶部横幅显示当前任务名，原始区域以红色轮廓同步显示。用户在地图上框选要追加的区域，确认时后端取「原 bbox ∪ 新框选」并通过 `update_task_geometry` 写库 + 续传新增瓦片
+  - **借数据（F4）**：候选列表严格筛选「同源（URL/格式/CRS/坐标类型一致）且已完整下载」的任务，列表右侧实时显示所选任务的缩略图预览（`MiniMapPreview` + `tilegrab-stored://` MapLibre 协议直读本地瓦片），确认后从源 .tiles 复制可复用瓦片到当前任务，跳过网络下载
+- **后端命令**：`update_task_geometry`、`count_reusable_tiles`、`import_tiles_from_source`、`get_stored_tile`
 - **Windows 静默更新**：使用 NSIS passive 模式，更新过程仅显示进度条无需点击，安装完成后自动重启
 - **macOS / Linux 在应用内自动替换**：plugin-updater 解压 `.app.tar.gz` / `.AppImage.tar.gz` 直接覆盖原可执行文件
 - **更新进度事件**：UI 显示下载已传输字节 / 总大小，回滚到内置百分比模型
