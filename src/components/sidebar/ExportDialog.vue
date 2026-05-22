@@ -166,7 +166,8 @@ async function doExport() {
         destPath: destPath.value,
         zoom: tiffZoom.value,
         clipToBounds: clipToBounds.value,
-        compression: tiffCompression.value === "none" ? null : tiffCompression.value,
+        compression:
+          tiffCompression.value === "none" ? null : tiffCompression.value,
         outputCrs: tiffOutputCrs.value,
       });
     }
@@ -185,12 +186,14 @@ function fmtCount(n: number) {
   return String(n);
 }
 
-const formatLabel = computed((): Record<ExportFormat, string> => ({
-  mbtiles: "MBTiles",
-  directory: t("taskDetail.exportFormat.directory"),
-  tiff: "GeoTIFF",
-  pmtiles: "PMTiles",
-}));
+const formatLabel = computed(
+  (): Record<ExportFormat, string> => ({
+    mbtiles: "MBTiles",
+    directory: t("taskDetail.exportFormat.directory"),
+    tiff: "GeoTIFF",
+    pmtiles: "PMTiles",
+  }),
+);
 </script>
 
 <template>
@@ -230,7 +233,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   <h2
                     class="text-sm font-semibold text-slate-900 leading-tight"
                   >
-                    {{ t('export.title') }}
+                    {{ t("export.title") }}
                   </h2>
                   <p class="text-xs text-slate-500 mt-0.5 truncate max-w-64">
                     {{ task.name }}
@@ -254,7 +257,9 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
             >
               <Info class="size-3.5 shrink-0 text-blue-500" />
               <span class="text-xs text-slate-600">
-                {{ t('export.tiles', { count: fmtCount(task.downloadedTiles) }) }}
+                {{
+                  t("export.tiles", { count: fmtCount(task.downloadedTiles) })
+                }}
               </span>
               <Layers class="size-3.5 shrink-0 text-slate-400 ml-auto" />
             </div>
@@ -264,7 +269,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               <p
                 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3"
               >
-                {{ t('export.selectFormat') }}
+                {{ t("export.selectFormat") }}
               </p>
               <div class="grid grid-cols-2 gap-2.5">
                 <!-- MBTiles -->
@@ -316,7 +321,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     MBTiles
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    {{ t('export.mbtitlesDesc') }}
+                    {{ t("export.mbtitlesDesc") }}
                   </p>
                 </button>
 
@@ -368,10 +373,10 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                         : 'text-slate-800'
                     "
                   >
-                    {{ t('taskDetail.exportFormat.directory') }}
+                    {{ t("taskDetail.exportFormat.directory") }}
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    {{ t('export.directoryDesc') }}
+                    {{ t("export.directoryDesc") }}
                   </p>
                 </button>
 
@@ -424,7 +429,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     GeoTIFF
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    {{ t('export.tiffDesc') }}
+                    {{ t("export.tiffDesc") }}
                   </p>
                 </button>
 
@@ -477,13 +482,19 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   <span
                     class="text-xs font-semibold transition-colors duration-200 leading-tight"
                     :class="
-                      format === 'pmtiles' ? 'text-violet-700' : 'text-slate-800'
+                      format === 'pmtiles'
+                        ? 'text-violet-700'
+                        : 'text-slate-800'
                     "
                   >
                     PMTiles
                   </span>
                   <p class="text-[10px] leading-relaxed text-slate-400">
-                    {{ pmtilesDisabled ? t('export.pmtilesWgs84Hint') : t('export.pmtilesDesc') }}
+                    {{
+                      pmtilesDisabled
+                        ? t("export.pmtilesWgs84Hint")
+                        : t("export.pmtilesDesc")
+                    }}
                   </p>
                 </button>
               </div>
@@ -494,7 +505,11 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               <p
                 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2"
               >
-                {{ format === "directory" ? t('export.exportDir') : t('export.savePath') }}
+                {{
+                  format === "directory"
+                    ? t("export.exportDir")
+                    : t("export.savePath")
+                }}
               </p>
               <div class="flex items-center gap-2">
                 <div
@@ -508,8 +523,8 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     {{
                       destPath ||
                       (format === "directory"
-                        ? t('export.noDir')
-                        : t('export.noPath'))
+                        ? t("export.noDir")
+                        : t("export.noPath"))
                     }}
                   </span>
                 </div>
@@ -518,7 +533,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   :class="starting ? 'opacity-40 pointer-events-none' : ''"
                   @click="pickPath"
                 >
-                  {{ t('export.browse') }}
+                  {{ t("export.browse") }}
                 </button>
               </div>
             </div>
@@ -537,12 +552,17 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   <Layers class="size-3.5 shrink-0 text-slate-400" />
                   <div>
                     <div class="text-xs font-medium text-slate-700">
-                      {{ t('export.mergeZoom') }}
+                      {{ t("export.mergeZoom") }}
                     </div>
                     <div
                       class="text-[11px] text-slate-400 mt-0.5 leading-tight"
                     >
-                      {{ t('export.mergeZoomDesc', { min: task.minZoom, max: task.maxZoom }) }}
+                      {{
+                        t("export.mergeZoomDesc", {
+                          min: task.minZoom,
+                          max: task.maxZoom,
+                        })
+                      }}
                     </div>
                   </div>
                 </div>
@@ -587,17 +607,25 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               >
                 <div class="flex items-center gap-2 mb-2">
                   <PackageCheck class="size-3.5 shrink-0 text-slate-400" />
-                  <span class="text-xs font-medium text-slate-700">{{ t('export.compression') }}</span>
+                  <span class="text-xs font-medium text-slate-700">{{
+                    t("export.compression")
+                  }}</span>
                 </div>
                 <div class="flex gap-2">
                   <button
-                    v-for="opt in ([{ v: 'none', label: t('export.compressionNone') }, { v: 'lzw', label: 'LZW' }, { v: 'deflate', label: 'DEFLATE' }] as const)"
+                    v-for="opt in [
+                      { v: 'none', label: t('export.compressionNone') },
+                      { v: 'lzw', label: 'LZW' },
+                      { v: 'deflate', label: 'DEFLATE' },
+                    ] as const"
                     :key="opt.v"
                     type="button"
                     class="flex-1 h-7 rounded-lg text-[11px] font-medium border transition-colors"
-                    :class="tiffCompression === opt.v
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
-                      : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'"
+                    :class="
+                      tiffCompression === opt.v
+                        ? 'bg-emerald-50 border-emerald-400 text-emerald-700'
+                        : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                    "
                     :disabled="starting"
                     @click="tiffCompression = opt.v"
                   >
@@ -619,15 +647,21 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               >
                 <div class="flex items-center gap-2 mb-2">
                   <Map class="size-3.5 shrink-0 text-slate-400" />
-                  <span class="text-xs font-medium text-slate-700">{{ t('export.outputCrs') }}</span>
+                  <span class="text-xs font-medium text-slate-700">{{
+                    t("export.outputCrs")
+                  }}</span>
                 </div>
                 <div class="grid grid-cols-2 gap-1.5">
                   <button
-                    v-for="opt in ([
+                    v-for="opt in [
                       { v: '4326', label: 'EPSG:4326 (WGS84)' },
                       { v: '4490', label: 'EPSG:4490 (CGCS2000)' },
-                      { v: '3857', label: 'EPSG:3857 (Web Mercator)', span: true },
-                    ] as const)"
+                      {
+                        v: '3857',
+                        label: 'EPSG:3857 (Web Mercator)',
+                        span: true,
+                      },
+                    ] as const"
                     :key="opt.v"
                     type="button"
                     class="h-7 rounded-lg text-[11px] font-medium border transition-colors"
@@ -662,10 +696,12 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                     <Gauge class="size-3.5 shrink-0 text-slate-400" />
                     <div>
                       <div class="text-xs font-medium text-slate-700">
-                        {{ t('export.reEncodeLabel') }}
+                        {{ t("export.reEncodeLabel") }}
                       </div>
-                      <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
-                        {{ t('export.reEncodeDesc') }}
+                      <div
+                        class="text-[11px] text-slate-400 mt-0.5 leading-tight"
+                      >
+                        {{ t("export.reEncodeDesc") }}
                       </div>
                     </div>
                   </div>
@@ -679,7 +715,9 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   >
                     <span
                       class="pointer-events-none inline-block size-4 rounded-full bg-white shadow-sm ring-0 transition-transform duration-200"
-                      :class="reEncodeEnabled ? 'translate-x-4' : 'translate-x-0'"
+                      :class="
+                        reEncodeEnabled ? 'translate-x-4' : 'translate-x-0'
+                      "
                     />
                   </button>
                 </div>
@@ -688,11 +726,16 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                   <div
                     v-if="reEncodeEnabled"
                     class="px-3 pb-3 pt-2 space-y-3 border-t"
-                    style="border-color: var(--color-border-subtle); background: var(--color-surface-raised)"
+                    style="
+                      border-color: var(--color-border-subtle);
+                      background: var(--color-surface-raised);
+                    "
                   >
                     <!-- JPEG 品质 -->
                     <div class="flex items-center gap-3">
-                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{ t('export.jpegQuality') }}</span>
+                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{
+                        t("export.jpegQuality")
+                      }}</span>
                       <input
                         v-model.number="jpegQuality"
                         type="range"
@@ -701,11 +744,16 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                         step="1"
                         class="flex-1 accent-blue-600"
                       />
-                      <span class="text-xs font-mono text-slate-700 w-8 text-right">{{ jpegQuality }}</span>
+                      <span
+                        class="text-xs font-mono text-slate-700 w-8 text-right"
+                        >{{ jpegQuality }}</span
+                      >
                     </div>
                     <!-- PNG 级别 -->
                     <div class="flex items-center gap-3">
-                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{ t('export.pngLevel') }}</span>
+                      <span class="text-[11px] text-slate-500 w-20 shrink-0">{{
+                        t("export.pngLevel")
+                      }}</span>
                       <input
                         v-model.number="pngLevel"
                         type="range"
@@ -714,7 +762,10 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                         step="1"
                         class="flex-1 accent-blue-600"
                       />
-                      <span class="text-xs font-mono text-slate-700 w-8 text-right">{{ pngLevel }}</span>
+                      <span
+                        class="text-xs font-mono text-slate-700 w-8 text-right"
+                        >{{ pngLevel }}</span
+                      >
                     </div>
                   </div>
                 </Transition>
@@ -733,13 +784,13 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                 <Scissors class="size-3.5 shrink-0 text-slate-400" />
                 <div>
                   <div class="text-xs font-medium text-slate-700">
-                    {{ t('export.clipOption') }}
+                    {{ t("export.clipOption") }}
                   </div>
                   <div class="text-[11px] text-slate-400 mt-0.5 leading-tight">
                     {{
                       format === "tiff"
-                        ? t('export.clipTiffDesc')
-                        : t('export.clipDefaultDesc')
+                        ? t("export.clipTiffDesc")
+                        : t("export.clipDefaultDesc")
                     }}
                   </div>
                 </div>
@@ -794,7 +845,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
                 class="h-8 px-4 text-xs font-medium rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors"
                 @click="emit('close')"
               >
-                {{ t('export.cancel') }}
+                {{ t("export.cancel") }}
               </button>
               <button
                 class="h-8 px-5 text-xs font-semibold rounded-xl flex items-center gap-1.5 transition-all duration-200"
@@ -808,7 +859,7 @@ const formatLabel = computed((): Record<ExportFormat, string> => ({
               >
                 <Loader2 v-if="starting" class="size-3.5 animate-spin" />
                 <PackageCheck v-else class="size-3.5" />
-                {{ starting ? t('export.exporting') : t('export.startExport') }}
+                {{ starting ? t("export.exporting") : t("export.startExport") }}
               </button>
             </div>
           </div>

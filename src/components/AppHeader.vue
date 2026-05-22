@@ -40,14 +40,14 @@ function onNavClick(key: string) {
 }
 
 const navItems = computed(() => [
-  { key: "map" as const, label: t('nav.map'), icon: Map },
-  { key: "tasks" as const, label: t('nav.tasks'), icon: ListTodo },
-  { key: "publish" as const, label: t('nav.publish'), icon: Share2 },
+  { key: "map" as const, label: t("nav.map"), icon: Map },
+  { key: "tasks" as const, label: t("nav.tasks"), icon: ListTodo },
+  { key: "publish" as const, label: t("nav.publish"), icon: Share2 },
   // 远程协作功能暂时隐藏，待评估后再决定是否启用：
   // { key: "remote" as const, label: t('nav.remote'), icon: Radio },
-  { key: "settings" as const, label: t('nav.settings'), icon: Settings },
-  { key: "help" as const, label: t('nav.help'), icon: HelpCircle },
-  { key: "about" as const, label: t('nav.about'), icon: Info },
+  { key: "settings" as const, label: t("nav.settings"), icon: Settings },
+  { key: "help" as const, label: t("nav.help"), icon: HelpCircle },
+  { key: "about" as const, label: t("nav.about"), icon: Info },
 ]);
 
 function toggleSidebar() {
@@ -112,7 +112,9 @@ async function closeWindow() {
     <div class="flex items-center gap-2 px-3 shrink-0">
       <button
         class="p-1.5 rounded-md transition-colors hover:bg-slate-100 active:bg-slate-200"
-        :title="sidebarOpen ? t('header.collapseSidebar') : t('header.expandSidebar')"
+        :title="
+          sidebarOpen ? t('header.collapseSidebar') : t('header.expandSidebar')
+        "
         @click="toggleSidebar"
       >
         <PanelLeft class="size-4 text-slate-500" />
@@ -131,7 +133,7 @@ async function closeWindow() {
           class="text-sm font-semibold tracking-tight"
           style="color: var(--color-text-primary)"
         >
-          {{ t('appName') }}
+          {{ t("appName") }}
         </span>
       </div>
     </div>
@@ -189,7 +191,7 @@ async function closeWindow() {
           class="size-1.5 rounded-full inline-block"
           :class="serverRunning ? 'bg-green-500 animate-pulse' : 'bg-slate-400'"
         />
-        {{ serverRunning ? t('header.apiRunning') : t('header.apiStopped') }}
+        {{ serverRunning ? t("header.apiRunning") : t("header.apiStopped") }}
       </div>
       <span
         class="text-xs font-mono mr-3"

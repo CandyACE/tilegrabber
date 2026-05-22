@@ -34,12 +34,14 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 ## Features
 
 ### Data Sources
+
 - **LRC / LRA files** — Parse region files exported by tools such as Oruxmaps; auto-detects the tile URL and bounding area
 - **WMTS services** — Paste a GetCapabilities XML URL; TileGrabber parses available layers and tile extents automatically
 - **TMS URL templates** — Enter a `{z}/{x}/{y}` template URL and previews tiles immediately
 - **Web capture** — Enter any map website URL; TileGrabber sniffs tile requests from the page and lets you pick the target layer visually
 
 ### Download Engine
+
 - Multi-threaded concurrent downloading with configurable concurrency
 - Resume interrupted downloads — no duplicate requests after a network failure
 - Intelligent rate limiting with randomised delays to mimic natural browsing and reduce ban risk
@@ -47,18 +49,21 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 - Real-time progress display, including a compact floating progress window
 
 ### Task Management
+
 - Sidebar task list with one-click switching between tasks — view download bounds and tile coverage on the map
 - Pause, resume, cancel, or delete tasks at any time
 - Import and export tasks as `.tgr` files (SQLite-based binary format, zero-copy fast transfer)
 
 ### Export Formats
-| Format | Description |
-|--------|-------------|
-| Directory | Tiles stored as `z/x/y.png` folder hierarchy |
-| **MBTiles** | Single-file SQLite database; compatible with QGIS, MapTiler, etc. |
-| **GeoTIFF / BigTIFF** | Georeferenced raster image; supports files larger than 4 GB |
+
+| Format                | Description                                                       |
+| --------------------- | ----------------------------------------------------------------- |
+| Directory             | Tiles stored as `z/x/y.png` folder hierarchy                      |
+| **MBTiles**           | Single-file SQLite database; compatible with QGIS, MapTiler, etc. |
+| **GeoTIFF / BigTIFF** | Georeferenced raster image; supports files larger than 4 GB       |
 
 ### Publishing
+
 - Built-in HTTP server to publish local tiles via multiple standard protocols:
   - **XYZ (TMS)** — Standard tile URL template (`{z}/{x}/{y}`)
   - **WMTS 1.0.0** — OGC Web Map Tile Service; compatible with Cesium, ArcGIS, QGIS, etc.
@@ -70,6 +75,7 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 - Built-in code examples for Cesium.js, Leaflet.js, and MapLibre GL JS
 
 ### Other
+
 - Automatic update checks with one-click download and install
 - Multi-language UI (Chinese / English)
 - Built-in help documentation and FAQ
@@ -80,15 +86,16 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 
 Go to the [Releases](../../releases/latest) page and download the package for your platform:
 
-| Platform | File | Notes |
-|----------|------|-------|
-| Windows 10/11 | `*_x64-setup.exe` | NSIS installer, double-click to run |
-| macOS (Apple Silicon) | `*_aarch64.dmg` | M-series chips |
-| macOS (Intel) | `*_x64.dmg` | x86_64 |
-| Linux | `*.AppImage` | No install needed; run `chmod +x` first |
-| Linux | `*_amd64.deb` | Debian / Ubuntu |
+| Platform              | File              | Notes                                   |
+| --------------------- | ----------------- | --------------------------------------- |
+| Windows 10/11         | `*_x64-setup.exe` | NSIS installer, double-click to run     |
+| macOS (Apple Silicon) | `*_aarch64.dmg`   | M-series chips                          |
+| macOS (Intel)         | `*_x64.dmg`       | x86_64                                  |
+| Linux                 | `*.AppImage`      | No install needed; run `chmod +x` first |
+| Linux                 | `*_amd64.deb`     | Debian / Ubuntu                         |
 
 > **macOS users**: If Gatekeeper blocks the app on first launch, go to **System Settings → Privacy & Security** and click **Open Anyway**, or run:
+>
 > ```bash
 > xattr -d com.apple.quarantine /Applications/TileGrabber.app
 > ```
@@ -143,6 +150,7 @@ npx tauri signer generate -w "$HOME/.tauri/yourproject.key"
 ```
 
 This produces:
+
 - A `.key` file — your **private key**. Never commit or share it.
 - A base64 string printed to the console — your **public key**.
 
@@ -159,18 +167,18 @@ Then:
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend framework | Vue 3 + TypeScript |
-| Map rendering | MapLibre GL JS |
-| Area drawing | Terra Draw |
-| UI components | Reka UI + Tailwind CSS v4 |
-| Desktop shell | Tauri 2 |
-| Backend language | Rust |
-| Database | SQLite (rusqlite, bundled) |
-| HTTP client | reqwest (rustls-tls) |
-| Image processing | image / tiff crates |
-| Concurrency | Tokio + Rayon |
+| Layer              | Technology                 |
+| ------------------ | -------------------------- |
+| Frontend framework | Vue 3 + TypeScript         |
+| Map rendering      | MapLibre GL JS             |
+| Area drawing       | Terra Draw                 |
+| UI components      | Reka UI + Tailwind CSS v4  |
+| Desktop shell      | Tauri 2                    |
+| Backend language   | Rust                       |
+| Database           | SQLite (rusqlite, bundled) |
+| HTTP client        | reqwest (rustls-tls)       |
+| Image processing   | image / tiff crates        |
+| Concurrency        | Tokio + Rayon              |
 
 ---
 

@@ -25,7 +25,11 @@ const pendingUpdate = ref<Update | null>(null);
 let _unlisten: UnlistenFn | null = null;
 let _initialized = false;
 
-function toResult(update: Update | null, currentVersion: string, error?: unknown): UpdateCheckResult {
+function toResult(
+  update: Update | null,
+  currentVersion: string,
+  error?: unknown,
+): UpdateCheckResult {
   if (error) {
     return {
       currentVersion,
