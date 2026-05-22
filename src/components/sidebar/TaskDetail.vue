@@ -13,15 +13,16 @@ import {
   Pause,
   Play,
   FolderOpen,
-  Clock,
   Expand,
   Download,
   X,
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
 import ExportDialog from "./ExportDialog.vue";
+import MiniMapPreview from "./MiniMapPreview.vue";
 import { useTaskDetail } from "~/composables/useTaskDetail";
 import { useExportJobs } from "~/composables/useExportJobs";
+import { useExtendMode } from "~/composables/useExtendMode";
 
 // ─── 类型 ──────────────────────────────────────────────────────────────────
 interface BackendTask {
@@ -39,6 +40,7 @@ interface BackendTask {
   downloadedTiles: number;
   failedTiles: number;
   tileStorePath: string | null;
+  polygonWgs84: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -209,81 +211,42 @@ async function retryFailed() {
 }
 
 // ─── F 套件：增量下载 ──────────────────────────────────────────────────────
-type IncrementalDialog = null | "refresh" | "extend" | "import";
+type IncrementalDialog = null | "import";
 const incrementalDialog = ref<IncrementalDialog>(null);
 const incrementalBusy = ref(false);
 const incrementalMessage = ref<string>("");
 
-// F3 — 刷新过期
-const refreshTtlDays = ref(180);
-async function runRefresh() {
-  if (!task.value) return;
-  incrementalBusy.value = true;
-  incrementalMessage.value = "";
-  try {
-    const count = await invoke<number>("refresh_expired_tiles", {
-      taskId: props.taskId,
-      ttlDays: refreshTtlDays.value,
-    });
-    incrementalMessage.value = t("taskDetail.incremental.refreshedHint", {
-      count,
-    });
-    await loadTask();
-  } catch (e: any) {
-    incrementalMessage.value = String(e);
-  } finally {
-    incrementalBusy.value = false;
-  }
-}
+// 任务是否已完成（用于显示/隐藏增量卡片）
+const isCompleted = computed(
+  () =>
+    !!task.value &&
+    task.value.totalTiles > 0 &&
+    task.value.downloadedTiles >= task.value.totalTiles &&
+    task.value.status !== "downloading" &&
+    task.value.status !== "processing",
+);
 
-// F2 — 扩展任务
-const extendWest = ref(0);
-const extendEast = ref(0);
-const extendSouth = ref(0);
-const extendNorth = ref(0);
-const extendMinZoom = ref(0);
-const extendMaxZoom = ref(0);
-function openExtendDialog() {
+// F2 — 扩展任务（地图绘制）
+const { start: startExtendMode } = useExtendMode();
+function startExtend() {
   if (!task.value) return;
-  extendWest.value = task.value.boundsWest;
-  extendEast.value = task.value.boundsEast;
-  extendSouth.value = task.value.boundsSouth;
-  extendNorth.value = task.value.boundsNorth;
-  extendMinZoom.value = task.value.minZoom;
-  extendMaxZoom.value = task.value.maxZoom;
-  incrementalMessage.value = "";
-  incrementalDialog.value = "extend";
-}
-async function runExtend() {
-  if (!task.value) return;
-  incrementalBusy.value = true;
-  incrementalMessage.value = "";
-  try {
-    const [added, total] = await invoke<[number, number]>(
-      "update_task_geometry",
-      {
-        args: {
-          taskId: props.taskId,
-          boundsWest: extendWest.value,
-          boundsEast: extendEast.value,
-          boundsSouth: extendSouth.value,
-          boundsNorth: extendNorth.value,
-          minZoom: extendMinZoom.value,
-          maxZoom: extendMaxZoom.value,
-          polygonWgs84: null,
-        },
-      },
-    );
-    incrementalMessage.value = t("taskDetail.incremental.extendedHint", {
-      added,
-      total,
-    });
-    await loadTask();
-  } catch (e: any) {
-    incrementalMessage.value = String(e);
-  } finally {
-    incrementalBusy.value = false;
-  }
+  startExtendMode({
+    taskId: task.value.id,
+    taskName: task.value.name,
+    originalBounds: {
+      west: task.value.boundsWest,
+      east: task.value.boundsEast,
+      south: task.value.boundsSouth,
+      north: task.value.boundsNorth,
+    },
+    originalPolygon: task.value.polygonWgs84
+      ? (JSON.parse(task.value.polygonWgs84) as [number, number][])
+      : null,
+    originalMinZoom: task.value.minZoom,
+    originalMaxZoom: task.value.maxZoom,
+  });
+  // 关闭详情面板，让用户专注地图操作
+  emit("close");
 }
 
 // F4 — 从其他任务导入
@@ -291,12 +254,15 @@ const importCandidates = ref<BackendTask[]>([]);
 const importSourceId = ref<string | null>(null);
 const importReusableCount = ref<number | null>(null);
 const importCountLoading = ref(false);
+const selectedCandidate = computed<BackendTask | null>(
+  () => importCandidates.value.find((c) => c.id === importSourceId.value) ?? null,
+);
 async function openImportDialog() {
   if (!task.value) return;
   incrementalMessage.value = "";
   importSourceId.value = null;
   importReusableCount.value = null;
-  // 列出所有任务，前端筛选同源（粗略：源 URL 相同 + format 相同）
+  // 列出所有任务，前端筛选同源 + 已完成
   try {
     const all = await invoke<BackendTask[]>("list_tasks");
     const me = task.value;
@@ -304,7 +270,8 @@ async function openImportDialog() {
     importCandidates.value = all.filter((t) => {
       if (t.id === me.id) return false;
       if (!t.tileStorePath) return false;
-      if (t.downloadedTiles <= 0) return false;
+      // 严格只挑已完成的任务作为借数据源
+      if (t.totalTiles <= 0 || t.downloadedTiles < t.totalTiles) return false;
       try {
         const c = JSON.parse(t.sourceConfig);
         return (
@@ -931,26 +898,19 @@ function logTime(iso: string) {
         </template>
       </div>
 
-      <!-- F 套件：增量下载入口（下载中状态不可用） -->
+      <!-- F 套件：增量更新入口（仅当任务已完成时显示） -->
       <div
-        v-if="task.status !== 'downloading' && task.status !== 'processing'"
+        v-if="isCompleted"
         class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
         style="border-color: var(--color-border); background: var(--color-surface)"
       >
         <p class="text-xs font-semibold" style="color: var(--color-text-primary)">
           {{ t("taskDetail.incremental.title") }}
         </p>
-        <div class="grid grid-cols-3 gap-1.5">
+        <div class="grid grid-cols-2 gap-1.5">
           <button
             class="flex flex-col items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
-            @click="incrementalMessage = ''; incrementalDialog = 'refresh'"
-          >
-            <Clock class="size-3.5" />
-            <span>{{ t("taskDetail.incremental.refresh") }}</span>
-          </button>
-          <button
-            class="flex flex-col items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
-            @click="openExtendDialog"
+            @click="startExtend"
           >
             <Expand class="size-3.5" />
             <span>{{ t("taskDetail.incremental.extend") }}</span>
@@ -965,101 +925,34 @@ function logTime(iso: string) {
         </div>
       </div>
 
-      <!-- F 套件：增量操作弹层 -->
+      <!-- F 套件：导入弹层 -->
       <div
-        v-if="incrementalDialog"
+        v-if="incrementalDialog === 'import'"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
         @click.self="incrementalDialog = null"
       >
         <div
-          class="w-[420px] max-w-[92vw] rounded-xl border bg-white p-4 shadow-xl flex flex-col gap-3"
+          class="w-[560px] max-w-[92vw] rounded-xl border bg-white p-4 shadow-xl flex flex-col gap-3"
           style="border-color: var(--color-border)"
         >
           <div class="flex items-center justify-between">
             <p class="text-sm font-semibold" style="color: var(--color-text-primary)">
-              <template v-if="incrementalDialog === 'refresh'">{{ t("taskDetail.incremental.refreshTitle") }}</template>
-              <template v-else-if="incrementalDialog === 'extend'">{{ t("taskDetail.incremental.extendTitle") }}</template>
-              <template v-else>{{ t("taskDetail.incremental.importTitle") }}</template>
+              {{ t("taskDetail.incremental.importTitle") }}
             </p>
             <button class="p-1 rounded hover:bg-slate-100" @click="incrementalDialog = null">
               <X class="size-4" />
             </button>
           </div>
 
-          <!-- 刷新过期 -->
-          <template v-if="incrementalDialog === 'refresh'">
-            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
-              {{ t("taskDetail.incremental.refreshDesc") }}
-            </p>
-            <label class="text-xs flex items-center gap-2">
-              <span style="color: var(--color-text-primary)">{{ t("taskDetail.incremental.ttlLabel") }}</span>
-              <select v-model.number="refreshTtlDays" class="rounded border border-slate-300 px-2 py-1 text-xs">
-                <option :value="30">30</option>
-                <option :value="90">90</option>
-                <option :value="180">180</option>
-                <option :value="365">365</option>
-              </select>
-              <input v-model.number="refreshTtlDays" type="number" min="1" max="3650" class="w-20 rounded border border-slate-300 px-2 py-1 text-xs" />
-              <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.days") }}</span>
-            </label>
-            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
-            <div class="flex justify-end gap-2 mt-1">
-              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
-              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy" @click="runRefresh">
-                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.refreshConfirm") }}
-              </button>
-            </div>
-          </template>
-
-          <!-- 扩展任务 -->
-          <template v-else-if="incrementalDialog === 'extend'">
-            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
-              {{ t("taskDetail.incremental.extendDesc") }}
-            </p>
-            <div class="grid grid-cols-2 gap-2 text-xs">
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.west") }}</span>
-                <input v-model.number="extendWest" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.east") }}</span>
-                <input v-model.number="extendEast" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.south") }}</span>
-                <input v-model.number="extendSouth" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.north") }}</span>
-                <input v-model.number="extendNorth" type="number" step="0.0001" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.minZoom") }}</span>
-                <input v-model.number="extendMinZoom" type="number" min="0" max="22" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-              <label class="flex flex-col gap-0.5">
-                <span style="color: var(--color-text-muted)">{{ t("taskDetail.incremental.maxZoom") }}</span>
-                <input v-model.number="extendMaxZoom" type="number" min="0" max="22" class="rounded border border-slate-300 px-2 py-1" />
-              </label>
-            </div>
-            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
-            <div class="flex justify-end gap-2 mt-1">
-              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
-              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy" @click="runExtend">
-                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.extendConfirm") }}
-              </button>
-            </div>
-          </template>
-
-          <!-- 从其他任务导入 -->
-          <template v-else>
-            <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
-              {{ t("taskDetail.incremental.importDesc") }}
-            </p>
-            <p v-if="importCandidates.length === 0" class="text-xs italic" style="color: var(--color-text-muted)">
-              {{ t("taskDetail.incremental.importNoneFound") }}
-            </p>
-            <div v-else class="max-h-60 overflow-y-auto rounded border border-slate-200 divide-y divide-slate-100">
+          <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
+            {{ t("taskDetail.incremental.importDesc") }}
+          </p>
+          <p v-if="importCandidates.length === 0" class="text-xs italic" style="color: var(--color-text-muted)">
+            {{ t("taskDetail.incremental.importNoneFound") }}
+          </p>
+          <div v-else class="flex gap-3 max-h-72">
+            <!-- 左：候选任务列表 -->
+            <div class="flex-1 min-w-0 overflow-y-auto rounded border border-slate-200 divide-y divide-slate-100">
               <label
                 v-for="cand in importCandidates"
                 :key="cand.id"
@@ -1072,23 +965,47 @@ function logTime(iso: string) {
                   @change="previewImport"
                 />
                 <span class="flex-1 truncate" style="color: var(--color-text-primary)">{{ cand.name }}</span>
-                <span class="font-mono tabular-nums" style="color: var(--color-text-muted)">{{ formatCount(cand.downloadedTiles) }}</span>
+                <span class="font-mono tabular-nums text-[10px]" style="color: var(--color-text-muted)">
+                  z{{ cand.minZoom }}-{{ cand.maxZoom }} · {{ formatCount(cand.downloadedTiles) }}
+                </span>
               </label>
             </div>
-            <p v-if="importReusableCount !== null" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700">
-              {{ t("taskDetail.incremental.importReusable", { count: importReusableCount }) }}
-            </p>
-            <p v-else-if="importCountLoading" class="text-xs" style="color: var(--color-text-muted)">
-              {{ t("taskDetail.incremental.importCounting") }}
-            </p>
-            <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
-            <div class="flex justify-end gap-2 mt-1">
-              <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
-              <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy || !importSourceId" @click="runImport">
-                {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.importConfirm") }}
-              </button>
+            <!-- 右：所选任务的缩略预览 -->
+            <div
+              class="w-[200px] shrink-0 rounded border border-slate-200 overflow-hidden bg-slate-50 flex items-center justify-center"
+              style="height: auto"
+            >
+              <MiniMapPreview
+                v-if="selectedCandidate"
+                :key="selectedCandidate.id"
+                :task-id="selectedCandidate.id"
+                :bounds="{
+                  west: selectedCandidate.boundsWest,
+                  east: selectedCandidate.boundsEast,
+                  south: selectedCandidate.boundsSouth,
+                  north: selectedCandidate.boundsNorth,
+                }"
+                :format="(() => { try { return JSON.parse(selectedCandidate.sourceConfig).format ?? 'png' } catch { return 'png' } })()"
+                class="w-full h-full"
+              />
+              <span v-else class="text-[11px] px-2 text-center" style="color: var(--color-text-muted)">
+                {{ t("taskDetail.incremental.previewHint") }}
+              </span>
             </div>
-          </template>
+          </div>
+          <p v-if="importReusableCount !== null" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700">
+            {{ t("taskDetail.incremental.importReusable", { count: importReusableCount }) }}
+          </p>
+          <p v-else-if="importCountLoading" class="text-xs" style="color: var(--color-text-muted)">
+            {{ t("taskDetail.incremental.importCounting") }}
+          </p>
+          <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
+          <div class="flex justify-end gap-2 mt-1">
+            <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
+            <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy || !importSourceId" @click="runImport">
+              {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.importConfirm") }}
+            </button>
+          </div>
         </div>
       </div>
 

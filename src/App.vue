@@ -10,6 +10,8 @@ import type { Map as MaplibreMap, LngLatBoundsLike } from "maplibre-gl";
 import type { Bounds, CrsType, TileSource } from "~/types/tile-source";
 import { useWizardState } from "~/composables/useWizardState";
 import { useTaskDetail } from "~/composables/useTaskDetail";
+import { useExtendMode } from "~/composables/useExtendMode";
+import { useToast } from "~/composables/useToast";
 import { initUpdateListener, destroyUpdateListener } from "~/composables/useUpdateState";
 import { i18n } from "~/i18n";
 import AppHeader from "~/components/AppHeader.vue";
@@ -207,6 +209,55 @@ function onNavChange(key: string) {
 const { showWizard, openWizard, closeWizard } = useWizardState();
 const previewSource = ref<TileSource | null>(null);
 const downloadSetupMode = computed(() => !!previewSource.value);
+
+// ─── F2 扩展任务（地图绘制模式） ────────────────────────────────────────────
+const {
+  context: extendCtx,
+  isActive: extendActive,
+  cancel: cancelExtend,
+  unionBounds,
+} = useExtendMode();
+const extendBusy = ref(false);
+const extendError = ref<string>("");
+const { addToast: pushToast2 } = useToast();
+
+async function confirmExtend() {
+  if (!extendCtx.value) return;
+  if (!drawnBounds.value) {
+    extendError.value = t("extendMode.errorNoArea");
+    return;
+  }
+  extendBusy.value = true;
+  extendError.value = "";
+  try {
+    const merged = unionBounds(extendCtx.value.originalBounds, drawnBounds.value);
+    const [added] = await invoke<[number, number]>("update_task_geometry", {
+      args: {
+        taskId: extendCtx.value.taskId,
+        boundsWest: merged.west,
+        boundsEast: merged.east,
+        boundsSouth: merged.south,
+        boundsNorth: merged.north,
+        minZoom: extendCtx.value.originalMinZoom,
+        maxZoom: extendCtx.value.originalMaxZoom,
+        polygonWgs84: null,
+      },
+    });
+    pushToast2(t("extendMode.success", { added }), "success");
+    cancelExtend();
+    clearDrawn();
+  } catch (e: any) {
+    extendError.value = String(e);
+  } finally {
+    extendBusy.value = false;
+  }
+}
+
+function abortExtend() {
+  cancelExtend();
+  clearDrawn();
+  extendError.value = "";
+}
 
 // 区分向导上下文：task = 创建下载任务，layer = 添加图层
 const wizardContext = ref<"task" | "layer">("task");
@@ -614,13 +665,13 @@ function handleDetailDeleted() {
         <div class="relative w-full h-full">
           <MapContainer @ready="onMapReady" />
 
-          <!-- ─── 地图工具栏（仅在下载配置模式显示） ─── -->
+          <!-- ─── 地图工具栏（下载配置 + 扩展任务） ─── -->
           <div
-            v-if="downloadSetupMode && mapRef"
+            v-if="(downloadSetupMode || extendActive) && mapRef"
             class="absolute top-3 left-3 z-10 flex flex-col gap-1.5"
           >
             <button
-              :title="drawActive ? '取消框选' : '框选下载区域'"
+              :title="drawActive ? '取消框选' : '框选区域'"
               class="flex items-center justify-center size-9 rounded-lg shadow-sm border text-sm font-medium transition-colors"
               :class="
                 drawActive
@@ -640,6 +691,35 @@ function handleDetailDeleted() {
               @click="clearDrawn"
             >
               <Trash2 class="size-4" />
+            </button>
+          </div>
+
+          <!-- ─── F2 扩展任务 顶部横幅 ─── -->
+          <div
+            v-if="extendActive && extendCtx && mapRef"
+            class="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 px-4 py-2 rounded-lg shadow-lg bg-white border border-blue-200"
+          >
+            <div class="flex flex-col">
+              <span class="text-xs font-semibold text-blue-700">
+                {{ t("extendMode.banner", { name: extendCtx.taskName }) }}
+              </span>
+              <span class="text-[11px] text-slate-500">
+                {{ t("extendMode.hint") }}
+              </span>
+              <span v-if="extendError" class="text-[11px] text-red-600">{{ extendError }}</span>
+            </div>
+            <button
+              class="px-3 py-1 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+              @click="abortExtend"
+            >
+              {{ t("extendMode.cancel") }}
+            </button>
+            <button
+              class="px-3 py-1 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+              :disabled="extendBusy || !drawnBounds"
+              @click="confirmExtend"
+            >
+              {{ extendBusy ? t("extendMode.running") : t("extendMode.confirm") }}
             </button>
           </div>
 
@@ -666,6 +746,14 @@ function handleDetailDeleted() {
             :map="mapRef"
             :bounds="isImportedBounds ? drawnBounds : null"
             :polygon="isImportedBounds ? drawnPolygon : null"
+          />
+
+          <!-- 扩展任务模式：显示原始区域轮廓 -->
+          <BoundsRectOverlay
+            v-if="mapRef && extendActive && extendCtx"
+            :map="mapRef"
+            :bounds="extendCtx.originalBounds"
+            :polygon="extendCtx.originalPolygon"
           />
 
           <TileGrid

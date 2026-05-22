@@ -643,9 +643,20 @@ export default {
       importConfirm: "Import tiles",
       importedHint:
         "Imported {imported} tiles (pending before: {pendingBefore}).",
+      previewHint: "Pick a task on the left to preview",
       close: "Close",
       running: "Running…",
     },
+  },
+
+  extendMode: {
+    banner: "Extending: {name}",
+    hint: "Draw the additional area on the map, then click \"Confirm extend\".",
+    confirm: "Confirm extend",
+    cancel: "Cancel",
+    running: "Processing…",
+    errorNoArea: "Please draw the additional area on the map first.",
+    success: "Added {added} tiles to the task queue.",
   },
 
   publish: {

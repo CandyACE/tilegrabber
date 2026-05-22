@@ -628,9 +628,20 @@ export default {
       importCounting: "正在统计可复用瓦片…",
       importConfirm: "导入瓦片",
       importedHint: "已导入 {imported} 个瓦片（待下载数：{pendingBefore}）。",
+      previewHint: "选择左侧任务以预览",
       close: "关闭",
       running: "执行中…",
     },
+  },
+
+  extendMode: {
+    banner: "扩展任务：{name}",
+    hint: "请在地图上框选要追加的区域，再点击「确认扩展」。",
+    confirm: "确认扩展",
+    cancel: "取消",
+    running: "处理中…",
+    errorNoArea: "请先在地图上框选要追加的区域。",
+    success: "已新增 {added} 个瓦片到任务队列。",
   },
 
   publish: {
