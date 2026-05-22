@@ -95,8 +95,16 @@ async function loadAndRender(
   if (gen !== generation) return; // 异步回调过期
 
   ensureLayers(m);
+  let minLng = Infinity,
+    maxLng = -Infinity,
+    minLat = Infinity,
+    maxLat = -Infinity;
   const features: GeoJSON.Feature[] = coords.map((c) => {
     const b = tileBoundsWgs84(zoom, c.x, c.y);
+    if (b.west < minLng) minLng = b.west;
+    if (b.east > maxLng) maxLng = b.east;
+    if (b.south < minLat) minLat = b.south;
+    if (b.north > maxLat) maxLat = b.north;
     return {
       type: "Feature",
       geometry: {
@@ -116,6 +124,21 @@ async function loadAndRender(
   });
   const src = m.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
   src?.setData({ type: "FeatureCollection", features });
+
+  // 一键缩放到失败瓦片区
+  if (features.length > 0 && isFinite(minLng) && isFinite(maxLng)) {
+    try {
+      m.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        { padding: 80, maxZoom: zoom + 1, duration: 600 },
+      );
+    } catch (e) {
+      console.warn("[FailedTilesLayer] fitBounds failed:", e);
+    }
+  }
 }
 
 watch(

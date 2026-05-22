@@ -592,9 +592,12 @@ export default {
     retryFailed: "Retry {count} Failed Tiles",
     failedView: {
       title: "Failed Tile Distribution",
-      hint: "Click a zoom level to highlight failed tiles on the map, or retry that level alone.",
+      hint: "Click a zoom level to highlight failed tiles on the map; retry individually or in bulk.",
       previewing: "previewing",
       retryThisLevel: "Retry this level",
+      selectAll: "Select all",
+      retrySelected: "Retry selected ({count})",
+      retrying: "Retrying…",
     },
     deleteTask: "Delete Task",
     confirmDelete:

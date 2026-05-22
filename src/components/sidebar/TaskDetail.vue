@@ -223,12 +223,23 @@ interface FailedZoomStat {
   count: number;
 }
 const failedSummary = ref<FailedZoomStat[]>([]);
+const failedSelected = ref<Set<number>>(new Set());
+const failedBatchBusy = ref(false);
 const { view: failedView, show: showFailedView, hide: hideFailedView } =
   useFailedTilesView();
+
+const failedSelectedTotal = computed(() => {
+  let total = 0;
+  for (const row of failedSummary.value) {
+    if (failedSelected.value.has(row.zoom)) total += row.count;
+  }
+  return total;
+});
 
 async function loadFailedSummary() {
   if (!task.value || task.value.failedTiles <= 0) {
     failedSummary.value = [];
+    failedSelected.value = new Set();
     return;
   }
   try {
@@ -236,9 +247,15 @@ async function loadFailedSummary() {
       "failed_tiles_summary",
       { taskId: props.taskId },
     );
+    // 修剪已不存在的层级
+    const valid = new Set(failedSummary.value.map((r) => r.zoom));
+    const next = new Set<number>();
+    for (const z of failedSelected.value) if (valid.has(z)) next.add(z);
+    failedSelected.value = next;
   } catch (e) {
     console.error("[TaskDetail] failed_tiles_summary failed:", e);
     failedSummary.value = [];
+    failedSelected.value = new Set();
   }
 }
 
@@ -247,6 +264,21 @@ function toggleFailedZoom(zoom: number) {
     hideFailedView();
   } else {
     showFailedView(props.taskId, zoom);
+  }
+}
+
+function toggleFailedZoomSelected(zoom: number) {
+  const s = new Set(failedSelected.value);
+  if (s.has(zoom)) s.delete(zoom);
+  else s.add(zoom);
+  failedSelected.value = s;
+}
+
+function toggleFailedSelectAll() {
+  if (failedSelected.value.size === failedSummary.value.length) {
+    failedSelected.value = new Set();
+  } else {
+    failedSelected.value = new Set(failedSummary.value.map((r) => r.zoom));
   }
 }
 
@@ -259,6 +291,33 @@ async function retryFailedAtZoom(zoom: number) {
   await loadTask();
   await loadFailedSummary();
 }
+
+async function retryFailedSelected() {
+  if (failedSelected.value.size === 0 || failedBatchBusy.value) return;
+  failedBatchBusy.value = true;
+  try {
+    // 全选时一次性 retry_failed_tiles(zoom=undefined) 重置所有
+    if (failedSelected.value.size === failedSummary.value.length) {
+      await invoke("retry_failed_tiles", { taskId: props.taskId }).catch(
+        console.error,
+      );
+    } else {
+      // 部分选中：每层单独重置（数量通常 <10）
+      for (const z of failedSelected.value) {
+        await invoke("retry_failed_tiles", {
+          taskId: props.taskId,
+          zoom: z,
+        }).catch(console.error);
+      }
+    }
+    hideFailedView();
+    await loadTask();
+    await loadFailedSummary();
+  } finally {
+    failedBatchBusy.value = false;
+  }
+}
+
 
 // ─── F 套件：增量下载 ──────────────────────────────────────────────────────
 type IncrementalDialog = null | "import";
@@ -968,6 +1027,40 @@ function logTime(iso: string) {
         <p class="text-[11px]" style="color: var(--color-text-muted)">
           {{ t("taskDetail.failedView.hint") }}
         </p>
+
+        <!-- 全选 + 批量重试栏 -->
+        <div class="flex items-center justify-between gap-2 px-1">
+          <label class="flex items-center gap-1.5 text-[11px] cursor-pointer" style="color: var(--color-text-primary)">
+            <input
+              type="checkbox"
+              class="size-3 cursor-pointer"
+              :checked="
+                failedSelected.size === failedSummary.length &&
+                failedSummary.length > 0
+              "
+              :indeterminate.prop="
+                failedSelected.size > 0 &&
+                failedSelected.size < failedSummary.length
+              "
+              @change="toggleFailedSelectAll"
+            />
+            <span>{{ t("taskDetail.failedView.selectAll") }}</span>
+          </label>
+          <button
+            class="text-[11px] px-2 py-0.5 rounded bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors"
+            :disabled="failedSelected.size === 0 || failedBatchBusy"
+            @click="retryFailedSelected"
+          >
+            {{
+              failedBatchBusy
+                ? t("taskDetail.failedView.retrying")
+                : t("taskDetail.failedView.retrySelected", {
+                    count: failedSelectedTotal,
+                  })
+            }}
+          </button>
+        </div>
+
         <ul class="flex flex-col gap-1">
           <li
             v-for="row in failedSummary"
@@ -979,6 +1072,12 @@ function logTime(iso: string) {
                 : 'border-slate-200 bg-white'
             "
           >
+            <input
+              type="checkbox"
+              class="size-3 cursor-pointer"
+              :checked="failedSelected.has(row.zoom)"
+              @change="toggleFailedZoomSelected(row.zoom)"
+            />
             <button
               class="flex items-center gap-2 flex-1 text-left"
               @click="toggleFailedZoom(row.zoom)"

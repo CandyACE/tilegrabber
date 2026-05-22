@@ -582,9 +582,12 @@ export default {
     retryFailed: "重试 {count} 个失败瓦片",
     failedView: {
       title: "失败瓦片分布",
-      hint: "点击层级在地图上高亮失败瓦片；或单独重试该层级。",
+      hint: "点击层级在地图上高亮失败瓦片；或单独/批量重试。",
       previewing: "正在预览",
       retryThisLevel: "重试本层",
+      selectAll: "全选",
+      retrySelected: "重试所选 ({count})",
+      retrying: "重试中…",
     },
     deleteTask: "删除任务",
     confirmDelete: "确定删除此任务？瓦片数据将一并清除，此操作不可撤销。",
