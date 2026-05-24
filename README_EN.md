@@ -54,13 +54,19 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 - Pause, resume, cancel, or delete tasks at any time
 - Import and export tasks as `.tgr` files (SQLite-based binary format, zero-copy fast transfer)
 
+### Tile Types
+
+- **Raster tiles** — PNG / JPEG / WebP; full support for download, preview, clipping, and all export formats
+- **Vector tiles (MVT / PBF)** — Sources containing `pbf` / `mvt` / `vector` keywords are auto-detected; the download pipeline skips pixel post-processing (GCJ-02 shift correction, tile_clip); preview auto-generates a grayscale skeleton style (fill + line + circle); exportable to MBTiles (with `vector_layers` metadata + automatic gzip) and PMTiles (`TileType::Mvt` + `Compression::Gzip`)
+
 ### Export Formats
 
-| Format                | Description                                                       |
-| --------------------- | ----------------------------------------------------------------- |
-| Directory             | Tiles stored as `z/x/y.png` folder hierarchy                      |
-| **MBTiles**           | Single-file SQLite database; compatible with QGIS, MapTiler, etc. |
-| **GeoTIFF / BigTIFF** | Georeferenced raster image; supports files larger than 4 GB       |
+| Format                | Description                                                                       |
+| --------------------- | --------------------------------------------------------------------------------- |
+| Directory             | Tiles stored as `z/x/y.png` folder hierarchy                                      |
+| **MBTiles**           | Single-file SQLite database; compatible with QGIS, MapTiler, etc.; vector-capable |
+| **PMTiles**           | Cloud-native single-file format with HTTP Range support; vector-capable           |
+| **GeoTIFF / BigTIFF** | Georeferenced raster image; supports files larger than 4 GB; raster only          |
 
 ### Publishing
 
@@ -196,7 +202,7 @@ Then:
 │   └── src/
 │       ├── commands/     # Tauri commands (tasks, download, export, publish, updater, etc.)
 │       ├── download/     # Download engine (multi-thread, throttle, resume)
-│       ├── export/       # Export modules (directory, MBTiles, GeoTIFF)
+│       ├── export/       # Export modules (directory, MBTiles, PMTiles, GeoTIFF)
 │       ├── parser/       # Parsers (LRC/LRA, WMTS, web capture)
 │       └── server/       # Built-in TMS/WMTS HTTP server
 └── .github/workflows/    # CI/CD pipelines

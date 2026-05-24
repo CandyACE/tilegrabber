@@ -54,13 +54,19 @@
 - 支持暂停、继续、取消、删除任务
 - 外部 `.tgr` 任务文件的导入与导出（SQLite 格式，零拷贝高速传输）
 
+### 瓦片类型
+
+- **栅格瓦片**：PNG / JPEG / WebP，完整支持下载、预览、裁剪、所有导出格式
+- **矢量瓦片（MVT / PBF）**：自动识别 `pbf` / `mvt` / `vector` 关键字的源；下载流水线跳过像素后处理（GCJ02 纠偏、tile_clip）；预览自动生成灰白骨架样式（fill + line + circle）；支持导出为 MBTiles（含 `vector_layers` 元数据 + 自动 gzip 包装）和 PMTiles（`TileType::Mvt` + `Compression::Gzip`）
+
 ### 导出格式
 
-| 格式                  | 说明                                      |
-| --------------------- | ----------------------------------------- |
-| 本地文件夹            | 按 `z/x/y.png` 目录结构存储               |
-| **MBTiles**           | 单文件数据库，兼容 QGIS / MapTiler 等工具 |
-| **GeoTIFF / BigTIFF** | 地理参考栅格图像，支持超大体积（> 4 GB）  |
+| 格式                  | 说明                                                              |
+| --------------------- | ----------------------------------------------------------------- |
+| 本地文件夹            | 按 `z/x/y.png` 目录结构存储                                       |
+| **MBTiles**           | 单文件 SQLite 数据库，兼容 QGIS / MapTiler 等工具；支持矢量瓦片   |
+| **PMTiles**           | 云原生单文件格式，支持 HTTP Range 请求；支持矢量瓦片              |
+| **GeoTIFF / BigTIFF** | 地理参考栅格图像，支持超大体积（> 4 GB）；仅栅格                  |
 
 ### 发布服务
 
@@ -196,7 +202,7 @@ npx tauri signer generate -w "$HOME/.tauri/yourproject.key"
 │   └── src/
 │       ├── commands/     # Tauri 命令（任务、下载、导出、发布、更新等）
 │       ├── download/     # 下载引擎（多线程、限速、断点续传）
-│       ├── export/       # 导出模块（目录、MBTiles、GeoTIFF）
+│       ├── export/       # 导出模块（目录、MBTiles、PMTiles、GeoTIFF）
 │       ├── parser/       # 数据解析（LRC/LRA、WMTS、网页捕获）
 │       └── server/       # 内置 TMS/WMTS HTTP 服务
 └── .github/workflows/    # CI/CD 流水线
