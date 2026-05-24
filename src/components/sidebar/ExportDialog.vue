@@ -31,6 +31,7 @@ interface TaskInfo {
   boundsSouth: number;
   boundsNorth: number;
   crs?: string;
+  format?: string;
 }
 
 // ─── Props / Emits ─────────────────────────────────────────────────────────
@@ -63,6 +64,12 @@ const tiffOutputCrs = ref<string>("3857");
 const pmtilesDisabled = computed(
   () => (props.task.crs ?? "WEB_MERCATOR") !== "WEB_MERCATOR",
 );
+
+// 矢量瓦片任务：禁用 GeoTIFF（无栅格像素）、隐藏图像重编码与像素级裁剪
+const isVectorTask = computed(() => {
+  const f = (props.task.format ?? "").toLowerCase();
+  return f === "pbf" || f === "mvt";
+});
 
 watch(
   () => props.open,
@@ -384,13 +391,19 @@ const formatLabel = computed(
                 <button
                   class="group relative flex flex-col gap-2 rounded-xl p-3 border-2 text-left transition-all duration-200"
                   :class="
-                    format === 'tiff'
+                    isVectorTask
+                      ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
+                      : format === 'tiff'
                       ? 'border-emerald-500 bg-emerald-50 shadow-sm shadow-emerald-100'
                       : 'border-slate-200 hover:border-slate-300 bg-white'
                   "
+                  :disabled="isVectorTask"
+                  :title="isVectorTask ? t('export.vectorNoTiff') : ''"
                   @click="
-                    format = 'tiff';
-                    destPath = '';
+                    if (!isVectorTask) {
+                      format = 'tiff';
+                      destPath = '';
+                    }
                   "
                 >
                   <div class="flex items-center gap-2">
@@ -498,6 +511,15 @@ const formatLabel = computed(
                   </p>
                 </button>
               </div>
+            </div>
+
+            <!-- 矢量瓦片说明 -->
+            <div
+              v-if="isVectorTask"
+              class="flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-[11px] leading-relaxed text-violet-700"
+            >
+              <Info class="size-3.5 shrink-0 mt-0.5 text-violet-500" />
+              <span>{{ t("export.vectorNotice") }}</span>
             </div>
 
             <!-- 路径选择 -->
@@ -680,10 +702,10 @@ const formatLabel = computed(
               </div>
             </Transition>
 
-            <!-- 图像重编码（压缩/品质）选项（仅 mbtiles / directory） -->
+            <!-- 图像重编码（压缩/品质）选项（仅 mbtiles / directory，矢量瓦片不适用） -->
             <Transition name="tiff-row">
               <div
-                v-if="format !== 'tiff'"
+                v-if="format !== 'tiff' && !isVectorTask"
                 class="rounded-xl border overflow-hidden"
                 style="border-color: var(--color-border-subtle)"
               >
@@ -772,8 +794,9 @@ const formatLabel = computed(
               </div>
             </Transition>
 
-            <!-- 裁剪选项 -->
+            <!-- 裁剪选项（矢量瓦片不适用：像素级裁剪对矢量几何无意义）-->
             <div
+              v-if="!isVectorTask"
               class="flex items-center justify-between gap-3 rounded-xl border p-3"
               style="
                 border-color: var(--color-border-subtle);

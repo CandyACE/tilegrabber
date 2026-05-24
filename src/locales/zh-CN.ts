@@ -735,6 +735,9 @@ export default {
     clipDefaultDesc: "仅导出完全位于任务选框内的瓦片，排除边缘相交瓦片",
     reEncodeLabel: "图像重编码（压缩/品质）",
     reEncodeDesc: "重新编码瓦片以调整文件大小，会增加导出耗时",
+    vectorNotice:
+      "矢量瓦片任务：导出会自动按 MBTiles/PMTiles 规范 gzip 包装并写入 vector_layers 元数据；像素级裁剪与图像重编码不适用，已隐藏。",
+    vectorNoTiff: "矢量瓦片不支持导出为 GeoTIFF（无栅格像素）",
     jpegQuality: "JPEG 品质",
     pngLevel: "PNG 压缩级别",
     startExport: "开始导出",

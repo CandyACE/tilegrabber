@@ -82,13 +82,24 @@ where
              ON tiles(zoom_level, tile_column, tile_row);",
     )?;
 
+    // ── 是否为矢量瓦片（MVT/PBF）─────────────────────────────────────────────
+    // 矢量瓦片需要：
+    //   * 跳过 tile_clip（像素级裁剪不适用于矢量几何）
+    //   * 跳过 JPEG/PNG 重编码
+    //   * tile_data 入库前必须 gzip 包装（MBTiles 规范要求）
+    //   * metadata.json 字段写入 vector_layers 描述（提取自首块瓦片的真实 layer 名）
+    let format_lc = format.to_ascii_lowercase();
+    let is_vector = matches!(format_lc.as_str(), "pbf" | "mvt");
+    let mbtiles_format = if is_vector { "pbf".to_string() } else { format_lc.clone() };
+    let mbtiles_type = if is_vector { "overlay" } else { "baselayer" };
+
     // ── 写入 metadata ────────────────────────────────────────────────────────
     let [west, south, east, north] = bounds;
     let center_lon = (west + east) / 2.0;
     let center_lat = (south + north) / 2.0;
     let center_zoom = (min_zoom + max_zoom) / 2;
 
-    let meta_entries: &[(&str, String)] = &[
+    let mut meta_entries: Vec<(&str, String)> = vec![
         ("name", task_name.to_string()),
         (
             "description",
@@ -105,13 +116,56 @@ where
         ),
         ("minzoom", min_zoom.to_string()),
         ("maxzoom", max_zoom.to_string()),
-        ("format", format.to_string()),
-        ("type", "baselayer".into()),
+        ("format", mbtiles_format.clone()),
+        ("type", mbtiles_type.into()),
     ];
+
+    // ── 矢量瓦片：扫描若干样本瓦片，提取 layer 名，生成 vector_layers JSON ──
+    if is_vector {
+        let mut layer_names = std::collections::BTreeSet::<String>::new();
+        let mut sample_stmt = src.prepare(
+            "SELECT tile_data FROM tiles ORDER BY zoom_level DESC LIMIT 16",
+        )?;
+        let rows = sample_stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
+        for row in rows.flatten() {
+            let decoded = crate::export::mvt_scan::maybe_gunzip(&row);
+            for n in crate::export::mvt_scan::extract_layer_names(decoded.as_ref()) {
+                layer_names.insert(n);
+            }
+            if layer_names.len() > 64 {
+                break;
+            }
+        }
+
+        let layers_json: Vec<serde_json::Value> = if layer_names.is_empty() {
+            vec![serde_json::json!({
+                "id": "default",
+                "description": "Vector layer (auto-generated placeholder; original style spec unavailable)",
+                "minzoom": min_zoom,
+                "maxzoom": max_zoom,
+                "fields": {}
+            })]
+        } else {
+            layer_names
+                .into_iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "id": id,
+                        "description": "",
+                        "minzoom": min_zoom,
+                        "maxzoom": max_zoom,
+                        "fields": {}
+                    })
+                })
+                .collect()
+        };
+        let json_meta = serde_json::json!({ "vector_layers": layers_json });
+        meta_entries.push(("json", json_meta.to_string()));
+    }
 
     {
         let tx = dst.unchecked_transaction()?;
-        for (k, v) in meta_entries {
+        for (k, v) in &meta_entries {
             tx.execute(
                 "INSERT OR REPLACE INTO metadata(name, value) VALUES(?1, ?2)",
                 params![k, v],
@@ -179,6 +233,13 @@ where
         let processed: Vec<Result<Option<(i64, i64, i64, std::borrow::Cow<[u8]>)>>> = batch
             .par_iter()
             .map(|(z, x, y, data)| {
+                // 矢量瓦片：跳过所有像素级裁剪 / 重编码，仅做 gzip 包装
+                if is_vector {
+                    let wrapped = crate::export::mvt_scan::gzip_wrap(data);
+                    let tms_y = (1i64 << z) - 1 - y;
+                    return Ok(Some((*z, *x, tms_y, std::borrow::Cow::Owned(wrapped))));
+                }
+
                 let write_data = if need_clip {
                     if let Some(poly) = polygon {
                         match crate::export::tile_clip::clip_tile_to_polygon_crs(

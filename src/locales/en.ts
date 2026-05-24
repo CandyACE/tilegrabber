@@ -751,6 +751,9 @@ export default {
       "Only export tiles fully within the task bounding box, excluding edge-intersecting tiles",
     reEncodeLabel: "Re-encode images (compression/quality)",
     reEncodeDesc: "Re-encode tiles to adjust file size — increases export time",
+    vectorNotice:
+      "Vector tile task: export will gzip-wrap tiles and write vector_layers metadata per the MBTiles/PMTiles spec. Pixel-level clipping and image re-encoding don't apply and are hidden.",
+    vectorNoTiff: "Vector tiles can't be exported as GeoTIFF (no raster pixels)",
     jpegQuality: "JPEG Quality",
     pngLevel: "PNG Level",
     startExport: "Start Export",

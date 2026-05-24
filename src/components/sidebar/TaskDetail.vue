@@ -1393,6 +1393,13 @@ function logTime(iso: string) {
             return 'WEB_MERCATOR';
           }
         })(),
+        format: (() => {
+          try {
+            return JSON.parse(task.sourceConfig)?.format ?? 'png';
+          } catch {
+            return 'png';
+          }
+        })(),
       }"
       @close="showExport = false"
     />
