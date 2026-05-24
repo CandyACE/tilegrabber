@@ -47,6 +47,7 @@ Draw an area on the interactive map, choose zoom levels, and TileGrabber downloa
 - Intelligent rate limiting with randomised delays to mimic natural browsing and reduce ban risk
 - User-Agent rotation
 - Real-time progress display, including a compact floating progress window
+- **Streaming clip pipeline**: when "Strict clip to task bounds" is enabled on a raster (non-GCJ02) task, boundary tiles are pixel-clipped concurrently while downloading — the task finishes ready-to-use with no separate "clipping" stage
 
 ### Task Management
 

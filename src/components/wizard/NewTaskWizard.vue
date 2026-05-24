@@ -29,7 +29,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 type SourceType = "file" | "wmts" | "tms" | "web" | "mbtiles" | "preset";
 type Step = 1 | 2;
@@ -274,13 +274,18 @@ async function loadTilePreview(src: TileSource) {
   let lon = (b.east + b.west) / 2;
   const lonSpan = b.east - b.west;
   const latSpan = b.north - b.south;
-  // 近全球范围（例如默认基础图层预设）默认中心定位在中国，避免落在大西洋空白海域
+  // 近全球范围（例如默认基础图层预设）：根据界面语言选择一个有陆地的中心点，避免落在大西洋空白海域
   const isNearGlobal =
     lonSpan > 300 ||
     (b.west < -150 && b.east > 150 && latSpan > 140);
   if (isNearGlobal) {
-    lat = 35;
-    lon = 104;
+    if (locale.value.startsWith("zh")) {
+      lat = 35;
+      lon = 104;
+    } else {
+      lat = 40;
+      lon = -3;
+    }
   }
   // Pick a zoom level appropriate for the area, then clamp to the source's actual range
   const lonSpanZ = lonSpan > 80 ? 4 : lonSpan > 20 ? 6 : 8;
@@ -1292,7 +1297,7 @@ function onLayerSelect(idx: number) {
 
         <div class="flex justify-end gap-2 pt-1">
           <UiButton variant="ghost" size="sm" @click="closeTokenDialog">
-            {{ t('common.cancel') }}
+            {{ t('wizard.cancel') }}
           </UiButton>
           <UiButton
             variant="default"
@@ -1301,7 +1306,7 @@ function onLayerSelect(idx: number) {
             @click="confirmTokenDialog"
           >
             <Loader2 v-if="tokenDialogLoading" class="w-3.5 h-3.5 mr-1 animate-spin" />
-            {{ t('common.confirm') }}
+            {{ t('wizard.confirm') }}
           </UiButton>
         </div>
       </div>

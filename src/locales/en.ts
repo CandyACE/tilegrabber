@@ -510,6 +510,10 @@ export default {
             q: "Download Rules (Time Window / Rate Limit)",
             a: 'In "Settings → Download Rules" you can configure allowed download time periods (e.g., only at night) and maximum tiles per second, suitable for scenarios with bandwidth limits or access policy restrictions.',
           },
+          {
+            q: "Strict Clipping & Streaming Clip Pipeline",
+            a: "Enable \"Strict clip to task bounds\" when creating a task to pixel-clip boundary tiles after download, making transparent pixels outside the task area so edges in exports/previews stay clean. Raster + non-GCJ02 tasks automatically use the \"streaming clip\" pipeline: boundary tiles are clipped concurrently as they download, so when the download finishes the result is ready — no separate \"clipping\" stage. GCJ02 sources (AMap / Tencent) still run the serial post-download clip because they require pixel offset compositing first. Vector tiles (pbf / mvt) skip pixel-level clipping entirely.",
+          },
         ],
       },
     ],

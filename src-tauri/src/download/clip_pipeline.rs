@@ -77,12 +77,13 @@ fn fetch_batch(
         .map(|i| format!("(?{},?{},?{})", i, i + 1, i + 2))
         .collect::<Vec<_>>()
         .join(",");
-    // SQLite 不直接支持 IN ((a,b,c), ...) 元组。改用临时 VALUES 子句 JOIN。
+    // SQLite 不直接支持 IN ((a,b,c), ...) 元组，也不支持 `(VALUES ...) AS k(z,x,y)`
+    // 形式的列别名；改用 CTE：`WITH k(z,x,y) AS (VALUES (?,?,?), ...)`。
     let sql = format!(
-        "SELECT t.rowid, t.zoom_level, t.tile_column, t.tile_row, t.tile_data
+        "WITH k(z,x,y) AS (VALUES {placeholders})
+         SELECT t.rowid, t.zoom_level, t.tile_column, t.tile_row, t.tile_data
          FROM tiles t
-         JOIN (VALUES {placeholders}) AS k(z,x,y)
-           ON t.zoom_level=k.z AND t.tile_column=k.x AND t.tile_row=k.y"
+         JOIN k ON t.zoom_level=k.z AND t.tile_column=k.x AND t.tile_row=k.y"
     );
     let mut stmt = conn.prepare(&sql)?;
     let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(coords.len() * 3);
