@@ -5,6 +5,11 @@ export default {
     diskFull: "磁盘空间不足（< 200 MB），任务已自动暂停，请清理磁盘后手动继续",
   },
 
+  common: {
+    cancel: "取消",
+    confirm: "确认",
+  },
+
   nav: {
     map: "地图",
     tasks: "任务",
@@ -220,7 +225,8 @@ export default {
       showLess: "收起",
       refresh: "刷新",
       orphansTitle: "发现孤儿瓦片文件 {count} 个 · {size}",
-      orphansHint: "这些 .tiles 文件位于默认目录中但未被任何任务引用，可能是误删任务后残留。",
+      orphansHint:
+        "这些 .tiles 文件位于默认目录中但未被任何任务引用，可能是误删任务后残留。",
       cleanupAll: "全部清理",
       cleaning: "清理中…",
       confirmCleanup: "将永久删除 {count} 个孤儿瓦片文件（{size}），确定继续？",
@@ -632,7 +638,8 @@ export default {
       extend: "扩展任务",
       import: "借数据",
       importTitle: "从其他任务导入瓦片",
-      importDesc: "从同源（相同 URL / 格式 / CRS）的且已完整下载的其他任务复制瓦片，跳过网络下载。",
+      importDesc:
+        "从同源（相同 URL / 格式 / CRS）的且已完整下载的其他任务复制瓦片，跳过网络下载。",
       importNoneFound: "未找到同源且已完成的可用任务。",
       importReusable: "可复用瓦片：{count} 个",
       importCounting: "正在统计可复用瓦片…",

@@ -225,8 +225,11 @@ interface FailedZoomStat {
 const failedSummary = ref<FailedZoomStat[]>([]);
 const failedSelected = ref<Set<number>>(new Set());
 const failedBatchBusy = ref(false);
-const { view: failedView, show: showFailedView, hide: hideFailedView } =
-  useFailedTilesView();
+const {
+  view: failedView,
+  show: showFailedView,
+  hide: hideFailedView,
+} = useFailedTilesView();
 
 const failedSelectedTotal = computed(() => {
   let total = 0;
@@ -260,7 +263,10 @@ async function loadFailedSummary() {
 }
 
 function toggleFailedZoom(zoom: number) {
-  if (failedView.value?.taskId === props.taskId && failedView.value.zoom === zoom) {
+  if (
+    failedView.value?.taskId === props.taskId &&
+    failedView.value.zoom === zoom
+  ) {
     hideFailedView();
   } else {
     showFailedView(props.taskId, zoom);
@@ -318,7 +324,6 @@ async function retryFailedSelected() {
   }
 }
 
-
 // ─── F 套件：增量下载 ──────────────────────────────────────────────────────
 type IncrementalDialog = null | "import";
 const incrementalDialog = ref<IncrementalDialog>(null);
@@ -364,7 +369,8 @@ const importSourceId = ref<string | null>(null);
 const importReusableCount = ref<number | null>(null);
 const importCountLoading = ref(false);
 const selectedCandidate = computed<BackendTask | null>(
-  () => importCandidates.value.find((c) => c.id === importSourceId.value) ?? null,
+  () =>
+    importCandidates.value.find((c) => c.id === importSourceId.value) ?? null,
 );
 async function openImportDialog() {
   if (!task.value) return;
@@ -1011,10 +1017,16 @@ function logTime(iso: string) {
       <div
         v-if="task.failedTiles > 0 && failedSummary.length > 0"
         class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
-        style="border-color: var(--color-border); background: var(--color-surface)"
+        style="
+          border-color: var(--color-border);
+          background: var(--color-surface);
+        "
       >
         <div class="flex items-center justify-between">
-          <p class="text-xs font-semibold" style="color: var(--color-text-primary)">
+          <p
+            class="text-xs font-semibold"
+            style="color: var(--color-text-primary)"
+          >
             {{ t("taskDetail.failedView.title") }}
           </p>
           <span
@@ -1030,7 +1042,10 @@ function logTime(iso: string) {
 
         <!-- 全选 + 批量重试栏 -->
         <div class="flex items-center justify-between gap-2 px-1">
-          <label class="flex items-center gap-1.5 text-[11px] cursor-pointer" style="color: var(--color-text-primary)">
+          <label
+            class="flex items-center gap-1.5 text-[11px] cursor-pointer"
+            style="color: var(--color-text-primary)"
+          >
             <input
               type="checkbox"
               class="size-3 cursor-pointer"
@@ -1067,7 +1082,9 @@ function logTime(iso: string) {
             :key="row.zoom"
             class="flex items-center justify-between gap-2 rounded px-2 py-1 border"
             :class="
-              failedView && failedView.taskId === task.id && failedView.zoom === row.zoom
+              failedView &&
+              failedView.taskId === task.id &&
+              failedView.zoom === row.zoom
                 ? 'border-red-300 bg-red-50'
                 : 'border-slate-200 bg-white'
             "
@@ -1082,10 +1099,15 @@ function logTime(iso: string) {
               class="flex items-center gap-2 flex-1 text-left"
               @click="toggleFailedZoom(row.zoom)"
             >
-              <span class="font-mono text-xs" style="color: var(--color-text-primary)">
+              <span
+                class="font-mono text-xs"
+                style="color: var(--color-text-primary)"
+              >
                 z{{ row.zoom }}
               </span>
-              <span class="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-semibold">
+              <span
+                class="px-1.5 py-0.5 rounded-full bg-red-500 text-white text-[10px] font-semibold"
+              >
                 {{ row.count }}
               </span>
             </button>
@@ -1103,9 +1125,15 @@ function logTime(iso: string) {
       <div
         v-if="isCompleted"
         class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
-        style="border-color: var(--color-border); background: var(--color-surface)"
+        style="
+          border-color: var(--color-border);
+          background: var(--color-surface);
+        "
       >
-        <p class="text-xs font-semibold" style="color: var(--color-text-primary)">
+        <p
+          class="text-xs font-semibold"
+          style="color: var(--color-text-primary)"
+        >
           {{ t("taskDetail.incremental.title") }}
         </p>
         <div class="grid grid-cols-2 gap-1.5">
@@ -1137,23 +1165,38 @@ function logTime(iso: string) {
           style="border-color: var(--color-border)"
         >
           <div class="flex items-center justify-between">
-            <p class="text-sm font-semibold" style="color: var(--color-text-primary)">
+            <p
+              class="text-sm font-semibold"
+              style="color: var(--color-text-primary)"
+            >
               {{ t("taskDetail.incremental.importTitle") }}
             </p>
-            <button class="p-1 rounded hover:bg-slate-100" @click="incrementalDialog = null">
+            <button
+              class="p-1 rounded hover:bg-slate-100"
+              @click="incrementalDialog = null"
+            >
               <X class="size-4" />
             </button>
           </div>
 
-          <p class="text-xs leading-relaxed" style="color: var(--color-text-muted)">
+          <p
+            class="text-xs leading-relaxed"
+            style="color: var(--color-text-muted)"
+          >
             {{ t("taskDetail.incremental.importDesc") }}
           </p>
-          <p v-if="importCandidates.length === 0" class="text-xs italic" style="color: var(--color-text-muted)">
+          <p
+            v-if="importCandidates.length === 0"
+            class="text-xs italic"
+            style="color: var(--color-text-muted)"
+          >
             {{ t("taskDetail.incremental.importNoneFound") }}
           </p>
           <div v-else class="flex gap-3 max-h-72">
             <!-- 左：候选任务列表 -->
-            <div class="flex-1 min-w-0 overflow-y-auto rounded border border-slate-200 divide-y divide-slate-100">
+            <div
+              class="flex-1 min-w-0 overflow-y-auto rounded border border-slate-200 divide-y divide-slate-100"
+            >
               <label
                 v-for="cand in importCandidates"
                 :key="cand.id"
@@ -1165,9 +1208,17 @@ function logTime(iso: string) {
                   v-model="importSourceId"
                   @change="previewImport"
                 />
-                <span class="flex-1 truncate" style="color: var(--color-text-primary)">{{ cand.name }}</span>
-                <span class="font-mono tabular-nums text-[10px]" style="color: var(--color-text-muted)">
-                  z{{ cand.minZoom }}-{{ cand.maxZoom }} · {{ formatCount(cand.downloadedTiles) }}
+                <span
+                  class="flex-1 truncate"
+                  style="color: var(--color-text-primary)"
+                  >{{ cand.name }}</span
+                >
+                <span
+                  class="font-mono tabular-nums text-[10px]"
+                  style="color: var(--color-text-muted)"
+                >
+                  z{{ cand.minZoom }}-{{ cand.maxZoom }} ·
+                  {{ formatCount(cand.downloadedTiles) }}
                 </span>
               </label>
             </div>
@@ -1186,25 +1237,70 @@ function logTime(iso: string) {
                   south: selectedCandidate.boundsSouth,
                   north: selectedCandidate.boundsNorth,
                 }"
-                :format="(() => { try { return JSON.parse(selectedCandidate.sourceConfig).format ?? 'png' } catch { return 'png' } })()"
+                :format="
+                  (() => {
+                    try {
+                      return (
+                        JSON.parse(selectedCandidate.sourceConfig).format ??
+                        'png'
+                      );
+                    } catch {
+                      return 'png';
+                    }
+                  })()
+                "
                 class="w-full h-full"
               />
-              <span v-else class="text-[11px] px-2 text-center" style="color: var(--color-text-muted)">
+              <span
+                v-else
+                class="text-[11px] px-2 text-center"
+                style="color: var(--color-text-muted)"
+              >
                 {{ t("taskDetail.incremental.previewHint") }}
               </span>
             </div>
           </div>
-          <p v-if="importReusableCount !== null" class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700">
-            {{ t("taskDetail.incremental.importReusable", { count: importReusableCount }) }}
+          <p
+            v-if="importReusableCount !== null"
+            class="text-xs px-2 py-1 rounded bg-blue-50 text-blue-700"
+          >
+            {{
+              t("taskDetail.incremental.importReusable", {
+                count: importReusableCount,
+              })
+            }}
           </p>
-          <p v-else-if="importCountLoading" class="text-xs" style="color: var(--color-text-muted)">
+          <p
+            v-else-if="importCountLoading"
+            class="text-xs"
+            style="color: var(--color-text-muted)"
+          >
             {{ t("taskDetail.incremental.importCounting") }}
           </p>
-          <p v-if="incrementalMessage" class="text-xs px-2 py-1 rounded bg-slate-50" style="color: var(--color-text-primary)">{{ incrementalMessage }}</p>
+          <p
+            v-if="incrementalMessage"
+            class="text-xs px-2 py-1 rounded bg-slate-50"
+            style="color: var(--color-text-primary)"
+          >
+            {{ incrementalMessage }}
+          </p>
           <div class="flex justify-end gap-2 mt-1">
-            <button class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" @click="incrementalDialog = null">{{ t("taskDetail.incremental.close") }}</button>
-            <button class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50" :disabled="incrementalBusy || !importSourceId" @click="runImport">
-              {{ incrementalBusy ? t("taskDetail.incremental.running") : t("taskDetail.incremental.importConfirm") }}
+            <button
+              class="px-3 py-1.5 text-xs rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50"
+              @click="incrementalDialog = null"
+            >
+              {{ t("taskDetail.incremental.close") }}
+            </button>
+            <button
+              class="px-3 py-1.5 text-xs rounded-md bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50"
+              :disabled="incrementalBusy || !importSourceId"
+              @click="runImport"
+            >
+              {{
+                incrementalBusy
+                  ? t("taskDetail.incremental.running")
+                  : t("taskDetail.incremental.importConfirm")
+              }}
             </button>
           </div>
         </div>

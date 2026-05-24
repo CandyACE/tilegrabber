@@ -7,6 +7,11 @@ export default {
       "Disk space low (< 200 MB) — task paused automatically. Free up space and resume manually.",
   },
 
+  common: {
+    cancel: "Cancel",
+    confirm: "Confirm",
+  },
+
   nav: {
     map: "Map",
     tasks: "Tasks",
@@ -661,7 +666,7 @@ export default {
 
   extendMode: {
     banner: "Extending: {name}",
-    hint: "Draw the additional area on the map, then click \"Confirm extend\".",
+    hint: 'Draw the additional area on the map, then click "Confirm extend".',
     confirm: "Confirm extend",
     cancel: "Cancel",
     running: "Processing…",

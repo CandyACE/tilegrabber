@@ -371,15 +371,22 @@ function removePreviewLayer(map: MaplibreMap) {
 function fitToBounds(map: MaplibreMap, bounds: Bounds) {
   const { west, east, south, north } = bounds;
   if (west < east && south < north) {
-    // 如果当前相机中心已在图层范围内，无需飞行
-    const center = map.getCenter();
-    if (
-      center.lng >= west &&
-      center.lng <= east &&
-      center.lat >= south &&
-      center.lat <= north
-    ) {
-      return;
+    // 近似全球范围（覆盖大半个地球）→ 强制 fitBounds，避免视点停留在初始的「中国中心」
+    const isNearlyGlobal =
+      east - west > 300 || (west < -150 && east > 150 && north - south > 140);
+
+    if (!isNearlyGlobal) {
+      // 仅在「非全球」图层时使用「相机已在范围内则免飞」的优化：
+      // 否则任何子区域都会触发 fit，可能反复跳动
+      const center = map.getCenter();
+      if (
+        center.lng >= west &&
+        center.lng <= east &&
+        center.lat >= south &&
+        center.lat <= north
+      ) {
+        return;
+      }
     }
     map.fitBounds(
       [west, south, east, north] as [number, number, number, number],
