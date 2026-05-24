@@ -270,9 +270,18 @@ async function loadTilePreview(src: TileSource) {
   previewLoading.value = true;
 
   const b = src.bounds;
-  const lat = (b.north + b.south) / 2;
-  const lon = (b.east + b.west) / 2;
+  let lat = (b.north + b.south) / 2;
+  let lon = (b.east + b.west) / 2;
   const lonSpan = b.east - b.west;
+  const latSpan = b.north - b.south;
+  // 近全球范围（例如默认基础图层预设）默认中心定位在中国，避免落在大西洋空白海域
+  const isNearGlobal =
+    lonSpan > 300 ||
+    (b.west < -150 && b.east > 150 && latSpan > 140);
+  if (isNearGlobal) {
+    lat = 35;
+    lon = 104;
+  }
   // Pick a zoom level appropriate for the area, then clamp to the source's actual range
   const lonSpanZ = lonSpan > 80 ? 4 : lonSpan > 20 ? 6 : 8;
   let minZ = src.min_zoom ?? 0;
@@ -488,18 +497,15 @@ function onLayerSelect(idx: number) {
     >
       <Transition name="modal-panel" appear>
         <div
-          class="bg-white rounded-2xl shadow-xl flex flex-col w-full border transition-[max-width] duration-300"
+          class="bg-white rounded-2xl shadow-xl flex flex-col w-full border transition-[max-width] duration-300 overflow-hidden"
           :class="step === 2 ? 'max-w-190' : 'max-w-135'"
           style="max-height: 86vh; border-color: var(--color-border-subtle)"
         >
-          <!-- 顶部色带 + 头部 -->
+          <!-- 头部 -->
           <div
             class="relative px-6 pt-6 pb-4 border-b"
             style="border-color: var(--color-border-subtle)"
           >
-            <div
-              class="absolute inset-x-0 top-0 h-0.5 bg-linear-to-r from-blue-400 via-blue-500 to-indigo-500 rounded-t-2xl"
-            />
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-3">
                 <div
