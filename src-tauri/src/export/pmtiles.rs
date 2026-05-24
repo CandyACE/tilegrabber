@@ -43,6 +43,9 @@ where
         bail!("PMTiles 仅支持 WebMercator (EPSG:3857) 坐标系；当前任务为 WGS84，请改用 MBTiles 或目录导出");
     }
 
+    let format_lc = format.to_ascii_lowercase();
+    let is_vector = matches!(format_lc.as_str(), "pbf" | "mvt");
+
     // ── 打开源数据库（只读）──────────────────────────────────────────────────
     let src = Connection::open_with_flags(
         tile_store_path,
@@ -65,7 +68,7 @@ where
         )
         .map(|v| v == "1")
         .unwrap_or(false);
-    let need_clip = clip_to_bounds && !already_clipped;
+    let need_clip = clip_to_bounds && !already_clipped && !is_vector;
 
     // ── 几何 + 元数据 ────────────────────────────────────────────────────────
     let [west, south, east, north] = bounds;
@@ -73,22 +76,71 @@ where
     let center_lat = (south + north) / 2.0;
     let center_zoom = (min_zoom + max_zoom) / 2;
 
-    let tile_type = match format.to_ascii_lowercase().as_str() {
+    let tile_type = match format_lc.as_str() {
         "png" => TileType::Png,
         "jpg" | "jpeg" => TileType::Jpeg,
         "webp" => TileType::Webp,
+        "pbf" | "mvt" => TileType::Mvt,
         _ => TileType::Unknown,
     };
 
-    let metadata_json = serde_json::json!({
+    // 矢量瓦片：扫描首批样本提取 layer 名 -> vector_layers JSON 元数据
+    let vector_layers_json: Option<serde_json::Value> = if is_vector {
+        let mut layer_names = std::collections::BTreeSet::<String>::new();
+        let mut sample_stmt = src.prepare(
+            "SELECT tile_data FROM tiles ORDER BY zoom_level DESC LIMIT 16",
+        )?;
+        let rows = sample_stmt.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
+        for row in rows.flatten() {
+            let decoded = crate::export::mvt_scan::maybe_gunzip(&row);
+            for n in crate::export::mvt_scan::extract_layer_names(decoded.as_ref()) {
+                layer_names.insert(n);
+            }
+            if layer_names.len() > 64 {
+                break;
+            }
+        }
+        let layers: Vec<serde_json::Value> = if layer_names.is_empty() {
+            vec![serde_json::json!({
+                "id": "default",
+                "description": "Vector layer (auto-generated placeholder; original style spec unavailable)",
+                "minzoom": min_zoom,
+                "maxzoom": max_zoom,
+                "fields": {}
+            })]
+        } else {
+            layer_names
+                .into_iter()
+                .map(|id| {
+                    serde_json::json!({
+                        "id": id,
+                        "description": "",
+                        "minzoom": min_zoom,
+                        "maxzoom": max_zoom,
+                        "fields": {}
+                    })
+                })
+                .collect()
+        };
+        Some(serde_json::Value::Array(layers))
+    } else {
+        None
+    };
+
+    let mut metadata_obj = serde_json::json!({
         "name": task_name,
         "description": format!("Exported by TileGrabber from {task_name}"),
         "version": "1.0.0",
-        "format": format,
-        "type": "baselayer",
+        "format": if is_vector { "pbf" } else { format },
+        "type": if is_vector { "overlay" } else { "baselayer" },
         "attribution": "TileGrabber",
-    })
-    .to_string();
+    });
+    if let Some(vl) = vector_layers_json {
+        if let Some(obj) = metadata_obj.as_object_mut() {
+            obj.insert("vector_layers".into(), vl);
+        }
+    }
+    let metadata_json = metadata_obj.to_string();
 
     // ── 创建/覆盖目标 .pmtiles ───────────────────────────────────────────────
     if dest_path.exists() {
@@ -96,15 +148,21 @@ where
     }
     let out_file = File::create(dest_path).context("创建 PMTiles 文件失败")?;
 
-    // 栅格瓦片本身已压缩（PNG/JPEG/WebP），tile_compression 必须设为 None
-    // 否则浏览器/解析器会试图二次解压，导致内容错乱。
+    // 栅格瓦片本身已压缩（PNG/JPEG/WebP），tile_compression 必须设为 None；
+    // 矢量瓦片（MVT/PBF）按 PMTiles 规范必须 gzip — 由 writer 自动包装
+    let tile_compression = if is_vector {
+        Compression::Gzip
+    } else {
+        Compression::None
+    };
+
     let mut writer = PmTilesWriter::new(tile_type)
         .min_zoom(min_zoom)
         .max_zoom(max_zoom)
         .bounds(west, south, east, north)
         .center(center_lon, center_lat)
         .center_zoom(center_zoom)
-        .tile_compression(Compression::None)
+        .tile_compression(tile_compression)
         .metadata(&metadata_json)
         .create(out_file)
         .map_err(|e| anyhow!("初始化 PMTiles writer 失败: {e}"))?;
@@ -170,6 +228,24 @@ where
                 Ok(d) => d,
                 Err(_) => continue,
             };
+
+            // 矢量瓦片：跳过 clip/reencode，确保数据是 raw（未 gzip）protobuf
+            // —— PMTiles writer 配置了 Compression::Gzip 会自动包装；若 blob 已 gzip 需先解开
+            if is_vector {
+                let raw = crate::export::mvt_scan::maybe_gunzip(&data);
+                let coord = match TileCoord::new(z, x, y) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                writer
+                    .add_tile(coord, raw.as_ref())
+                    .map_err(|e| anyhow!("写入矢量瓦片失败 (z={z}, x={x}, y={y}): {e}"))?;
+                written += 1;
+                if written % 64 == 0 {
+                    progress_cb(written, total);
+                }
+                continue;
+            }
 
             // 裁剪：多边形优先于矩形
             let write_data: std::borrow::Cow<[u8]> = if need_clip {
