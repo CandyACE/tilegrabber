@@ -18,6 +18,7 @@ use crate::storage::tile_store::TileStore;
 use crate::tile_math::{enumerate_tiles, enumerate_tiles_with_polygon};
 use crate::types::{Bounds, TileSource};
 
+use super::clip_pipeline::{self, ClipMsg, ClipOutcome, ClipPipelineConfig};
 use super::rules::DownloadRules;
 use super::throttle;
 use super::worker;
@@ -479,6 +480,44 @@ async fn run_download(
 
     app_db.update_task_status(&task_id, "downloading").ok();
 
+    // === 流水线裁剪 ===
+    // 启用条件：开启 clip_to_bounds + 非矢量瓦片 + 非 GCJ02（GCJ02 必须先合成再裁剪）。
+    // 满足时，启动后台消费者；主写入循环在每次 save_tiles_batch 成功后转发坐标。
+    let streaming_clip_enabled = task.clip_to_bounds
+        && !is_vector_format
+        && source.coord_type != crate::types::CoordType::Gcj02;
+    let (clip_tx, clip_handle): (
+        Option<tokio::sync::mpsc::UnboundedSender<ClipMsg>>,
+        Option<tokio::task::JoinHandle<ClipOutcome>>,
+    ) = if streaming_clip_enabled {
+        let cfg = ClipPipelineConfig {
+            store_path: tile_store_path.clone(),
+            bounds: Bounds {
+                west: task.bounds_west,
+                east: task.bounds_east,
+                south: task.bounds_south,
+                north: task.bounds_north,
+            },
+            polygon: task
+                .polygon_wgs84
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<Vec<[f64; 2]>>(s).ok()),
+            crs: source.crs.clone(),
+            task_id: task_id.clone(),
+        };
+        let (tx, handle) = clip_pipeline::spawn(cfg, app.clone(), broadcast_tx.clone());
+        app_db
+            .add_log(
+                Some(&task_id),
+                "info",
+                "流水线裁剪已启用：下载过程中并发完成边界瓦片裁剪",
+            )
+            .ok();
+        (Some(tx), Some(handle))
+    } else {
+        (None, None)
+    };
+
     // 速率限制：每瓦片最小间隔（由规则计算得出，0 = 不限速）
     let tile_delay_ms = rules.per_tile_delay_ms();
     let delay_min_ms = rules.delay_min_ms;
@@ -526,6 +565,7 @@ async fn run_download(
     let write_app_db = app_db.clone();
     let write_app = app.clone();
     let write_task_id = task_id.clone();
+    let write_clip_tx = clip_tx.clone();
     let write_handle = tokio::spawn(async move {
         while let Some(msg) = write_rx.recv().await {
             let WriteBatchMsg {
@@ -536,11 +576,19 @@ async fn run_download(
             // 批量写入成功的瓦片（单事务）——先保存原始数据，下载完成后再统一裁剪
             if !success_tiles.is_empty() {
                 let store = write_store.clone();
+                let coords_for_clip: Option<Vec<crate::tile_math::TileCoord>> =
+                    write_clip_tx.as_ref().map(|_| {
+                        success_tiles.iter().map(|(c, _)| c.clone()).collect()
+                    });
                 tokio::task::spawn_blocking(move || {
                     store.save_tiles_batch(&success_tiles).ok();
                 })
                 .await
                 .ok();
+                // 落盘成功后转发给流水线裁剪消费者
+                if let (Some(tx), Some(coords)) = (write_clip_tx.as_ref(), coords_for_clip) {
+                    let _ = tx.send(coords);
+                }
             }
             // 批量标记失败（单事务）
             if !failed_tiles.is_empty() {
@@ -828,6 +876,36 @@ async fn run_download(
     drop(write_tx);
     write_handle.await.ok();
 
+    // 关闭流水线裁剪通道，等待消费者排空
+    drop(clip_tx);
+    let streaming_clip_outcome: Option<ClipOutcome> = if let Some(h) = clip_handle {
+        match h.await {
+            Ok(o) => Some(o),
+            Err(e) => {
+                app_db
+                    .add_log(
+                        Some(&task_id),
+                        "warn",
+                        &format!("流水线裁剪任务异常: {}", e),
+                    )
+                    .ok();
+                None
+            }
+        }
+    } else {
+        None
+    };
+    // 仅在下载未被取消时，把 tiles.clipped 标记写入 .tiles，
+    // 让未来重启不再触发 post_clip_tiles 全表扫描。
+    let was_cancelled = *ctrl_rx.borrow() == CtrlSignal::Cancel;
+    let streaming_clip_completed =
+        matches!(streaming_clip_outcome, Some(ClipOutcome::Completed)) && !was_cancelled;
+    if streaming_clip_completed {
+        tile_store
+            .write_meta(&[("tiles.clipped", "1")])
+            .ok();
+    }
+
     // 磁盘满时提前中止：暂停任务并通知前端
     if disk_full_abort {
         app_db.update_task_status(&task_id, "paused").ok();
@@ -954,7 +1032,17 @@ async fn run_download(
     // 先保存原始瓦片，确保数据完整；下载全部结束后再统一做像素级裁剪，
     // 这样既不影响下载速度，又能保证裁剪结果一致。
     // 矢量瓦片不做像素级裁剪（几何级裁剪在后续阶段考虑）。
-    if task.clip_to_bounds && !is_vector_format && *ctrl_rx.borrow() != CtrlSignal::Cancel {
+    // 若流水线裁剪已完成（streaming_clip_completed == true），跳过后处理全表扫描。
+    if streaming_clip_completed {
+        app_db
+            .add_log(Some(&task_id), "info", "瓦片裁剪已通过流水线并发完成")
+            .ok();
+    }
+    if task.clip_to_bounds
+        && !is_vector_format
+        && !streaming_clip_completed
+        && *ctrl_rx.borrow() != CtrlSignal::Cancel
+    {
         app_db
             .add_log(Some(&task_id), "info", "开始精确裁剪瓦片…")
             .ok();

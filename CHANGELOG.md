@@ -14,6 +14,10 @@
 
 ### 新增
 
+- **流水线裁剪（streaming clip）**：开启「严格按区域裁剪」的栅格（非 GCJ02）任务，裁剪不再等下载结束才统一处理；后台 mpsc 消费者在瓦片落盘后并发完成边界瓦片的像素级裁剪，下载结束即可直接进入完成状态，整体耗时显著缩短
+  - **实现**：新增 `download/clip_pipeline.rs`，独立 SQLite 连接 + rayon 并行；门控条件 `clip_to_bounds && !矢量 && !GCJ02`（GCJ02 因必须先合成再裁剪，仍走原后处理路径）
+  - **取消友好**：取消的任务不写入 `tiles.clipped='1'` 标记，下次恢复仍可触发完整 post_clip 兜底
+  - **前端**：新增事件 `tilegrab-clip-progress` / `tilegrab-clip-tiles`（地图闪烁可视化沿用既有通道）
 - **H 套件（H1 + H2 + H3 + H4）— 矢量瓦片基础支持**：下载链接含 `pbf` / `mvt` / `vector` 关键字时自动识别为矢量格式 (format=pbf)
   - **下载流水线**：矢量任务跳过 GCJ02 像素纠偏与 tile_clip 像素裁剪（这些后处理仅对栅格图像有意义）；若同时是 GCJ02 坐标会写入警告日志
   - **预览**：`LocalTaskTileLayer` 自动按 task.format 切换 raster / vector 数据源；矢量分支会对首块瓦片做「样式内省」，按 source-layer 与几何类型（点/线/面）自动生成灰白骨架样式（fill + line + circle）
