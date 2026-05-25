@@ -394,8 +394,8 @@ const formatLabel = computed(
                     isVectorTask
                       ? 'border-slate-200 bg-slate-50 opacity-50 cursor-not-allowed'
                       : format === 'tiff'
-                      ? 'border-emerald-500 bg-emerald-50 shadow-sm shadow-emerald-100'
-                      : 'border-slate-200 hover:border-slate-300 bg-white'
+                        ? 'border-emerald-500 bg-emerald-50 shadow-sm shadow-emerald-100'
+                        : 'border-slate-200 hover:border-slate-300 bg-white'
                   "
                   :disabled="isVectorTask"
                   :title="isVectorTask ? t('export.vectorNoTiff') : ''"

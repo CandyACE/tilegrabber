@@ -28,8 +28,8 @@ pub type ClipMsg = Vec<TileCoord>;
 /// 消费者运行结果（用于决定是否跳过后处理）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipOutcome {
-    /// 流水线完整执行，已写入 `tiles.clipped='1'`。
-    Completed,
+    /// 流水线完整执行；`boundary_total` 是累计裁剪的边界瓦片数。
+    Completed { boundary_total: u64 },
     /// 流水线被禁用或未启用（调用方应继续走后处理）。
     Disabled,
     /// 出错或被中止，未写入完成标记。
@@ -112,7 +112,7 @@ fn run_consumer_blocking(
     app: AppHandle,
     broadcast_tx: Option<tokio::sync::broadcast::Sender<ProgressPayload>>,
     mut rx: UnboundedReceiver<ClipMsg>,
-) -> Result<()> {
+) -> Result<u64> {
     let mut conn = Connection::open(&cfg.store_path)?;
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
@@ -261,7 +261,7 @@ fn run_consumer_blocking(
     let _ = app.emit("tilegrab-clip-progress-done", payload);
     let _ = broadcast_tx; // 当前实现不再借用主进度通道
 
-    Ok(())
+    Ok(total_boundary)
 }
 
 /// 流水线裁剪进度事件 payload（`tilegrab-clip-progress`）。
@@ -287,7 +287,7 @@ pub fn spawn(
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<ClipMsg>();
     let handle = tokio::task::spawn_blocking(move || {
         match run_consumer_blocking(cfg, app, broadcast_tx, rx) {
-            Ok(()) => ClipOutcome::Completed,
+            Ok(boundary_total) => ClipOutcome::Completed { boundary_total },
             Err(e) => {
                 eprintln!("[clip_pipeline] consumer terminated with error: {}", e);
                 ClipOutcome::Failed(e.to_string())

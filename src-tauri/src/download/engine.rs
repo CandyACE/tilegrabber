@@ -876,7 +876,26 @@ async fn run_download(
     drop(write_tx);
     write_handle.await.ok();
 
-    // 关闭流水线裁剪通道，等待消费者排空
+    // 关闭流水线裁剪通道，等待消费者排空。
+    // 若仍有未刷写的边界瓦片，下载循环已退出但 clip 仍在做尾部 batch；
+    // 把任务状态翻为 "processing" 让前端显示「裁剪中」，避免 UI 看起来卡住。
+    let pre_clip_cancelled = *ctrl_rx.borrow() == CtrlSignal::Cancel;
+    if clip_handle.is_some() && !pre_clip_cancelled && !disk_full_abort {
+        app_db.update_task_status(&task_id, "processing").ok();
+        if let Ok(p) = tile_store.get_progress() {
+            emit_prog(ProgressPayload {
+                task_id: task_id.clone(),
+                total: p.total,
+                downloaded: p.downloaded,
+                failed: p.failed,
+                speed: 0.0,
+                bytes_per_sec: 0.0,
+                eta_secs: None,
+                retry_in_secs: None,
+                status: "processing".to_string(),
+            });
+        }
+    }
     drop(clip_tx);
     let streaming_clip_outcome: Option<ClipOutcome> = if let Some(h) = clip_handle {
         match h.await {
@@ -898,8 +917,11 @@ async fn run_download(
     // 仅在下载未被取消时，把 tiles.clipped 标记写入 .tiles，
     // 让未来重启不再触发 post_clip_tiles 全表扫描。
     let was_cancelled = *ctrl_rx.borrow() == CtrlSignal::Cancel;
-    let streaming_clip_completed =
-        matches!(streaming_clip_outcome, Some(ClipOutcome::Completed)) && !was_cancelled;
+    let streaming_clip_boundary: Option<u64> = match &streaming_clip_outcome {
+        Some(ClipOutcome::Completed { boundary_total }) if !was_cancelled => Some(*boundary_total),
+        _ => None,
+    };
+    let streaming_clip_completed = streaming_clip_boundary.is_some();
     if streaming_clip_completed {
         tile_store
             .write_meta(&[("tiles.clipped", "1")])
@@ -1034,9 +1056,13 @@ async fn run_download(
     // 矢量瓦片不做像素级裁剪（几何级裁剪在后续阶段考虑）。
     // 若流水线裁剪已完成（streaming_clip_completed == true），跳过后处理全表扫描。
     if streaming_clip_completed {
-        app_db
-            .add_log(Some(&task_id), "info", "瓦片裁剪已通过流水线并发完成")
-            .ok();
+        let count = streaming_clip_boundary.unwrap_or(0);
+        let msg = if count > 0 {
+            format!("瓦片裁剪已通过流水线并发完成：{} 块边界瓦片", count)
+        } else {
+            "瓦片裁剪已通过流水线并发完成".to_string()
+        };
+        app_db.add_log(Some(&task_id), "info", &msg).ok();
     }
     if task.clip_to_bounds
         && !is_vector_format
