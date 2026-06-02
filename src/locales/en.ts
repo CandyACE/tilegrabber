@@ -512,7 +512,7 @@ export default {
           },
           {
             q: "Strict Clipping & Streaming Clip Pipeline",
-            a: "Enable \"Strict clip to task bounds\" when creating a task to pixel-clip boundary tiles after download, making transparent pixels outside the task area so edges in exports/previews stay clean. Raster + non-GCJ02 tasks automatically use the \"streaming clip\" pipeline: boundary tiles are clipped concurrently as they download, so when the download finishes the result is ready — no separate \"clipping\" stage. GCJ02 sources (AMap / Tencent) still run the serial post-download clip because they require pixel offset compositing first. Vector tiles (pbf / mvt) skip pixel-level clipping entirely.",
+            a: 'Enable "Strict clip to task bounds" when creating a task to pixel-clip boundary tiles after download, making transparent pixels outside the task area so edges in exports/previews stay clean. Raster + non-GCJ02 tasks automatically use the "streaming clip" pipeline: boundary tiles are clipped concurrently as they download, so when the download finishes the result is ready — no separate "clipping" stage. GCJ02 sources (AMap / Tencent) still run the serial post-download clip because they require pixel offset compositing first. Vector tiles (pbf / mvt) skip pixel-level clipping entirely.',
           },
         ],
       },
@@ -757,7 +757,8 @@ export default {
     reEncodeDesc: "Re-encode tiles to adjust file size — increases export time",
     vectorNotice:
       "Vector tile task: export will gzip-wrap tiles and write vector_layers metadata per the MBTiles/PMTiles spec. Pixel-level clipping and image re-encoding don't apply and are hidden.",
-    vectorNoTiff: "Vector tiles can't be exported as GeoTIFF (no raster pixels)",
+    vectorNoTiff:
+      "Vector tiles can't be exported as GeoTIFF (no raster pixels)",
     jpegQuality: "JPEG Quality",
     pngLevel: "PNG Level",
     startExport: "Start Export",

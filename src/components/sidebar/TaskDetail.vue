@@ -1015,7 +1015,11 @@ function logTime(iso: string) {
 
       <!-- E 套件：失败瓦片可视化（仅已完成任务可见，避免下载中误干扰） -->
       <div
-        v-if="(task.status === 'completed' || task.status === 'failed') && task.failedTiles > 0 && failedSummary.length > 0"
+        v-if="
+          (task.status === 'completed' || task.status === 'failed') &&
+          task.failedTiles > 0 &&
+          failedSummary.length > 0
+        "
         class="rounded-lg border px-3 py-2.5 flex flex-col gap-2"
         style="
           border-color: var(--color-border);
