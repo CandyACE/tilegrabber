@@ -47,11 +47,22 @@
 - **Windows 静默更新**：使用 NSIS passive 模式，更新过程仅显示进度条无需点击，安装完成后自动重启
 - **macOS / Linux 在应用内自动替换**：plugin-updater 解压 `.app.tar.gz` / `.AppImage.tar.gz` 直接覆盖原可执行文件
 - **更新进度事件**：UI 显示下载已传输字节 / 总大小，回滚到内置百分比模型
+- **代码质量与可维护性**：
+  - 新增 `npm run typecheck` 脚本并修复全量 TypeScript 类型错误
+  - 新增前端单元测试框架 Vitest + `@vue/test-utils` + jsdom，首个测试覆盖 `Button.vue`
+  - 后端新增 `tempfile` 依赖并为 `TileStore` 编写状态机单元测试
+  - 后端引入 `tracing` / `tracing-subscriber` / `tracing-appender`，启动时初始化文件日志，替换关键路径的 `eprintln!`
+  - 网络探测改为可配置多 endpoint，不再硬编码单一百度地址
+  - SQLite 主库与任务库统一使用 `PRAGMA user_version` 版本化迁移
 
 ### 修复
 
 - **托盘构建失败导致启动崩溃**：缺图标时改为日志告警并跳过托盘创建，不阻断主窗口
 - **下载信号量错误处理**：`.unwrap()` → `.expect()` 并加注释；mutex 中毒时优雅恢复（`PoisonError::into_inner`），避免链式 panic 让导出任务半成品状态卡死
+- **Tile 代理 SSRF 防护**：`fetch_tile` 使用 `url::Url` 校验 scheme 与 host，拒绝 file://、data:// 及非回环私有地址
+- **Rust panic 策略**：`Cargo.toml` 改回 `panic = "unwind"`，下载入口包 `catch_unwind` 防止单任务 panic 拖垮整个进程
+- **数据库整数越界**：DB 读取的 `as u8/u32/i32` 改为 `try_from`，越界时返回错误而非静默截断
+- **关键状态更新错误静默**：`engine.rs` 中部分 `.ok()` 状态更新改为 `soft_err` + `tracing::warn` 记录
 
 ### 破坏性变更
 

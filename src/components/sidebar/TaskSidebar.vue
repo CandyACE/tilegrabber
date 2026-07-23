@@ -302,8 +302,13 @@ const countByFilter = computed(() => {
   const result: Record<FilterKey, number> = {
     all: tasks.value.length,
     downloading: 0,
+    paused: 0,
     completed: 0,
+    completed_with_errors: 0,
     failed: 0,
+    pending: 0,
+    processing: 0,
+    cancelled: 0,
   };
   tasks.value.forEach((t) => {
     if (t.status === "downloading" || t.status === "paused")

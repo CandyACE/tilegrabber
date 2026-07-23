@@ -131,7 +131,25 @@ impl DownloadEngine {
         let bcast = self.broadcast_tx.get().cloned();
 
         tokio::spawn(async move {
-            run_download(task_id, app_db, concurrency, ctrl_rx, app, bcast).await;
+            use futures_util::FutureExt;
+            let result = std::panic::AssertUnwindSafe(run_download(
+                task_id.clone(),
+                app_db.clone(),
+                concurrency,
+                ctrl_rx,
+                app.clone(),
+                bcast.clone(),
+            ))
+            .catch_unwind()
+            .await;
+            if let Err(_panic) = result {
+                let _ = app_db.update_task_status(&task_id, "failed");
+                let _ = app_db.add_log(
+                    Some(&task_id),
+                    "error",
+                    "下载任务因内部 panic 异常终止",
+                );
+            }
             if let Ok(mut h) = engine_ref.lock() {
                 h.remove(&tid);
             }
@@ -224,20 +242,20 @@ async fn run_download(
     app_db.add_log(Some(&task_id), "info", "开始下载任务").ok();
     let task = match app_db.get_task(&task_id) {
         Ok(t) => t,
-        Err(e) => {
-            eprintln!("[engine] cannot load task {}: {}", task_id, e);
-            app_db
-                .add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e))
-                .ok();
-            return;
-        }
+            Err(e) => {
+                tracing::error!(task_id, error = %e, "[engine] cannot load task");
+                app_db
+                    .add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e))
+                    .ok();
+                return;
+            }
     };
 
     // 2. 解析 TileSource
     let source: TileSource = match serde_json::from_str(&task.source_config) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("[engine] invalid source_config: {}", e);
+            tracing::error!(task_id, error = %e, "[engine] invalid source_config");
             app_db
                 .add_log(
                     Some(&task_id),
@@ -245,7 +263,9 @@ async fn run_download(
                     &format!("数据源配置解析失败: {}", e),
                 )
                 .ok();
-            app_db.update_task_status(&task_id, "failed").ok();
+            if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+            }
             return;
         }
     };
@@ -292,8 +312,10 @@ async fn run_download(
     let tile_store = match TileStore::open(std::path::Path::new(&tile_store_path), &task_id) {
         Ok(ts) => ts,
         Err(e) => {
-            eprintln!("[engine] cannot open tile store: {}", e);
-            app_db.update_task_status(&task_id, "failed").ok();
+            tracing::error!(task_id, error = %e, "[engine] cannot open tile store");
+            if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+            }
             return;
         }
     };
@@ -422,7 +444,7 @@ async fn run_download(
                     .ok();
             }
             Err(e) => {
-                eprintln!("[engine] init_download_state failed: {}", e);
+                tracing::error!(task_id, error = %e, "[engine] init_download_state failed");
                 app_db
                     .add_log(
                         Some(&task_id),
@@ -430,7 +452,9 @@ async fn run_download(
                         &format!("初始化瓦片列表失败: {}", e),
                     )
                     .ok();
-                app_db.update_task_status(&task_id, "failed").ok();
+                if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                    app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+                }
                 return;
             }
         }
@@ -473,7 +497,10 @@ async fn run_download(
     let client = match worker::build_client_with_proxy(&source.headers, proxy_url.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[engine] cannot build http client: {}", e);
+            tracing::error!(task_id, error = %e, "[engine] cannot build http client");
+            if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+            }
             return;
         }
     };
@@ -664,7 +691,7 @@ async fn run_download(
             Ok(b) if b.is_empty() => break 'outer, // 全部完成
             Ok(b) => b,
             Err(e) => {
-                eprintln!("[engine] get_pending_batch error: {}", e);
+                tracing::error!(task_id, error = %e, "[engine] get_pending_batch error");
                 break 'outer;
             }
         };
@@ -1792,16 +1819,19 @@ async fn run_mbtiles_import(
                     CtrlSignal::Run => {}
                 }
 
-                let z: u8 = row.get::<_, i32>(0)? as u8;
-                let x: u32 = row.get::<_, i32>(1)? as u32;
-                let tms_y: u32 = row.get::<_, i32>(2)? as u32;
+                let z: u8 = u8::try_from(row.get::<_, i32>(0)?)
+                    .map_err(|e| anyhow::anyhow!("zoom_level 越界: {e}"))?;
+                let x: u32 = u32::try_from(row.get::<_, i32>(1)?)
+                    .map_err(|e| anyhow::anyhow!("tile_column 越界: {e}"))?;
+                let tms_y: u32 = u32::try_from(row.get::<_, i32>(2)?)
+                    .map_err(|e| anyhow::anyhow!("tile_row 越界: {e}"))?;
                 let tile_data: Vec<u8> = row.get(3)?;
                 let y = (1u32 << z).wrapping_sub(1).wrapping_sub(tms_y);
 
                 match tile_store.save_tile(&crate::tile_math::TileCoord { z, x, y }, &tile_data) {
                     Ok(_) => downloaded += 1,
                     Err(e) => {
-                        eprintln!("[mbtiles-import] {e}");
+                        tracing::warn!(task_id, error = %e, "[mbtiles-import] save tile failed");
                         failed += 1;
                     }
                 }
@@ -1856,11 +1886,13 @@ async fn run_mbtiles_import(
     match result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
-            eprintln!("[engine] mbtiles import error: {e}");
+            tracing::error!(task_id, error = %e, "[engine] mbtiles import error");
             app_db
                 .add_log(Some(&task_id), "error", &format!("MBTiles 导入失败: {e}"))
                 .ok();
-            app_db.update_task_status(&task_id, "failed").ok();
+            if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+            }
             app.emit(
                 "tilegrab-progress",
                 ProgressPayload {
@@ -1878,8 +1910,10 @@ async fn run_mbtiles_import(
             .ok();
         }
         Err(e) => {
-            eprintln!("[engine] spawn_blocking panicked: {e}");
-            app_db.update_task_status(&task_id, "failed").ok();
+            tracing::error!(task_id, error = %e, "[engine] spawn_blocking panicked");
+            if let Err(e) = app_db.update_task_status(&task_id, "failed") {
+                app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
+            }
         }
     }
 }

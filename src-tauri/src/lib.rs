@@ -23,7 +23,7 @@ use commands::server::{
     get_remote_server_status, get_server_status, get_service_stats,
     start_remote_server_cmd, start_tile_server, stop_remote_server_cmd, stop_tile_server,
 };
-use commands::settings::{get_all_settings, get_setting, set_all_settings, set_setting};
+use commands::settings::{get_active_proxy_url, get_probe_urls, get_all_settings, get_setting, set_all_settings, set_setting};
 use commands::source::{
     fetch_mbtiles_tile, parse_area_file, parse_mbtiles_source, parse_source_file, parse_tms_url,
     parse_wmts_url, validate_tile_url,
@@ -51,6 +51,11 @@ use storage::app_db::AppDb;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
 use tauri::Manager;
+use tracing_subscriber::{fmt, EnvFilter};
+
+/// 持有 tracing-appender 的 worker guard，避免日志通道被提前关闭。
+#[allow(dead_code)]
+struct LogGuard(tracing_appender::non_blocking::WorkerGuard);
 
 // ─── 网络监控状态 ────────────────────────────────────────────────────────────
 
@@ -63,15 +68,20 @@ struct NetworkStatusPayload {
     online: bool,
 }
 
-/// 使用 reqwest 探测网络可达性（走当前配置的代理）
-/// 探测网络连通性：请求百度，能收到响应即认为在线。
-async fn probe_network(proxy_url: Option<String>) -> bool {
+const DEFAULT_PROBE_URLS: &[&str] = &[
+    "https://www.baidu.com/favicon.ico",
+    "https://www.google.com/generate_204",
+    "https://cloudflare.com/cdn-cgi/trace",
+];
+
+/// 使用 reqwest 探测单个端点（走当前配置的代理）
+async fn probe_one(url: &str, proxy_url: Option<&str>) -> bool {
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
         .connect_timeout(std::time::Duration::from_secs(5))
         .user_agent("Mozilla/5.0 TileGrabber-NetworkCheck/1.0");
     if let Some(url) = proxy_url.filter(|u| !u.is_empty()) {
-        if let Ok(proxy) = reqwest::Proxy::all(&url) {
+        if let Ok(proxy) = reqwest::Proxy::all(url) {
             builder = builder.proxy(proxy);
         }
     }
@@ -79,11 +89,22 @@ async fn probe_network(proxy_url: Option<String>) -> bool {
         Ok(c) => c,
         Err(_) => return false,
     };
-    client
-        .head("https://www.baidu.com/favicon.ico")
-        .send()
-        .await
-        .is_ok()
+    client.head(url).send().await.is_ok()
+}
+
+/// 使用 reqwest 探测网络可达性（走当前配置的代理）
+/// 任一探测端点可达即认为在线；未配置端点时不阻断任务。
+async fn probe_network(probe_urls: Vec<String>, proxy_url: Option<String>) -> bool {
+    if probe_urls.is_empty() {
+        return true;
+    }
+    let proxy = proxy_url.as_deref();
+    let futs: Vec<_> = probe_urls
+        .iter()
+        .map(|u| probe_one(u, proxy))
+        .collect();
+    let results = futures_util::future::join_all(futs).await;
+    results.into_iter().any(|ok| ok)
 }
 
 /// 退出整个应用程序
@@ -122,6 +143,22 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            // 初始化文件日志（release 下 console 不可见）
+            if let Ok(log_dir) = app.path().app_log_dir() {
+                let _ = std::fs::create_dir_all(&log_dir);
+                let file_writer = tracing_appender::rolling::daily(&log_dir, "tilegrabber.log");
+                let (non_blocking, guard) = tracing_appender::non_blocking(file_writer);
+                let _ = fmt()
+                    .with_env_filter(
+                        EnvFilter::from_default_env()
+                            .add_directive("tilegrabber=info".parse().unwrap()),
+                    )
+                    .with_writer(non_blocking)
+                    .with_ansi(false)
+                    .try_init();
+                app.manage(LogGuard(guard));
+            }
+
             // 初始化应用数据目录
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -151,9 +188,12 @@ pub fn run() {
             app.state::<DownloadEngine>().set_broadcast_tx(bcast_tx.clone());
             let bcast_tx = Arc::new(bcast_tx);
             app.manage(bcast_tx);
-            let remote_cache: RemoteConfigCache = std::sync::Arc::new(tokio::sync::RwLock::new(None));
-            app.manage(remote_cache);
-            app.manage(RemoteClients::new());
+        let remote_cache: RemoteConfigCache = std::sync::Arc::new(tokio::sync::RwLock::new(None));
+        app.manage(remote_cache);
+        app.manage(RemoteClients::new());
+
+        // 默认探测端点常量仅在设置未配置时使用
+        let _ = DEFAULT_PROBE_URLS;
 
             // 初始化瓦片发布服务状态
             let tile_server: TileServerState =
@@ -205,10 +245,11 @@ pub fn run() {
                     // 首次延迟 20 秒，避免干扰启动阶段的正常网络请求
                     tokio::time::sleep(std::time::Duration::from_secs(20)).await;
                     loop {
-                        // 读取当前代理配置（运行时可能变更）
+                        // 读取当前代理配置与探测端点（运行时可能变更）
                         let proxy_url =
-                            commands::settings::get_active_proxy_url(&db_ref);
-                        let online = probe_network(proxy_url).await;
+                            get_active_proxy_url(&db_ref);
+                        let probe_urls = get_probe_urls(&db_ref);
+                        let online = probe_network(probe_urls, proxy_url).await;
 
                         if online {
                             consecutive_failures = 0;
@@ -292,7 +333,7 @@ pub fn run() {
                     })
                     .build(app)?;
             } else {
-                eprintln!("[tray] 应用未配置默认图标，跳过托盘创建");
+                tracing::warn!("[tray] 应用未配置默认图标，跳过托盘创建");
             }
 
             // 崩溃自动续传：延迟 5 秒后自动恢复被中断的任务（如设置允许）

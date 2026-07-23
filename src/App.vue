@@ -6,7 +6,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { BoxSelect, Trash2, X, WifiOff, HardDrive } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
-import type { Map as MaplibreMap, LngLatBoundsLike } from "maplibre-gl";
+import maplibregl from "maplibre-gl";
+import type { LngLatBoundsLike } from "maplibre-gl";
 import type { Bounds, CrsType, TileSource } from "~/types/tile-source";
 import { useWizardState } from "~/composables/useWizardState";
 import { useTaskDetail } from "~/composables/useTaskDetail";
@@ -348,9 +349,10 @@ function exitSetupMode() {
 }
 
 // ─── 地图 ──────────────────────────────────────────────────────────────────
-const mapRef = ref<MaplibreMap | null>(null);
+const mapRef = ref<maplibregl.Map | null>(null);
+const mapAny = computed(() => mapRef.value as any);
 
-function onMapReady(map: MaplibreMap) {
+function onMapReady(map: maplibregl.Map) {
   mapRef.value = map;
 }
 
@@ -727,14 +729,14 @@ function handleDetailDeleted() {
           <!-- ─── 非可视组件 ─── -->
           <TilePreviewLayer
             v-if="mapRef"
-            :map="mapRef"
+            :map="mapAny"
             :source="mapPreviewSource"
           />
 
           <AreaDraw
             v-if="mapRef"
             ref="areaDrawRef"
-            :map="mapRef"
+            :map="mapAny"
             :mode="drawMode"
             @bounds-change="onBoundsChange"
             @polygon-change="onPolygonChange"
@@ -744,7 +746,7 @@ function handleDetailDeleted() {
           <!-- 导入 KML/GeoJSON 时的范围可视化覆盖层 -->
           <BoundsRectOverlay
             v-if="mapRef"
-            :map="mapRef"
+            :map="mapAny"
             :bounds="isImportedBounds ? drawnBounds : null"
             :polygon="isImportedBounds ? drawnPolygon : null"
           />
@@ -752,14 +754,14 @@ function handleDetailDeleted() {
           <!-- 扩展任务模式：显示原始区域轮廓 -->
           <BoundsRectOverlay
             v-if="mapRef && extendActive && extendCtx"
-            :map="mapRef"
+            :map="mapAny"
             :bounds="extendCtx.originalBounds"
             :polygon="extendCtx.originalPolygon"
           />
 
           <TileGrid
             v-if="mapRef && showGrid"
-            :map="mapRef"
+            :map="mapAny"
             :bounds="drawnBounds"
             :zoom="gridZoom"
             :crs="currentCrs"
@@ -768,7 +770,7 @@ function handleDetailDeleted() {
 
           <TaskBoundsOverlay
             v-if="mapRef"
-            :map="mapRef"
+            :map="mapAny"
             :task-id="selectedTaskId"
           />
 
@@ -781,14 +783,14 @@ function handleDetailDeleted() {
               (selectedTaskStatus === 'downloading' ||
                 selectedTaskStatus === 'paused')
             "
-            :map="mapRef"
+            :map="mapAny"
             :task-id="selectedTaskId"
             :task-status="selectedTaskStatus"
           />
           <!-- 裁剪中：紫色高亮正在处理的瓦片 -->
           <ClipProgressLayer
             v-if="mapRef && selectedTaskId"
-            :map="mapRef"
+            :map="mapAny"
             :task-id="selectedTaskId"
             :task-status="selectedTaskStatus"
           />
@@ -802,11 +804,11 @@ function handleDetailDeleted() {
                 selectedTaskStatus === 'processing'
               )
             "
-            :map="mapRef"
+            :map="mapAny"
             :task-id="selectedTaskId"
           />
           <!-- E 套件：失败瓦片可视化（用户在 TaskDetail 选层级触发） -->
-          <FailedTilesLayer v-if="mapRef" :map="mapRef" />
+          <FailedTilesLayer v-if="mapRef" :map="mapAny" />
 
           <NewTaskWizard
             v-if="showWizard"

@@ -1068,6 +1068,7 @@ mod tests {
                 &CrsType::WebMercator,
                 None,
                 "none",
+                &AtomicBool::new(false),
                 |_, _| {},
             )?;
 

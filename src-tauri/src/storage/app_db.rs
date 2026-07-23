@@ -12,6 +12,22 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+const CURRENT_APP_DB_VERSION: i32 = 1;
+
+const APP_DB_MIGRATIONS: &[&str] = &[
+    // v1: 在基线 schema 之上创建 remote_servers 表
+    r#"
+    CREATE TABLE IF NOT EXISTS remote_servers (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        url        TEXT NOT NULL,
+        token      TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+    );
+    "#,
+];
+
 // ─── 任务状态 ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,6 +287,29 @@ impl AppDb {
             );
             "#,
         )?;
+
+        Self::run_migrations(&conn, CURRENT_APP_DB_VERSION, APP_DB_MIGRATIONS)?;
+        Ok(())
+    }
+
+    fn run_migrations(
+        conn: &Connection,
+        target_version: i32,
+        migrations: &[&str],
+    ) -> Result<()> {
+        let current: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        for version in current..target_version {
+            let idx = version as usize;
+            if idx >= migrations.len() {
+                anyhow::bail!("缺少版本 {} 的迁移脚本", version + 1);
+            }
+            conn.execute_batch(migrations[idx])
+                .with_context(|| format!("app.db 迁移到版本 {} 失败", version + 1))?;
+        }
+        conn.execute(
+            &format!("PRAGMA user_version = {}", target_version),
+            [],
+        )?;
         Ok(())
     }
 
@@ -381,8 +420,10 @@ impl AppDb {
             let bounds_east: f64 = row.get(3)?;
             let bounds_south: f64 = row.get(4)?;
             let bounds_north: f64 = row.get(5)?;
-            let min_zoom: u8 = row.get::<_, i64>(6)? as u8;
-            let max_zoom: u8 = row.get::<_, i64>(7)? as u8;
+            let min_zoom: u8 = u8::try_from(row.get::<_, i64>(6)?)
+                .map_err(|e| anyhow::anyhow!("min_zoom 越界: {e}"))?;
+            let max_zoom: u8 = u8::try_from(row.get::<_, i64>(7)?)
+                .map_err(|e| anyhow::anyhow!("max_zoom 越界: {e}"))?;
 
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&config) {
                 let same_url = json
@@ -509,6 +550,18 @@ impl AppDb {
     }
 
     // ── 日志 ──────────────────────────────────────────────────────────────────
+
+    /// 记录非致命错误：写 tracing + DB 日志，不中断主流程。
+    pub fn soft_err(
+        &self,
+        task_id: Option<&str>,
+        ctx: &str,
+        e: impl std::fmt::Display,
+    ) {
+        let msg = format!("{ctx}: {e}");
+        tracing::warn!(task_id, ctx, error = %e, "非致命错误");
+        let _ = self.add_log(task_id, "warn", &msg);
+    }
 
     pub fn add_log(&self, task_id: Option<&str>, level: &str, message: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
@@ -713,6 +766,17 @@ impl AppDb {
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
+fn convert_overflow(idx: usize, msg: impl std::fmt::Display) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        idx,
+        rusqlite::types::Type::Integer,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            msg.to_string(),
+        )),
+    )
+}
+
 fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
     Ok(Task {
         id: row.get(0)?,
@@ -723,8 +787,10 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         bounds_east: row.get(5)?,
         bounds_south: row.get(6)?,
         bounds_north: row.get(7)?,
-        min_zoom: row.get::<_, i64>(8)? as u8,
-        max_zoom: row.get::<_, i64>(9)? as u8,
+        min_zoom: u8::try_from(row.get::<_, i64>(8)?)
+            .map_err(|e| convert_overflow(8, format!("min_zoom 越界: {e}")))?,
+        max_zoom: u8::try_from(row.get::<_, i64>(9)?)
+            .map_err(|e| convert_overflow(9, format!("max_zoom 越界: {e}")))?,
         total_tiles: row.get(10)?,
         downloaded_tiles: row.get(11)?,
         failed_tiles: row.get(12)?,

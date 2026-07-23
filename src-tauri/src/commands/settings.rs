@@ -56,6 +56,8 @@ pub fn default_settings() -> HashMap<&'static str, &'static str> {
         ("network.proxy_enabled", "false"),
         // 代理服务器地址（如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080）
         ("network.proxy_url", ""),
+        // 网络在线探测端点（JSON 数组），任一可达即判定在线
+        ("network.probe_urls", "[\"https://www.baidu.com/favicon.ico\",\"https://www.google.com/generate_204\",\"https://cloudflare.com/cdn-cgi/trace\"]"),
         // ── 远程协作 ──────────────────────────────────────────────────────────
         // 是否启用远程控制 API
         ("remote.enabled", "false"),
@@ -90,6 +92,31 @@ pub fn get_active_proxy_url(app_db: &AppDb) -> Option<String> {
     } else {
         Some(url)
     }
+}
+
+/// 从 AppDb 读取网络探测端点列表，未配置则返回默认值。
+pub fn get_probe_urls(app_db: &AppDb) -> Vec<String> {
+    let raw = app_db
+        .get_setting("network.probe_urls")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| {
+            default_settings()
+                .get("network.probe_urls")
+                .copied()
+                .unwrap_or("[]")
+                .to_string()
+        });
+    serde_json::from_str::<Vec<String>>(&raw)
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            vec![
+                "https://www.baidu.com/favicon.ico".to_string(),
+                "https://www.google.com/generate_204".to_string(),
+                "https://cloudflare.com/cdn-cgi/trace".to_string(),
+            ]
+        })
 }
 
 /// 读取单个设置（若不存在返回默认值，若默认值也无返回 null）

@@ -87,3 +87,45 @@ pub fn gcj02_pixel_delta(z: u8, x: u32, y: u32) -> (i32, i32) {
 
     (dx, dy)
 }
+
+// ─── 单元测试 ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 中国境外坐标应原样返回
+    #[test]
+    fn out_of_china_passes_through() {
+        let (lng, lat) = (139.6917, 35.6895); // 东京
+        assert_eq!(wgs84_to_gcj02(lng, lat), (lng, lat));
+    }
+
+    /// 境内坐标应有非零偏移（北京天安门公开测试点）
+    #[test]
+    fn beijing_has_offset() {
+        let wgs = (116.3974, 39.9093);
+        let (gcj_lng, gcj_lat) = wgs84_to_gcj02(wgs.0, wgs.1);
+        let dlng = gcj_lng - wgs.0;
+        let dlat = gcj_lat - wgs.1;
+        assert!(dlng.abs() > 1e-5, "经度偏移应显著: {dlng}");
+        assert!(dlat.abs() > 1e-5, "纬度偏移应显著: {dlat}");
+    }
+
+    /// 偏移量在不同缩放层级下不应异常巨大
+    #[test]
+    fn pixel_delta_order_of_magnitude() {
+        let (dx, dy) = gcj02_pixel_delta(10, 857, 418);
+        assert!(dx.abs() < 500, "z10 经度像素偏移不应超过 500: {dx}");
+        assert!(dy.abs() < 500, "z10 纬度像素偏移不应超过 500: {dy}");
+    }
+
+    /// pixel_delta 在境内应非零，境外应接近零
+    #[test]
+    fn pixel_delta_zero_outside_china() {
+        // 东京附近瓦片
+        let (dx, dy) = gcj02_pixel_delta(8, 232, 101);
+        assert_eq!(dx, 0, "境外 dx 应为 0");
+        assert_eq!(dy, 0, "境外 dy 应为 0");
+    }
+}

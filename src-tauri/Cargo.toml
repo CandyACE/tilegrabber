@@ -33,12 +33,18 @@ tauri-plugin-single-instance = "2"
 
 # HTTP 客户端 (WMTS/TMS 探测 + 更新包下载)
 reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "brotli", "deflate", "stream", "http2"], default-features = false }
+url = "2"
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 
 # 错误处理
 anyhow = "1"
 thiserror = "2"
+
+# 日志/追踪
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 
 # UUID
 uuid = { version = "1", features = ["v4"] }
@@ -72,11 +78,14 @@ tauri-plugin-process = "2"
 pmtiles = { version = "0.23", default-features = false, features = ["write", "tilejson"] }
 
 [profile.release]
-panic = "abort"
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
 strip = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [patch.crates-io]
 tiff = { path = "vendor/tiff" }

@@ -78,7 +78,7 @@ export async function introspectMvtLayers(
 
   let tile: VectorTile;
   try {
-    tile = new VectorTile(new Protobuf(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)));
+    tile = new VectorTile(new Protobuf(new Uint8Array(data)));
   } catch (e) {
     console.warn("[useMvtStyleIntrospector] parse failed", e);
     return [];

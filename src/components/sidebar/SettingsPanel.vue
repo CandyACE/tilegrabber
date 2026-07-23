@@ -35,11 +35,31 @@ const { t, locale } = useI18n();
 // ─── 类型 ────────────────────────────────────────────────────────────────────
 type Settings = Record<string, string>;
 
+type FieldOption = { value: string; label: string };
+
+type Field = {
+  key: string;
+  label: string;
+  type: "path" | "number" | "text" | "select" | "toggle";
+  hint?: string;
+  min?: number;
+  max?: number;
+  placeholder?: string;
+  options?: FieldOption[];
+};
+
+type Group = {
+  id: string;
+  label: string;
+  icon: any;
+  fields: Field[];
+};
+
 // ─── 分组定义 ─────────────────────────────────────────────────────────────────
 const cpuCores = navigator.hardwareConcurrency || 4;
 const suggestedConcurrency = Math.max(8, Math.min(32, cpuCores * 2));
 
-const groups = computed(() => [
+const groups = computed<Group[]>(() => [
   {
     id: "app",
     label: t("settings.groups.app"),
@@ -560,8 +580,8 @@ function formatBytes(bytes: number): string {
                   setNum(field.key, ($event.target as HTMLInputElement).value)
                 "
                 type="number"
-                :min="(field as { min?: number }).min"
-                :max="(field as { max?: number }).max"
+                :min="field.min"
+                :max="field.max"
                 class="w-20 shrink-0 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500/60"
               />
 
@@ -576,7 +596,7 @@ function formatBytes(bytes: number): string {
                 "
                 type="text"
                 :placeholder="
-                  (field as { placeholder?: string }).placeholder ?? ''
+                  field.placeholder ?? ''
                 "
                 class="w-48 shrink-0 px-2 py-1 rounded-md bg-slate-100 border border-slate-200 text-slate-700 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500/60"
               />
@@ -586,7 +606,7 @@ function formatBytes(bytes: number): string {
                 v-else-if="field.type === 'select'"
                 :model-value="settings[field.key] ?? ''"
                 @update:model-value="
-                  (v) => v !== undefined && (settings[field.key] = v)
+                  (v) => v !== undefined && v !== null && (settings[field.key] = String(v))
                 "
               >
                 <SelectTrigger size="sm" class="shrink-0 h-7 text-xs min-w-24">
@@ -594,9 +614,7 @@ function formatBytes(bytes: number): string {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem
-                    v-for="opt in (
-                      field as { options?: { value: string; label: string }[] }
-                    ).options ?? []"
+                    v-for="opt in (field.options ?? [])"
                     :key="opt.value"
                     :value="opt.value"
                     class="text-xs"

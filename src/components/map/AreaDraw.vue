@@ -95,7 +95,7 @@ function initDraw() {
   liftDrawLayers();
 
   // 绘制完成时提取坐标
-  draw.on("finish", (_id: string) => {
+  draw.on("finish", (_id: string | number) => {
     const snapshot = draw!.getSnapshot();
     // 取最后一个 Polygon feature
     const polys = snapshot.filter((f) => f.geometry.type === "Polygon");

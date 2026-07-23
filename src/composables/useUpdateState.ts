@@ -67,7 +67,7 @@ function toResult(
 export async function runUpdateCheck(): Promise<UpdateCheckResult> {
   let result: UpdateCheckResult;
   try {
-    const update = await check();
+    const update = (await check()) as Update | null;
     // 释放上一次的句柄（避免泄漏）
     if (pendingUpdate.value && pendingUpdate.value !== update) {
       pendingUpdate.value.close().catch(() => {});
@@ -84,7 +84,7 @@ export async function runUpdateCheck(): Promise<UpdateCheckResult> {
 
 /** 取出当前可用的 Update 句柄（供 SettingsPanel 调用 downloadAndInstall）。 */
 export function getPendingUpdate(): Update | null {
-  return pendingUpdate.value;
+  return pendingUpdate.value as Update | null;
 }
 
 /** 安装完成后清理句柄。 */

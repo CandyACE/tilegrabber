@@ -14,6 +14,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::tile_math::TileCoord;
 
+const CURRENT_TILE_STORE_VERSION: i32 = 1;
+
+const TILE_STORE_MIGRATIONS: &[&str] = &[
+    // v1: 基线表结构 + fetched_at 列
+    r#"
+    CREATE TABLE IF NOT EXISTS metadata (
+        name  TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS tiles (
+        zoom_level  INTEGER NOT NULL,
+        tile_column INTEGER NOT NULL,
+        tile_row    INTEGER NOT NULL,
+        tile_data   BLOB    NOT NULL,
+        PRIMARY KEY (zoom_level, tile_column, tile_row)
+    );
+    CREATE TABLE IF NOT EXISTS download_state (
+        zoom_level    INTEGER NOT NULL,
+        tile_column   INTEGER NOT NULL,
+        tile_row      INTEGER NOT NULL,
+        status        TEXT    NOT NULL DEFAULT 'pending',
+        retry_count   INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
+        PRIMARY KEY (zoom_level, tile_column, tile_row)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ds_status
+        ON download_state(status, zoom_level);
+    ALTER TABLE tiles ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0;
+    UPDATE tiles SET fetched_at = strftime('%s','now') WHERE fetched_at = 0;
+    CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);
+    "#,
+];
+
 // ─── 进度统计 ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -25,6 +58,17 @@ pub struct TileProgress {
 }
 
 // ─── TileStore ───────────────────────────────────────────────────────────────
+
+fn convert_overflow(idx: usize, msg: impl std::fmt::Display) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        idx,
+        rusqlite::types::Type::Integer,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            msg.to_string(),
+        )),
+    )
+}
 
 /// 单任务瓦片存储（可 Clone，内部持有 Arc<Mutex<Connection>>）
 #[derive(Clone)]
@@ -60,55 +104,28 @@ impl TileStore {
 
     fn init_tables(&self) -> Result<()> {
         let conn = self.lock()?;
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS metadata (
-                name  TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS tiles (
-                zoom_level  INTEGER NOT NULL,
-                tile_column INTEGER NOT NULL,
-                tile_row    INTEGER NOT NULL,
-                tile_data   BLOB    NOT NULL,
-                PRIMARY KEY (zoom_level, tile_column, tile_row)
-            );
-            CREATE TABLE IF NOT EXISTS download_state (
-                zoom_level    INTEGER NOT NULL,
-                tile_column   INTEGER NOT NULL,
-                tile_row      INTEGER NOT NULL,
-                status        TEXT    NOT NULL DEFAULT 'pending',
-                retry_count   INTEGER NOT NULL DEFAULT 0,
-                error_message TEXT,
-                PRIMARY KEY (zoom_level, tile_column, tile_row)
-            );
-            CREATE INDEX IF NOT EXISTS idx_ds_status
-                ON download_state(status, zoom_level);
-            "#,
-        )?;
+        Self::run_migrations(&conn, CURRENT_TILE_STORE_VERSION, TILE_STORE_MIGRATIONS)?;
+        Ok(())
+    }
 
-        // ── F1 迁移：为旧库 tiles 表追加 fetched_at 字段 ─────────────────────
-        // SQLite 不支持 IF NOT EXISTS 加列；用 PRAGMA 查存在列后再决定是否 ALTER。
-        let has_fetched_at: bool = {
-            let mut stmt = conn.prepare("PRAGMA table_info(tiles)")?;
-            let cols: Vec<String> = stmt
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .collect();
-            cols.iter().any(|c| c == "fetched_at")
-        };
-        if !has_fetched_at {
-            conn.execute_batch(
-                "ALTER TABLE tiles ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0;
-                 UPDATE tiles SET fetched_at = strftime('%s','now') WHERE fetched_at = 0;
-                 CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);",
-            )?;
-        } else {
-            // 确保索引存在
-            conn.execute_batch(
-                "CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);",
-            )?;
+    fn run_migrations(
+        conn: &Connection,
+        target_version: i32,
+        migrations: &[&str],
+    ) -> Result<()> {
+        let current: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        for version in current..target_version {
+            let idx = version as usize;
+            if idx >= migrations.len() {
+                anyhow::bail!("缺少版本 {} 的迁移脚本", version + 1);
+            }
+            conn.execute_batch(migrations[idx])
+                .with_context(|| format!("tile store 迁移到版本 {} 失败", version + 1))?;
         }
+        conn.execute(
+            &format!("PRAGMA user_version = {}", target_version),
+            [],
+        )?;
         Ok(())
     }
 
@@ -155,11 +172,13 @@ impl TileStore {
         )?;
         let tiles = stmt
             .query_map(params![limit as i64], |row| {
-                Ok(TileCoord {
-                    z: row.get::<_, i64>(0)? as u8,
-                    x: row.get::<_, i64>(1)? as u32,
-                    y: row.get::<_, i64>(2)? as u32,
-                })
+                let z = u8::try_from(row.get::<_, i64>(0)?)
+                    .map_err(|e| convert_overflow(0, format!("zoom_level 越界: {e}")))?;
+                let x = u32::try_from(row.get::<_, i64>(1)?)
+                    .map_err(|e| convert_overflow(1, format!("tile_column 越界: {e}")))?;
+                let y = u32::try_from(row.get::<_, i64>(2)?)
+                    .map_err(|e| convert_overflow(2, format!("tile_row 越界: {e}")))?;
+                Ok(TileCoord { z, x, y })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(tiles)
@@ -319,7 +338,11 @@ impl TileStore {
              ORDER BY zoom_level ASC",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get::<_, i64>(0)? as i32, r.get::<_, i64>(1)?))
+            Ok((
+                i32::try_from(r.get::<_, i64>(0)?)
+                    .map_err(|e| convert_overflow(0, format!("zoom_level 越界: {e}")))?,
+                r.get::<_, i64>(1)?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -338,7 +361,12 @@ impl TileStore {
              ORDER BY tile_row ASC, tile_column ASC",
         )?;
         let rows = stmt.query_map(params![zoom], |r| {
-            Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u32))
+            Ok((
+                u32::try_from(r.get::<_, i64>(0)?)
+                    .map_err(|e| convert_overflow(0, format!("tile_column 越界: {e}")))?,
+                u32::try_from(r.get::<_, i64>(1)?)
+                    .map_err(|e| convert_overflow(1, format!("tile_row 越界: {e}")))?,
+            ))
         })?;
         let mut out = Vec::new();
         for row in rows {
@@ -503,5 +531,122 @@ impl TileStore {
             })
         })?;
         Ok(progress)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    fn store_in_temp() -> (TileStore, PathBuf) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.tiles");
+        let store = TileStore::open(&path, "test-task").unwrap();
+        (store, path)
+    }
+
+    #[test]
+    fn lifecycle_pending_to_downloaded() {
+        let (store, _path) = store_in_temp();
+        let tiles = vec![
+            TileCoord { z: 1, x: 0, y: 0 },
+            TileCoord { z: 1, x: 1, y: 0 },
+            TileCoord { z: 1, x: 0, y: 1 },
+            TileCoord { z: 1, x: 1, y: 1 },
+        ];
+
+        let total = store.init_download_state(&tiles).unwrap();
+        assert_eq!(total, 4);
+
+        let batch = store.get_pending_batch(2).unwrap();
+        assert_eq!(batch.len(), 2);
+
+        store.mark_downloading(&batch).unwrap();
+        // get_pending_batch 同时包含 pending 与 downloading，因此总数仍是 4
+        let still_claimable = store.get_pending_batch(10).unwrap();
+        assert_eq!(still_claimable.len(), 4);
+
+        for coord in &batch {
+            store.save_tile(coord, b"data").unwrap();
+        }
+
+        let progress = store.get_progress().unwrap();
+        assert_eq!(progress.total, 4);
+        assert_eq!(progress.downloaded, 2);
+        assert_eq!(progress.pending, 2);
+    }
+
+    #[test]
+    fn failed_tile_can_be_retried() {
+        let (store, _path) = store_in_temp();
+        let coord = TileCoord { z: 2, x: 1, y: 1 };
+        store.init_download_state(&[coord]).unwrap();
+
+        store.mark_failed(&coord, "timeout").unwrap();
+        let progress = store.get_progress().unwrap();
+        assert_eq!(progress.failed, 1);
+        assert_eq!(progress.pending, 0);
+
+        let reset = store.reset_failed().unwrap();
+        assert_eq!(reset, 1);
+
+        let progress = store.get_progress().unwrap();
+        assert_eq!(progress.pending, 1);
+        assert_eq!(progress.failed, 0);
+    }
+
+    #[test]
+    fn reset_downloading_on_startup() {
+        let (store, _path) = store_in_temp();
+        let tiles = vec![TileCoord { z: 3, x: 2, y: 2 }];
+        store.init_download_state(&tiles).unwrap();
+        store.mark_downloading(&tiles).unwrap();
+        // downloading 状态的瓦片仍会被 get_pending_batch 返回
+        assert_eq!(store.get_pending_batch(10).unwrap().len(), 1);
+
+        store.reset_stale_downloading().unwrap();
+        let pending = store.get_pending_batch(10).unwrap();
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn mark_skipped_does_not_write_tile() {
+        let (store, _path) = store_in_temp();
+        let coord = TileCoord { z: 4, x: 0, y: 0 };
+        store.init_download_state(&[coord]).unwrap();
+
+        store.mark_skipped_batch(&[coord]).unwrap();
+        let progress = store.get_progress().unwrap();
+        assert_eq!(progress.downloaded, 1);
+        assert_eq!(progress.pending, 0);
+    }
+
+    #[test]
+    fn import_from_external_only_imports_pending() {
+        let dir = tempdir().unwrap();
+        let src_path = dir.path().join("src.tiles");
+        let dst_path = dir.path().join("dst.tiles");
+
+        let src = TileStore::open(&src_path, "src-task").unwrap();
+        let shared = TileCoord { z: 5, x: 1, y: 1 };
+        let only_src = TileCoord { z: 5, x: 2, y: 2 };
+        src.init_download_state(&[shared, only_src]).unwrap();
+        src.save_tile(&shared, b"shared").unwrap();
+        src.save_tile(&only_src, b"only_src").unwrap();
+
+        let dst = TileStore::open(&dst_path, "dst-task").unwrap();
+        let dst_pending = TileCoord { z: 5, x: 1, y: 1 };
+        let dst_missing = TileCoord { z: 5, x: 3, y: 3 };
+        dst.init_download_state(&[dst_pending, dst_missing]).unwrap();
+
+        let (imported, pending_before) = dst.import_from_external(&src_path).unwrap();
+        assert_eq!(pending_before, 2);
+        assert_eq!(imported, 1);
+
+        let progress = dst.get_progress().unwrap();
+        assert_eq!(progress.downloaded, 1);
+        assert_eq!(progress.pending, 1);
     }
 }

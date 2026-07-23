@@ -7,13 +7,19 @@
     "dev": "vite --port 4000",
     "build": "vite build",
     "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.2",
+    "@types/node": "^26.0.1",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^26.0.0",
     "typescript": "^5.8.0",
+    "vitest": "^3.0.0",
     "vue-tsc": "^2.2.0"
   },
   "dependencies": {

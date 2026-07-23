@@ -1179,8 +1179,8 @@ function onLayerSelect(idx: number) {
               @click="
                 step = 1;
                 errorMsg = '';
-                wmtsLayers.value = [];
-                parsedSource.value = null;
+                wmtsLayers = [];
+                parsedSource = null;
                 revokePreviews();
               "
               >{{ t('wizard.back') }}</UiButton

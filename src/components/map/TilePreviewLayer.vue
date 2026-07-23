@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { watch, onUnmounted } from "vue";
 import maplibregl from "maplibre-gl";
-import type { Map as MaplibreMap } from "maplibre-gl";
 import { invoke } from "@tauri-apps/api/core";
 import type { TileSource } from "~/types/tile-source";
 import { gcj02PixelDelta } from "~/lib/gcj02";
@@ -9,7 +8,7 @@ import { gcj02PixelDelta } from "~/lib/gcj02";
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 const props = defineProps<{
-  map: MaplibreMap | null;
+  map: maplibregl.Map | null;
   source: TileSource | null;
 }>();
 
@@ -225,7 +224,7 @@ function ensureMbtilesProtocol() {
 
 // ─── 添加 / 更新预览图层 ──────────────────────────────────────────────────────
 
-async function addPreviewLayer(map: MaplibreMap, src: TileSource) {
+async function addPreviewLayer(map: maplibregl.Map, src: TileSource) {
   // 快照当前 generation：若在 await 期间 source 切换或组件卸载，则丢弃本次结果
   const gen = ++addGen;
 
@@ -233,7 +232,7 @@ async function addPreviewLayer(map: MaplibreMap, src: TileSource) {
     removePreviewLayer(map);
 
     let tileUrls: string[];
-    let scheme = src.north_to_south ? "xyz" : "tms";
+    let scheme: "xyz" | "tms" = src.north_to_south ? "xyz" : "tms";
     let boundsForOverlay = src.bounds;
     let minZoom = src.min_zoom ?? 0;
     let maxZoom = src.max_zoom ?? 18;
@@ -309,7 +308,7 @@ async function addPreviewLayer(map: MaplibreMap, src: TileSource) {
 
 type Bounds = { west: number; east: number; south: number; north: number };
 
-function addBoundsOverlay(map: MaplibreMap, bounds: Bounds) {
+function addBoundsOverlay(map: maplibregl.Map, bounds: Bounds) {
   const { west, east, south, north } = bounds;
 
   const geojson: GeoJSON.FeatureCollection = {
@@ -357,7 +356,7 @@ function addBoundsOverlay(map: MaplibreMap, bounds: Bounds) {
   });
 }
 
-function removePreviewLayer(map: MaplibreMap) {
+function removePreviewLayer(map: maplibregl.Map) {
   for (const id of [LAYER_ID, BOUNDS_FILL_ID, BOUNDS_LINE_ID]) {
     if (map.getLayer(id)) map.removeLayer(id);
   }
@@ -368,7 +367,7 @@ function removePreviewLayer(map: MaplibreMap) {
   currentHeaders = {};
 }
 
-function fitToBounds(map: MaplibreMap, bounds: Bounds) {
+function fitToBounds(map: maplibregl.Map, bounds: Bounds) {
   const { west, east, south, north } = bounds;
   if (west < east && south < north) {
     // 近似全球范围（覆盖大半个地球）→ 强制 fitBounds，避免视点停留在初始的「中国中心」
@@ -398,10 +397,10 @@ function fitToBounds(map: MaplibreMap, bounds: Bounds) {
   }
 }
 
-function getFirstLabelLayerId(map: MaplibreMap): string | undefined {
+function getFirstLabelLayerId(map: maplibregl.Map): string | undefined {
   const layers = map.getStyle()?.layers ?? [];
   return layers.find(
-    (l) =>
+    (l: maplibregl.LayerSpecification) =>
       l.type === "symbol" && (l.id.includes("label") || l.id.includes("place")),
   )?.id;
 }

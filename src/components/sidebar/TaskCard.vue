@@ -29,7 +29,8 @@ export type TaskStatus =
   | "completed_with_errors"
   | "failed"
   | "pending"
-  | "processing";
+  | "processing"
+  | "cancelled";
 
 export interface Task {
   id: string;
@@ -121,6 +122,12 @@ const statusConfig = computed((): Record<
     bgColor: "#E8DAFF",
     textColor: "#6639BA",
     icon: Download,
+  },
+  cancelled: {
+    label: t('taskCard.status.cancelled'),
+    bgColor: "#F6F8FA",
+    textColor: "#57606A",
+    icon: Clock,
   },
 }));
 

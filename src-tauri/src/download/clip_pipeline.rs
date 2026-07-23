@@ -235,7 +235,7 @@ fn run_consumer_blocking(
         while pending.len() >= BATCH {
             let batch: Vec<TileCoord> = pending.drain(..BATCH.min(pending.len())).collect();
             if let Err(e) = flush_batch(&mut conn, &app, &mut processed, total_boundary, &batch) {
-                eprintln!("[clip_pipeline] flush error: {}", e);
+                tracing::error!(error = %e, "[clip_pipeline] flush error");
             }
         }
 
@@ -247,7 +247,7 @@ fn run_consumer_blocking(
     if !pending.is_empty() {
         let batch: Vec<TileCoord> = pending.drain(..).collect();
         if let Err(e) = flush_batch(&mut conn, &app, &mut processed, total_boundary, &batch) {
-            eprintln!("[clip_pipeline] final flush error: {}", e);
+            tracing::error!(error = %e, "[clip_pipeline] final flush error");
         }
     }
 
@@ -289,7 +289,7 @@ pub fn spawn(
         match run_consumer_blocking(cfg, app, broadcast_tx, rx) {
             Ok(boundary_total) => ClipOutcome::Completed { boundary_total },
             Err(e) => {
-                eprintln!("[clip_pipeline] consumer terminated with error: {}", e);
+                tracing::error!(error = %e, "[clip_pipeline] consumer terminated with error");
                 ClipOutcome::Failed(e.to_string())
             }
         }
