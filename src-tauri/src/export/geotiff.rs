@@ -10,7 +10,7 @@
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use anyhow::{bail, Context, Result};
@@ -145,6 +145,32 @@ fn build_geo_reference(
 
 /// 单张瓦片像素尺寸
 const TILE_SIZE: u32 = 256;
+
+struct AtomicOutput {
+    path: PathBuf,
+    committed: bool,
+}
+
+fn commit_output(temp_path: &Path, dest_path: &Path) -> anyhow::Result<()> {
+    match std::fs::rename(temp_path, dest_path) {
+        Ok(()) => Ok(()),
+        Err(error) if dest_path.exists() => {
+            std::fs::remove_file(dest_path).context("替换已有 GeoTIFF 文件失败")?;
+            std::fs::rename(temp_path, dest_path).with_context(|| {
+                format!("提交 GeoTIFF 文件失败（首次错误: {error}）")
+            })
+        }
+        Err(error) => Err(error).context("提交 GeoTIFF 文件失败"),
+    }
+}
+
+impl Drop for AtomicOutput {
+    fn drop(&mut self) {
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 // ─── GeoTIFF Tag IDs ─────────────────────────────────────────────────────────
 
@@ -297,8 +323,27 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
         }
     };
 
-    // ── 创建 TIFF 编码器并写入地理参考标签 ──────────────────────────────────
-    let file = std::fs::File::create(dest_path).context("创建 GeoTIFF 文件失败")?;
+    // 先写入临时文件，成功后再原子替换目标，避免取消时留下残缺文件。
+    let temp_path = dest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!(
+            ".{}.part-{}-{}",
+            dest_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("export.tif"),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or_default()
+        ));
+    let mut output = AtomicOutput {
+        path: temp_path.clone(),
+        committed: false,
+    };
+    let file = std::fs::File::create(&temp_path).context("创建 GeoTIFF 临时文件失败")?;
     let mut encoder = TiffEncoder::new_big(std::io::BufWriter::new(file))?;
     let lon_scale = (geo_east - geo_west) / out_w as f64;
     let lat_scale = (geo_north - geo_south) / out_h as f64;
@@ -438,6 +483,8 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
             )?),
             _ => encode_reprojected!(encoder.new_image::<RGBA8>(out_w, out_h)?),
         };
+        commit_output(&temp_path, dest_path)?;
+        output.committed = true;
         return Ok(result);
     }
 
@@ -500,6 +547,8 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
         _ => encode_with!(encoder.new_image::<RGBA8>(out_w, out_h)?),
     };
 
+    commit_output(&temp_path, dest_path)?;
+    output.committed = true;
     Ok(read_count)
 }
 

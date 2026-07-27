@@ -1253,6 +1253,7 @@ function logTime(iso: string) {
                     }
                   })()
                 "
+                :show-basemap="false"
                 class="w-full h-full"
               />
               <span

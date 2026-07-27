@@ -6,10 +6,12 @@
 //! - `parse_tms_url`       — 解析 TMS/XYZ URL 模板
 //! - `validate_tile_url`   — 探测单个瓦片 URL 是否可访问
 
+use futures_util::StreamExt;
 use tauri::command;
 use tauri::State;
 
 use crate::commands::settings::get_active_proxy_url;
+use crate::commands::tile_proxy::validate_target;
 use crate::parser::{lra, lrc, ovmap, wmts};
 use crate::storage::app_db::AppDb;
 use crate::types::TileSource;
@@ -51,15 +53,17 @@ pub async fn parse_wmts_url(
 ) -> Result<Vec<TileSource>, String> {
     // 构建 GetCapabilities 请求 URL
     let caps_url = build_capabilities_url(&url);
+    let classified = validate_target(&caps_url).await?;
     let proxy_url = get_active_proxy_url(app_db.inner());
 
     // 发起 HTTP 请求
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("TileGrabber/0.1");
     // 本地地址（TileGrabber 自身 WMTS 服务器）不走代理
-    let is_local = caps_url.starts_with("http://localhost")
-        || caps_url.starts_with("http://127.0.0.1");
+    let is_local = classified.is_loopback;
     if !is_local {
         if let Some(p) = proxy_url.as_deref() {
             if let Ok(proxy) = reqwest::Proxy::all(p) {
@@ -77,7 +81,7 @@ pub async fn parse_wmts_url(
         .await
         .map_err(|e| {
             // 提示本地服务未启动
-            if caps_url.starts_with("http://localhost") || caps_url.starts_with("http://127.0.0.1") {
+            if is_local {
                 format!("无法连接到本地服务（{caps_url}）。请先在发布面板中启动服务后再试。原始错误: {e}")
             } else {
                 format!("请求 WMTS 服务失败: {e}")
@@ -88,10 +92,24 @@ pub async fn parse_wmts_url(
         return Err(format!("WMTS 服务返回错误状态: {}", response.status()));
     }
 
-    let xml = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应内容失败: {e}"))?;
+    const MAX_CAPABILITIES_BYTES: usize = 8 * 1024 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_CAPABILITIES_BYTES as u64)
+    {
+        return Err("WMTS Capabilities 响应超过 8 MiB 限制".into());
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取响应内容失败: {e}"))?;
+        if body.len().saturating_add(chunk.len()) > MAX_CAPABILITIES_BYTES {
+            return Err("WMTS Capabilities 响应超过 8 MiB 限制".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let xml = String::from_utf8(body.to_vec())
+        .map_err(|e| format!("WMTS Capabilities 不是有效 UTF-8: {e}"))?;
 
     // 解析图层列表
     let layers = wmts::parse_wmts_capabilities(&xml)

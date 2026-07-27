@@ -1826,7 +1826,15 @@ async fn run_mbtiles_import(
                 let tms_y: u32 = u32::try_from(row.get::<_, i32>(2)?)
                     .map_err(|e| anyhow::anyhow!("tile_row 越界: {e}"))?;
                 let tile_data: Vec<u8> = row.get(3)?;
-                let y = (1u32 << z).wrapping_sub(1).wrapping_sub(tms_y);
+                let matrix_size = 1u32
+                    .checked_shl(u32::from(z))
+                    .ok_or_else(|| anyhow::anyhow!("zoom_level 超出支持范围: {z}"))?;
+                if x >= matrix_size || tms_y >= matrix_size {
+                    return Err(anyhow::anyhow!(
+                        "MBTiles 坐标超出缩放级别范围: z={z}, x={x}, y={tms_y}"
+                    ));
+                }
+                let y = matrix_size - 1 - tms_y;
 
                 match tile_store.save_tile(&crate::tile_math::TileCoord { z, x, y }, &tile_data) {
                     Ok(_) => downloaded += 1,

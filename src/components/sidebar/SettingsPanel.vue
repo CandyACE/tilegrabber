@@ -192,6 +192,18 @@ const groups = computed<Group[]>(() => [
         max: 65535,
         hint: t("settings.fields.server_default_port.hint"),
       },
+      {
+        key: "server.bind_lan",
+        label: t("settings.fields.server_bind_lan.label"),
+        type: "toggle",
+        hint: t("settings.fields.server_bind_lan.hint"),
+      },
+      {
+        key: "server.token",
+        label: t("settings.fields.server_token.label"),
+        type: "text",
+        hint: t("settings.fields.server_token.hint"),
+      },
     ],
   },
   {

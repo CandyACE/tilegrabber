@@ -15,7 +15,16 @@ pub mod remote;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use axum::{middleware, routing::get, routing::post, routing::delete, Router};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+    middleware,
+    response::{IntoResponse, Response},
+    routing::delete,
+    routing::get,
+    routing::post,
+    Router,
+};
 use tokio::sync::oneshot;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -52,6 +61,7 @@ pub struct ServerAppState {
     pub remote_broadcast_tx: Arc<tokio::sync::broadcast::Sender<ProgressPayload>>,
     pub remote_clients: RemoteClients,
     pub app_handle: tauri::AppHandle,
+    pub require_auth: bool,
 }
 
 // ─── 服务控制 ————————————────————────────────────────────————────────————————
@@ -76,6 +86,33 @@ impl TileServer {
 
 /// Tauri 管理的服务器状态（Arc<Mutex<TileServer>>）
 pub type TileServerState = Arc<Mutex<TileServer>>;
+
+async fn publish_auth_middleware(
+    axum::extract::State(state): axum::extract::State<ServerAppState>,
+    request: Request<Body>,
+    next: middleware::Next,
+) -> Response {
+    if !state.require_auth || request.method() == axum::http::Method::OPTIONS {
+        return next.run(request).await;
+    }
+
+    let token = state
+        .app_db
+        .get_setting("server.token")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let provided = request
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if token.is_empty() || provided != token {
+        return (StatusCode::UNAUTHORIZED, "tile server authorization required").into_response();
+    }
+    next.run(request).await
+}
 
 // ─── 独立远程协作服务器 ──────────────────────────────────────────────────────
 
@@ -123,6 +160,11 @@ pub async fn start_server(
     }
 
     let base_url = format!("http://localhost:{port}");
+    let bind_lan = app_db
+        .get_setting("server.bind_lan")
+        .ok()
+        .flatten()
+        .is_some_and(|value| value == "true");
     let app_state = ServerAppState {
         app_db,
         base_url: base_url.clone(),
@@ -131,12 +173,30 @@ pub async fn start_server(
         remote_broadcast_tx,
         remote_clients,
         app_handle,
+        require_auth: bind_lan,
     };
+
+    if bind_lan
+        && app_state
+            .app_db
+            .get_setting("server.token")
+            .ok()
+            .flatten()
+            .map(|token| token.trim().is_empty())
+            .unwrap_or(true)
+    {
+        return Err("开启局域网发布前必须配置 server.token".into());
+    }
 
     let cors = CorsLayer::new()
         .allow_methods(Any)
-        .allow_headers(Any)
-        .allow_origin(Any);
+        .allow_headers([axum::http::header::AUTHORIZATION, axum::http::header::CONTENT_TYPE])
+        .allow_origin([
+            "http://localhost:4000".parse().unwrap(),
+            "http://127.0.0.1:4000".parse().unwrap(),
+            "tauri://localhost".parse().unwrap(),
+            "http://tauri.localhost".parse().unwrap(),
+        ]);
 
     // 远程协作功能暂时隐藏：主瓦片发布服务不再挂载 /remote 路由。
     // 若需恢复，取消下方 remote_router 与 .nest("/remote", ...) 的注释即可。
@@ -187,9 +247,14 @@ pub async fn start_server(
         .route("/api/info", get(handlers::api_info))
         // .nest("/remote", remote_router) // 远程协作隐藏期间不挂载
         .layer(cors)
-        .with_state(app_state);
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            publish_auth_middleware,
+        ))
+        .with_state(app_state.clone());
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+    let bind_host = if bind_lan { "0.0.0.0" } else { "127.0.0.1" };
+    let listener = tokio::net::TcpListener::bind(format!("{bind_host}:{port}"))
         .await
         .map_err(|e| format!("端口 {port} 绑定失败: {e}"))?;
 
@@ -256,6 +321,7 @@ pub async fn start_remote_server(
         remote_broadcast_tx,
         remote_clients,
         app_handle,
+        require_auth: true,
     };
 
     let cors = CorsLayer::new()

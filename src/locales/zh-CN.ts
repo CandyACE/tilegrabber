@@ -149,6 +149,14 @@ export default {
         label: "默认端口",
         hint: "瓦片发布服务的默认监听端口",
       },
+      server_bind_lan: {
+        label: "允许局域网访问",
+        hint: "关闭时仅本机可访问；开启后必须配置访问令牌",
+      },
+      server_token: {
+        label: "局域网访问令牌",
+        hint: "局域网客户端请求时需要携带此 Bearer Token",
+      },
       remote_enabled: {
         label: "启用远程协作 API",
         hint: "开启后，其他御图客户端可通过 Token 连接本机，提交下载任务并实时查看进度",

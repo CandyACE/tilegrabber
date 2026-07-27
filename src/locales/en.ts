@@ -152,6 +152,14 @@ export default {
         label: "Default Port",
         hint: "Default listening port for the tile publish server",
       },
+      server_bind_lan: {
+        label: "Allow LAN Access",
+        hint: "When disabled, only this computer can connect. A token is required when enabled.",
+      },
+      server_token: {
+        label: "LAN Access Token",
+        hint: "LAN clients must send this Bearer Token with requests",
+      },
       remote_enabled: {
         label: "Enable Remote Collaboration API",
         hint: "Once enabled, other TileGrabber clients can connect using a Token to submit download tasks and monitor progress in real time",

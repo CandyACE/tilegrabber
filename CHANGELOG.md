@@ -4,7 +4,30 @@
 
 ---
 
-## [v0.5.0] - 待发布
+## [v0.5.1] - 2026-07-27
+
+### 安全
+
+- **发布服务访问边界**：默认仅监听本机；开启局域网监听时要求 Bearer Token，并限制跨域来源
+- **网络请求防护**：瓦片代理拒绝私有网络解析结果，增加超时、重定向限制、请求头约束和响应体大小限制
+
+### 修复
+
+- 修复旧 `.tiles` 数据库因 `fetched_at` 重复迁移而无法打开的问题
+- 修复 GeoTIFF 取消或失败时在目标路径留下残缺文件的问题
+- 增加下载并发和 MBTiles 坐标范围的后端校验，避免资源耗尽和异常移位
+- **Tile 代理 SSRF 防护**：`fetch_tile` 使用 `url::Url` 校验 scheme 与 host，拒绝 file://、data:// 及非回环私有地址
+- **Rust panic 策略**：`Cargo.toml` 改回 `panic = "unwind"`，下载入口包 `catch_unwind` 防止单任务 panic 拖垮整个进程
+- **数据库整数越界**：DB 读取的 `as u8/u32/i32` 改为 `try_from`，越界时返回错误而非静默截断
+- **关键状态更新错误静默**：`engine.rs` 中部分 `.ok()` 状态更新改为 `soft_err` + `tracing::warn` 记录
+
+### 优化
+
+- **借数据预览**：候选任务缩略图不再加载 OpenStreetMap 底图，仅展示本地可复用瓦片，减少无关网络请求
+
+---
+
+## [v0.5.0] - 2026-06-02
 
 ### 安全
 
@@ -59,10 +82,6 @@
 
 - **托盘构建失败导致启动崩溃**：缺图标时改为日志告警并跳过托盘创建，不阻断主窗口
 - **下载信号量错误处理**：`.unwrap()` → `.expect()` 并加注释；mutex 中毒时优雅恢复（`PoisonError::into_inner`），避免链式 panic 让导出任务半成品状态卡死
-- **Tile 代理 SSRF 防护**：`fetch_tile` 使用 `url::Url` 校验 scheme 与 host，拒绝 file://、data:// 及非回环私有地址
-- **Rust panic 策略**：`Cargo.toml` 改回 `panic = "unwind"`，下载入口包 `catch_unwind` 防止单任务 panic 拖垮整个进程
-- **数据库整数越界**：DB 读取的 `as u8/u32/i32` 改为 `try_from`，越界时返回错误而非静默截断
-- **关键状态更新错误静默**：`engine.rs` 中部分 `.ok()` 状态更新改为 `soft_err` + `tracing::warn` 记录
 
 ### 破坏性变更
 

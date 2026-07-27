@@ -13,6 +13,7 @@ const props = defineProps<{
   taskId: string;
   bounds: Bounds;
   format: string;
+  showBasemap?: boolean;
 }>();
 
 const container = ref<HTMLDivElement | null>(null);
@@ -36,15 +37,20 @@ function mountMap() {
     container: container.value,
     style: {
       version: 8,
-      sources: {
-        bg: {
-          type: "raster",
-          tiles: ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"],
-          tileSize: 256,
-          attribution: "© OSM",
-        },
-      },
-      layers: [{ id: "bg", type: "raster", source: "bg" }],
+      sources: props.showBasemap === false
+        ? {}
+        : {
+            bg: {
+              type: "raster",
+              tiles: ["https://a.tile.openstreetmap.org/{z}/{x}/{y}.png"],
+              tileSize: 256,
+              attribution: "© OSM",
+            },
+          },
+      layers:
+        props.showBasemap === false
+          ? []
+          : [{ id: "bg", type: "raster", source: "bg" }],
     },
     interactive: false,
     attributionControl: false,

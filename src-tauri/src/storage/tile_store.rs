@@ -17,7 +17,7 @@ use crate::tile_math::TileCoord;
 const CURRENT_TILE_STORE_VERSION: i32 = 1;
 
 const TILE_STORE_MIGRATIONS: &[&str] = &[
-    // v1: 基线表结构 + fetched_at 列
+    // v1: 基线表结构。fetched_at 由幂等迁移补齐。
     r#"
     CREATE TABLE IF NOT EXISTS metadata (
         name  TEXT PRIMARY KEY,
@@ -41,9 +41,6 @@ const TILE_STORE_MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_ds_status
         ON download_state(status, zoom_level);
-    ALTER TABLE tiles ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0;
-    UPDATE tiles SET fetched_at = strftime('%s','now') WHERE fetched_at = 0;
-    CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);
     "#,
 ];
 
@@ -104,7 +101,30 @@ impl TileStore {
 
     fn init_tables(&self) -> Result<()> {
         let conn = self.lock()?;
-        Self::run_migrations(&conn, CURRENT_TILE_STORE_VERSION, TILE_STORE_MIGRATIONS)?;
+        let tx = conn.unchecked_transaction()?;
+        Self::run_migrations(&tx, CURRENT_TILE_STORE_VERSION, TILE_STORE_MIGRATIONS)?;
+        Self::ensure_fetched_at(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn ensure_fetched_at(conn: &Connection) -> Result<()> {
+        let has_fetched_at: bool = conn
+            .prepare("PRAGMA table_info(tiles)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|name| name == "fetched_at");
+
+        if !has_fetched_at {
+            conn.execute_batch(
+                "ALTER TABLE tiles ADD COLUMN fetched_at INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
+        conn.execute_batch(
+            "UPDATE tiles SET fetched_at = strftime('%s','now') WHERE fetched_at = 0;
+             CREATE INDEX IF NOT EXISTS idx_tiles_fetched_at ON tiles(fetched_at);",
+        )?;
         Ok(())
     }
 
@@ -537,6 +557,7 @@ impl TileStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::Connection;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -576,6 +597,28 @@ mod tests {
         assert_eq!(progress.total, 4);
         assert_eq!(progress.downloaded, 2);
         assert_eq!(progress.pending, 2);
+    }
+
+    #[test]
+    fn opens_legacy_store_with_existing_fetched_at() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("legacy.tiles");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tiles (
+                 zoom_level INTEGER NOT NULL,
+                 tile_column INTEGER NOT NULL,
+                 tile_row INTEGER NOT NULL,
+                 tile_data BLOB NOT NULL,
+                 fetched_at INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (zoom_level, tile_column, tile_row)
+             );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let store = TileStore::open(&path, "legacy-task").unwrap();
+        store.save_tile(&TileCoord { z: 1, x: 0, y: 0 }, b"tile").unwrap();
     }
 
     #[test]

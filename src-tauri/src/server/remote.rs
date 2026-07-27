@@ -202,6 +202,7 @@ pub async fn submit_task(
         .flatten()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
+        .map(|n| n.min(64))
         .unwrap_or(8);
     if let Err(e) = engine.start(
         task_id.clone(),

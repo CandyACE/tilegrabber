@@ -49,6 +49,7 @@ struct ExportProgressPayload {
 
 /// 默认并发数（当设置读取失败时的备用值）
 const DEFAULT_CONCURRENCY: usize = 16;
+const MAX_CONCURRENCY: usize = 64;
 
 /// 从 AppDb 读取用户配置的并发数
 fn get_concurrency(app_db: &AppDb) -> usize {
@@ -58,6 +59,7 @@ fn get_concurrency(app_db: &AppDb) -> usize {
         .flatten()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&n| n > 0)
+        .map(|n| n.min(MAX_CONCURRENCY))
         .unwrap_or(DEFAULT_CONCURRENCY)
 }
 

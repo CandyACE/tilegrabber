@@ -30,6 +30,10 @@ pub fn default_settings() -> HashMap<&'static str, &'static str> {
         ("app.tiles_dir", ""),
         // 瓦片发布服务默认端口
         ("server.default_port", "8765"),
+        // 是否允许瓦片发布服务监听局域网地址
+        ("server.bind_lan", "false"),
+        // 局域网发布服务访问令牌
+        ("server.token", ""),
         // ── 下载规则 ────────────────────────────────────────────────────────
         // 是否启用时间窗口
         ("rules.time_window_enabled", "false"),
@@ -173,6 +177,22 @@ pub async fn set_all_settings(
 ) -> Result<(), String> {
     let mut invalidate = false;
     for (k, v) in &settings {
+        if k == "download.concurrency" {
+            let value = v
+                .parse::<usize>()
+                .map_err(|_| "下载并发数必须是整数".to_string())?;
+            if !(1..=64).contains(&value) {
+                return Err("下载并发数必须介于 1 和 64 之间".into());
+            }
+        }
+        if k == "tasks.max_concurrent" {
+            let value = v
+                .parse::<usize>()
+                .map_err(|_| "最大并发任务数必须是整数".to_string())?;
+            if value > 64 {
+                return Err("最大并发任务数不能超过 64".into());
+            }
+        }
         app_db.set_setting(k, v).map_err(|e| e.to_string())?;
         if k.starts_with("remote.") {
             invalidate = true;
