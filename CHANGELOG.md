@@ -13,6 +13,7 @@
 
 ### 修复
 
+- 修复 CI 中 Rust 工具链 action 名称错误（`dtolnay/rust-action` → `dtolnay/rust-toolchain`）
 - 修复旧 `.tiles` 数据库因 `fetched_at` 重复迁移而无法打开的问题
 - 修复 GeoTIFF 取消或失败时在目标路径留下残缺文件的问题
 - 增加下载并发和 MBTiles 坐标范围的后端校验，避免资源耗尽和异常移位
