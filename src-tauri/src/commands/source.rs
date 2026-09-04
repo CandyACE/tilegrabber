@@ -194,7 +194,7 @@ pub async fn parse_area_file(path: String) -> Result<crate::parser::area_file::P
 
 /// 解析 MBTiles 文件元数据，返回统一 TileSource
 ///
-/// 读取 `metadata` 表中的 name / bounds / minzoom / maxzoom / format。
+/// 读取 `metadata` 表中的 name / bounds / minzoom / maxzoom / format / tile_size。
 /// `url_template` 字段用于存储文件路径，供下载引擎使用。
 #[command]
 pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
@@ -252,6 +252,12 @@ pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(18);
         let format = meta.get("format").cloned().unwrap_or_else(|| "png".into());
+        let tile_size = parse_mbtiles_tile_size(&meta);
+        tracing::info!(
+            path,
+            tile_size,
+            "[mbtiles] 已读取瓦片尺寸扩展元数据"
+        );
 
         Ok(TileSource {
             kind: SourceKind::MbtileFile,
@@ -266,6 +272,7 @@ pub async fn parse_mbtiles_source(path: String) -> Result<TileSource, String> {
             min_zoom,
             max_zoom,
             format,
+            tile_size,
             north_to_south: true,
             crs: CrsType::WebMercator,
             ..Default::default()
@@ -303,6 +310,31 @@ pub async fn fetch_mbtiles_tile(path: String, z: i64, x: i64, y: i64) -> Result<
 
 // ─── 辅助函数 ────────────────────────────────────────────────────────────────
 
+/// 读取御图导出的瓦片尺寸扩展元数据。
+///
+/// 不扫描瓦片内容自动猜测尺寸；外部 MBTiles 未声明时保持兼容默认值 256。
+fn parse_mbtiles_tile_size(
+    meta: &std::collections::HashMap<String, String>,
+) -> u32 {
+    let declared_size = meta
+        .get("tile_size")
+        .or_else(|| meta.get("tileSize"))
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| (64..=4096).contains(value));
+    if let Some(tile_size) = declared_size {
+        return tile_size;
+    }
+
+    // tilepixelratio 是部分 MBTiles 工具采用的显式 HiDPI 元数据；
+    // 它不是图像扫描，不违背手动/元数据配置优先的约束。
+    meta.get("tilepixelratio")
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .map(|ratio| (256.0 * ratio).round() as u32)
+        .filter(|value| (64..=4096).contains(value))
+        .unwrap_or(256)
+}
+
 /// 确保 URL 包含 GetCapabilities 请求参数
 fn build_capabilities_url(url: &str) -> String {
     let lower = url.to_lowercase();
@@ -317,4 +349,27 @@ fn build_capabilities_url(url: &str) -> String {
         url = url,
         sep = separator
     )
+}
+
+#[cfg(test)]
+mod mbtiles_metadata_tests {
+    use super::parse_mbtiles_tile_size;
+    use std::collections::HashMap;
+
+    #[test]
+    fn reads_declared_tile_size_without_auto_detection() {
+        let mut meta = HashMap::new();
+        meta.insert("tile_size".to_string(), "512".to_string());
+        assert_eq!(parse_mbtiles_tile_size(&meta), 512);
+
+        meta.clear();
+        assert_eq!(parse_mbtiles_tile_size(&meta), 256);
+
+        meta.insert("tilepixelratio".to_string(), "2".to_string());
+        assert_eq!(parse_mbtiles_tile_size(&meta), 512);
+
+        meta.clear();
+        meta.insert("tile_size".to_string(), "0".to_string());
+        assert_eq!(parse_mbtiles_tile_size(&meta), 256);
+    }
 }

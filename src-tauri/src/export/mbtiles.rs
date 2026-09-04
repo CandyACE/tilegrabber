@@ -23,6 +23,7 @@ use crate::types::CrsType;
 /// - `min_zoom`        — 最小缩放级别  
 /// - `max_zoom`        — 最大缩放级别  
 /// - `format`          — 图像格式：`"png"` / `"jpg"` / `"webp"`
+/// - `tile_size`       — 单张栅格瓦片的像素尺寸，写入扩展元数据供重新导入使用
 /// - `clip_to_bounds`  — 是否仅导出完全位于范围内的瓦片（过滤边缘相交瓦片）
 /// - `polygon`         — 多边形范围 WGS84 坐标（优先于矩形范围做像素级裁剪）
 /// - `crs`             — 瓦片坐标系（WebMercator / WGS84）
@@ -35,6 +36,7 @@ pub fn export_mbtiles<F>(
     min_zoom: u8,
     max_zoom: u8,
     format: &str,
+    tile_size: u32,
     clip_to_bounds: bool,
     polygon: Option<&[[f64; 2]]>,
     crs: &CrsType,
@@ -46,6 +48,19 @@ pub fn export_mbtiles<F>(
 where
     F: FnMut(u64, u64),
 {
+    // MBTiles 标准未规定栅格瓦片像素尺寸字段；御图写入扩展元数据，
+    // 让 512 等高清瓦片重新导入时仍按原任务配置显示。
+    let tile_size = if (64..=4096).contains(&tile_size) {
+        tile_size
+    } else {
+        tracing::warn!(
+            tile_size,
+            "[mbtiles] 导出任务的瓦片尺寸无效，元数据已回退到 256"
+        );
+        256
+    };
+    tracing::info!(tile_size, "[mbtiles] 写入栅格瓦片尺寸扩展元数据");
+
     // ── 打开源数据库（只读）──────────────────────────────────────────────────
     let src =
         Connection::open_with_flags(tile_store_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -118,6 +133,14 @@ where
         ("maxzoom", max_zoom.to_string()),
         ("format", mbtiles_format.clone()),
         ("type", mbtiles_type.into()),
+        ("tile_size", tile_size.to_string()),
+        (
+            "tilepixelratio",
+            format!("{:.6}", tile_size as f64 / 256.0)
+                .trim_end_matches('0')
+                .trim_end_matches('.')
+                .to_string(),
+        ),
     ];
 
     // ── 矢量瓦片：扫描若干样本瓦片，提取 layer 名，生成 vector_layers JSON ──
@@ -302,4 +325,84 @@ where
     }
 
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exports_tile_size_metadata_and_preserves_tms_coordinates() {
+        let dir = tempfile::tempdir().unwrap();
+        let src_path = dir.path().join("source.tiles");
+        let dest_path = dir.path().join("output.mbtiles");
+        let src = Connection::open(&src_path).unwrap();
+        src.execute_batch(
+            "CREATE TABLE metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE tiles (
+                 zoom_level INTEGER NOT NULL,
+                 tile_column INTEGER NOT NULL,
+                 tile_row INTEGER NOT NULL,
+                 tile_data BLOB NOT NULL
+             );",
+        )
+        .unwrap();
+        src.execute(
+            "INSERT INTO tiles(zoom_level, tile_column, tile_row, tile_data)
+             VALUES(2, 3, 1, ?1)",
+            params![vec![1u8, 2, 3, 4]],
+        )
+        .unwrap();
+        drop(src);
+
+        let cancel = AtomicBool::new(false);
+        let written = export_mbtiles(
+            &src_path,
+            &dest_path,
+            "512 测试",
+            [120.0, 30.0, 121.0, 31.0],
+            2,
+            2,
+            "png",
+            512,
+            false,
+            None,
+            &CrsType::WebMercator,
+            None,
+            None,
+            &cancel,
+            |_, _| {},
+        )
+        .unwrap();
+        assert_eq!(written, 1);
+
+        let dst = Connection::open(&dest_path).unwrap();
+        let tile_size: String = dst
+            .query_row(
+                "SELECT value FROM metadata WHERE name='tile_size'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tile_size, "512");
+        let tile_pixel_ratio: String = dst
+            .query_row(
+                "SELECT value FROM metadata WHERE name='tilepixelratio'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tile_pixel_ratio, "2");
+
+        // z2 的 XYZ y=1 导出为 TMS y=2，瓦片内容不得被改写。
+        let data: Vec<u8> = dst
+            .query_row(
+                "SELECT tile_data FROM tiles
+                 WHERE zoom_level=2 AND tile_column=3 AND tile_row=2",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(data, vec![1u8, 2, 3, 4]);
+    }
 }

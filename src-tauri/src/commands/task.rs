@@ -769,10 +769,10 @@ pub async fn export_mbtiles(
         return Err(format!("瓦片文件不存在: {}", src_path));
     }
 
-    let format = serde_json::from_str::<serde_json::Value>(&task.source_config)
-        .ok()
-        .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(str::to_string))
-        .unwrap_or_else(|| "png".into());
+    let source =
+        serde_json::from_str::<crate::types::TileSource>(&task.source_config).unwrap_or_default();
+    let format = source.format.clone();
+    let tile_size = source.tile_size;
     let bounds = [
         task.bounds_west,
         task.bounds_south,
@@ -783,9 +783,7 @@ pub async fn export_mbtiles(
         .polygon_wgs84
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok());
-    let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
-        .map(|s| s.crs)
-        .unwrap_or_default();
+    let crs = source.crs;
     let task_name = task.name.clone();
 
     let job_id = Uuid::new_v4().to_string();
@@ -817,6 +815,7 @@ pub async fn export_mbtiles(
             task.min_zoom,
             task.max_zoom,
             &format,
+            tile_size,
             clip_to_bounds,
             polygon.as_deref(),
             &crs,

@@ -21,6 +21,23 @@ use super::throttle;
 
 // ─── HTTP 客户端 ─────────────────────────────────────────────────────────────
 
+/// 判断请求头是否应由 reqwest/HTTP 连接层自行管理。
+///
+/// 浏览器抓取或旧版图层文件可能保存这些逐跳请求头。继续转发既不可靠，也可能
+/// 与自动解压、代理或连接复用冲突；为兼容旧数据，应忽略它们而不是中止请求。
+pub(crate) fn is_managed_request_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "host"
+            | "content-length"
+            | "transfer-encoding"
+            | "connection"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "accept-encoding"
+    )
+}
+
 /// 构建带通用 Headers 的 reqwest 客户端
 pub fn build_client(extra_headers: &HashMap<String, String>) -> Result<Client> {
     build_client_with_proxy(extra_headers, None, false)
@@ -61,13 +78,33 @@ pub fn build_client_with_proxy(
 
     if !extra_headers.is_empty() {
         let mut headers = reqwest::header::HeaderMap::new();
+        let mut ignored_headers = Vec::new();
+        let mut invalid_headers = Vec::new();
         for (k, v) in extra_headers {
+            if is_managed_request_header(k) {
+                ignored_headers.push(k.as_str());
+                continue;
+            }
             if let (Ok(name), Ok(value)) = (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
                 reqwest::header::HeaderValue::from_str(v),
             ) {
                 headers.insert(name, value);
+            } else {
+                invalid_headers.push(k.as_str());
             }
+        }
+        if !ignored_headers.is_empty() {
+            tracing::warn!(
+                headers = ?ignored_headers,
+                "[worker] 已忽略由 HTTP 客户端管理的旧图层请求头"
+            );
+        }
+        if !invalid_headers.is_empty() {
+            tracing::warn!(
+                headers = ?invalid_headers,
+                "[worker] 已忽略名称或值无效的图层请求头"
+            );
         }
         builder = builder.default_headers(headers);
     }
@@ -296,5 +333,23 @@ mod tests {
             false,
         );
         assert!(client.is_ok());
+    }
+
+    #[test]
+    fn identifies_http_managed_headers_without_blocking_normal_headers() {
+        for name in [
+            "Connection",
+            "Accept-Encoding",
+            "Host",
+            "Content-Length",
+            "Transfer-Encoding",
+            "Proxy-Authorization",
+            "Proxy-Connection",
+        ] {
+            assert!(is_managed_request_header(name), "{name} 应由客户端管理");
+        }
+        assert!(!is_managed_request_header("Referer"));
+        assert!(!is_managed_request_header("Authorization"));
+        assert!(!is_managed_request_header("Cookie"));
     }
 }

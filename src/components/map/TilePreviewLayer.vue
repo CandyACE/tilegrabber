@@ -8,6 +8,12 @@ import {
   parseTileCoordsFromUrl,
   replaceTileXYInUrl,
 } from "~/lib/tile-url";
+import {
+  CHINA_PREVIEW_CENTER,
+  getMinimumMapZoom,
+  isChinaPreviewCenter,
+  isNearlyGlobalBounds,
+} from "~/lib/map-preview";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -282,7 +288,14 @@ async function addPreviewLayer(map: maplibregl.Map, src: TileSource) {
     );
 
     addBoundsOverlay(map, boundsForOverlay);
-    fitToBounds(map, boundsForOverlay);
+    fitToBounds(
+      map,
+      boundsForOverlay,
+      minZoom,
+      src.tile_size || 256,
+      src.coord_type,
+      src.name,
+    );
   } catch (err) {
     console.error("[TilePreviewLayer] Failed to add preview layer:", err, src);
   }
@@ -349,26 +362,66 @@ function removePreviewLayer(map: maplibregl.Map) {
   currentHeaders = {};
 }
 
-function fitToBounds(map: maplibregl.Map, bounds: Bounds) {
+function fitToBounds(
+  map: maplibregl.Map,
+  bounds: Bounds,
+  sourceMinZoom: number,
+  tileSize: number,
+  coordType: TileSource["coord_type"],
+  sourceName: string,
+) {
   const { west, east, south, north } = bounds;
   if (west < east && south < north) {
-    // 近似全球范围（覆盖大半个地球）→ 强制 fitBounds，避免视点停留在初始的「中国中心」
-    const isNearlyGlobal =
-      east - west > 300 || (west < -150 && east > 150 && north - south > 140);
+    const currentCenter = map.getCenter();
+    const minimumMapZoom = getMinimumMapZoom(sourceMinZoom, tileSize);
+    const nearlyGlobal = isNearlyGlobalBounds(bounds);
 
-    if (!isNearlyGlobal) {
-      // 仅在「非全球」图层时使用「相机已在范围内则免飞」的优化：
-      // 否则任何子区域都会触发 fit，可能反复跳动
-      const center = map.getCenter();
-      if (
-        center.lng >= west &&
-        center.lng <= east &&
-        center.lat >= south &&
-        center.lat <= north
-      ) {
-        return;
+    if (nearlyGlobal && (coordType === "GCJ02" || sourceMinZoom > 0)) {
+      const needsChinaCenter = !isChinaPreviewCenter(
+        currentCenter.lng,
+        currentCenter.lat,
+        coordType,
+      );
+      const targetZoom = Math.max(
+        map.getZoom(),
+        minimumMapZoom,
+        coordType === "GCJ02" ? 4 : 0,
+      );
+
+      // 默认全球范围通常表示“服务未声明真实范围”，不能据此缩放到 Z0。
+      // GCJ02 图源若停留在中国之外，还需要恢复到默认中国视点。
+      if (needsChinaCenter) {
+        map.easeTo({
+          center: CHINA_PREVIEW_CENTER,
+          zoom: targetZoom,
+          duration: 300,
+        });
+      } else if (map.getZoom() < minimumMapZoom) {
+        map.easeTo({ zoom: targetZoom, duration: 300 });
       }
+      console.info("[TilePreviewLayer] 全球默认范围保留业务视点", {
+        sourceName,
+        coordType,
+        sourceMinZoom,
+        tileSize,
+        minimumMapZoom,
+        targetZoom,
+        resetToChina: needsChinaCenter,
+      });
+      return;
     }
+
+    // 相机已位于真实图源范围内时不重复跳转。
+    if (
+      !nearlyGlobal &&
+      currentCenter.lng >= west &&
+      currentCenter.lng <= east &&
+      currentCenter.lat >= south &&
+      currentCenter.lat <= north
+    ) {
+      return;
+    }
+
     map.fitBounds(
       [west, south, east, north] as [number, number, number, number],
       {
@@ -376,6 +429,11 @@ function fitToBounds(map: maplibregl.Map, bounds: Bounds) {
         duration: 800,
       },
     );
+    console.info("[TilePreviewLayer] 按图源真实范围调整相机", {
+      sourceName,
+      bounds,
+      minimumMapZoom,
+    });
   }
 }
 

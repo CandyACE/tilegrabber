@@ -11,7 +11,7 @@ use tauri::State;
 use url::Url;
 
 use crate::commands::settings::get_active_proxy_url;
-use crate::download::throttle;
+use crate::download::{throttle, worker};
 use crate::storage::app_db::AppDb;
 
 #[derive(Debug)]
@@ -112,19 +112,27 @@ pub async fn fetch_tile(
     })?;
 
     let mut request = client.get(&url);
+    let mut ignored_headers = Vec::new();
     for (key, value) in &headers {
         if key.len() > 128 || value.len() > 16 * 1024 {
             return Err("请求头大小超出限制".into());
         }
-        let lower = key.to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "host" | "content-length" | "transfer-encoding" | "connection"
-                | "proxy-authorization" | "proxy-connection"
-        ) {
-            return Err(format!("不允许设置请求头: {key}"));
+        if worker::is_managed_request_header(key) {
+            ignored_headers.push(key.as_str());
+            continue;
         }
-        request = request.header(key.as_str(), value.as_str());
+        let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+            .map_err(|_| format!("请求头名称无效: {key}"))?;
+        let header_value = reqwest::header::HeaderValue::from_str(value)
+            .map_err(|_| format!("请求头值无效: {key}"))?;
+        request = request.header(name, header_value);
+    }
+    if !ignored_headers.is_empty() {
+        tracing::warn!(
+            host = classified.url.host_str().unwrap_or_default(),
+            headers = ?ignored_headers,
+            "[fetch_tile] 已忽略由 HTTP 客户端管理的旧图层请求头"
+        );
     }
 
     let response = request
