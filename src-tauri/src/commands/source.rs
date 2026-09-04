@@ -64,12 +64,11 @@ pub async fn parse_wmts_url(
         .user_agent("TileGrabber/0.1");
     // 本地地址（TileGrabber 自身 WMTS 服务器）不走代理
     let is_local = classified.is_loopback;
-    if !is_local {
-        if let Some(p) = proxy_url.as_deref() {
-            if let Ok(proxy) = reqwest::Proxy::all(p) {
-                builder = builder.proxy(proxy);
-            }
-        }
+    if is_local {
+        builder = builder.no_proxy();
+    } else if let Some(p) = proxy_url.as_deref() {
+        let proxy = reqwest::Proxy::all(p).map_err(|e| format!("代理 URL 格式无效: {e}"))?;
+        builder = builder.proxy(proxy);
     }
     let client = builder
         .build()
@@ -153,12 +152,11 @@ pub async fn validate_tile_url(
         .user_agent("TileGrabber/0.1");
     let is_local = test_url.starts_with("http://localhost")
         || test_url.starts_with("http://127.0.0.1");
-    if !is_local {
-        if let Some(p) = proxy_url.as_deref() {
-            if let Ok(proxy) = reqwest::Proxy::all(p) {
-                builder = builder.proxy(proxy);
-            }
-        }
+    if is_local {
+        builder = builder.no_proxy();
+    } else if let Some(p) = proxy_url.as_deref() {
+        let proxy = reqwest::Proxy::all(p).map_err(|e| format!("代理 URL 格式无效: {e}"))?;
+        builder = builder.proxy(proxy);
     }
     let client = builder
         .build()

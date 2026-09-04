@@ -81,8 +81,12 @@ async fn probe_one(url: &str, proxy_url: Option<&str>) -> bool {
         .connect_timeout(std::time::Duration::from_secs(5))
         .user_agent("Mozilla/5.0 TileGrabber-NetworkCheck/1.0");
     if let Some(url) = proxy_url.filter(|u| !u.is_empty()) {
-        if let Ok(proxy) = reqwest::Proxy::all(url) {
-            builder = builder.proxy(proxy);
+        match reqwest::Proxy::all(url) {
+            Ok(proxy) => builder = builder.proxy(proxy),
+            Err(e) => {
+                tracing::warn!(error = %e, "[network] 代理 URL 格式无效");
+                return false;
+            }
         }
     }
     let client = match builder.build() {

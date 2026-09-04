@@ -170,8 +170,8 @@ export default {
         hint: "客户端填写此 Token 才能连接。留空或未生成则拒绝所有连接",
       },
       network_proxy_enabled: {
-        label: "启用代理",
-        hint: "下载请求通过指定代理发送",
+        label: "使用自定义代理",
+        hint: "开启后覆盖系统代理；关闭时自动沿用操作系统代理设置",
       },
       network_proxy_url: {
         label: "代理地址",

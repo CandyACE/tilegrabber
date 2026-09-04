@@ -173,8 +173,8 @@ export default {
         hint: "Clients must supply this token to connect. Empty or not generated = all connections rejected",
       },
       network_proxy_enabled: {
-        label: "Enable Proxy",
-        hint: "Route download requests through the specified proxy",
+        label: "Use Custom Proxy",
+        hint: "Override the system proxy; when disabled, the operating system proxy is used automatically",
       },
       network_proxy_url: {
         label: "Proxy URL",

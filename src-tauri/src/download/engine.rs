@@ -494,7 +494,12 @@ async fn run_download(
     } else {
         None
     };
-    let client = match worker::build_client_with_proxy(&source.headers, proxy_url.as_deref()) {
+    let bypass_proxy = worker::is_loopback_url(&source.url_template);
+    let client = match worker::build_client_with_proxy(
+        &source.headers,
+        proxy_url.as_deref(),
+        bypass_proxy,
+    ) {
         Ok(c) => c,
         Err(e) => {
             tracing::error!(task_id, error = %e, "[engine] cannot build http client");

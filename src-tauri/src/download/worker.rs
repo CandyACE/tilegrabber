@@ -12,6 +12,7 @@ use anyhow::{bail, Context, Result};
 use rand::Rng;
 use reqwest::Client;
 use tokio::time::sleep;
+use url::Url;
 
 use crate::tile_math::TileCoord;
 use crate::types::TileSource;
@@ -22,13 +23,17 @@ use super::throttle;
 
 /// 构建带通用 Headers 的 reqwest 客户端
 pub fn build_client(extra_headers: &HashMap<String, String>) -> Result<Client> {
-    build_client_with_proxy(extra_headers, None)
+    build_client_with_proxy(extra_headers, None, false)
 }
 
-/// 构建带通用 Headers 和可选 HTTP/HTTPS 代理的 reqwest 客户端
+/// 构建带通用 Headers 和可选代理的 reqwest 客户端。
+///
+/// 未指定自定义代理时由 reqwest 读取系统代理；本地回环来源必须显式直连，
+/// 避免系统代理错误转发 TileGrabber 自身发布的瓦片。
 pub fn build_client_with_proxy(
     extra_headers: &HashMap<String, String>,
     proxy_url: Option<&str>,
+    bypass_proxy: bool,
 ) -> Result<Client> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(15))
@@ -43,9 +48,15 @@ pub fn build_client_with_proxy(
         .deflate(true)
         .http2_adaptive_window(true);
 
-    if let Some(url) = proxy_url.filter(|u| !u.is_empty()) {
+    if bypass_proxy {
+        tracing::debug!("[worker] 本地回环瓦片源使用直连模式");
+        builder = builder.no_proxy();
+    } else if let Some(url) = proxy_url.filter(|u| !u.is_empty()) {
         let proxy = reqwest::Proxy::all(url).context("代理 URL 格式无效")?;
+        tracing::debug!("[worker] 使用用户配置的网络代理");
         builder = builder.proxy(proxy);
+    } else {
+        tracing::debug!("[worker] 未配置自定义代理，使用操作系统代理设置");
     }
 
     if !extra_headers.is_empty() {
@@ -62,6 +73,19 @@ pub fn build_client_with_proxy(
     }
 
     builder.build().context("failed to build HTTP client")
+}
+
+/// 判断 URL 模板是否指向本机回环地址。
+pub fn is_loopback_url(url: &str) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    host.eq_ignore_ascii_case("localhost")
+        || host.trim_matches(['[', ']']) == "::1"
+        || host.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 // ─── URL 构造 ────────────────────────────────────────────────────────────────
@@ -240,5 +264,37 @@ fn extract_origin(url: &str) -> String {
         format!("{}://{}", &url[..pos], &rest[..end])
     } else {
         url.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_loopback_tile_sources() {
+        assert!(is_loopback_url(
+            "http://127.0.0.1:8765/wmts/task/{z}/{y}/{x}"
+        ));
+        assert!(is_loopback_url(
+            "http://localhost:8765/wmts/task/{z}/{y}/{x}"
+        ));
+        assert!(is_loopback_url(
+            "http://[::1]:8765/wmts/task/{z}/{y}/{x}"
+        ));
+        assert!(!is_loopback_url(
+            "https://mt0.google.com/vt/lyrs=s&x={x}&y={y}&z={z}"
+        ));
+    }
+
+    #[test]
+    fn accepts_socks5_custom_proxy() {
+        let headers = HashMap::new();
+        let client = build_client_with_proxy(
+            &headers,
+            Some("socks5://127.0.0.1:1080"),
+            false,
+        );
+        assert!(client.is_ok());
     }
 }

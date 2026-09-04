@@ -11,6 +11,7 @@ use tauri::State;
 use url::Url;
 
 use crate::commands::settings::get_active_proxy_url;
+use crate::download::throttle;
 use crate::storage::app_db::AppDb;
 
 #[derive(Debug)]
@@ -89,17 +90,26 @@ pub async fn fetch_tile(
     let proxy_url = get_active_proxy_url(app_db.inner());
     let mut builder = reqwest::Client::builder()
         .gzip(true)
+        .brotli(true)
+        .deflate(true)
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))
+        .user_agent(throttle::random_user_agent())
         .redirect(reqwest::redirect::Policy::none());
-    if !classified.is_loopback {
-        if let Some(p) = proxy_url.as_deref() {
-            if let Ok(proxy) = reqwest::Proxy::all(p) {
-                builder = builder.proxy(proxy);
-            }
-        }
+    if classified.is_loopback {
+        tracing::debug!("[fetch_tile] 本地回环地址使用直连模式");
+        builder = builder.no_proxy();
+    } else if let Some(p) = proxy_url.as_deref() {
+        let proxy = reqwest::Proxy::all(p).map_err(|e| format!("代理 URL 格式无效: {e}"))?;
+        tracing::debug!("[fetch_tile] 使用用户配置的网络代理");
+        builder = builder.proxy(proxy);
+    } else {
+        tracing::debug!("[fetch_tile] 未配置自定义代理，使用操作系统代理设置");
     }
-    let client = builder.build().map_err(|e| e.to_string())?;
+    let client = builder.build().map_err(|e| {
+        tracing::error!(error = %e, "[fetch_tile] HTTP 客户端初始化失败");
+        e.to_string()
+    })?;
 
     let mut request = client.get(&url);
     for (key, value) in &headers {
@@ -120,11 +130,31 @@ pub async fn fetch_tile(
     let response = request
         .send()
         .await
-        .map_err(|e| format!("请求失败 {}: {}", url, e))?;
+        .map_err(|e| {
+            tracing::warn!(
+                host = classified.url.host_str().unwrap_or_default(),
+                error = %e,
+                "[fetch_tile] 瓦片请求失败"
+            );
+            format!(
+                "请求失败（{}）: {}。若浏览器可访问，请检查系统代理，或在设置中配置自定义代理",
+                classified.url.host_str().unwrap_or_default(),
+                e
+            )
+        })?;
 
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("HTTP {} for {}", status, url));
+        tracing::warn!(
+            host = classified.url.host_str().unwrap_or_default(),
+            status = %status,
+            "[fetch_tile] 瓦片服务返回非成功状态"
+        );
+        return Err(format!(
+            "瓦片服务返回 HTTP {}（{}）",
+            status,
+            classified.url.host_str().unwrap_or_default()
+        ));
     }
 
     if response
