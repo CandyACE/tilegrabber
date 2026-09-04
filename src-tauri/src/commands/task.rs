@@ -579,7 +579,7 @@ pub async fn import_tiles_from_source(
     Ok((imported, pending_before))
 }
 
-/// 校验两任务来自同一数据源（host + format + CRS + coord_type）。
+/// 校验两任务来自同一数据源（host + format + CRS + coord_type + tile_size）。
 fn validate_same_source(target: &Task, source: &Task) -> Result<(), String> {
     let t_src: crate::types::TileSource =
         serde_json::from_str(&target.source_config).map_err(|e| e.to_string())?;
@@ -596,6 +596,12 @@ fn validate_same_source(target: &Task, source: &Task) -> Result<(), String> {
         return Err(format!(
             "瓦片格式不一致（源 {} vs 目标 {}），无法直接复用",
             s_src.format, t_src.format
+        ));
+    }
+    if t_src.tile_size != s_src.tile_size {
+        return Err(format!(
+            "瓦片尺寸不一致（源 {}px vs 目标 {}px），无法直接复用",
+            s_src.tile_size, t_src.tile_size
         ));
     }
     // host 比对：从 URL 模板中提取域名

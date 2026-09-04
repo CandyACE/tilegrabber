@@ -4,6 +4,10 @@ import maplibregl from "maplibre-gl";
 import { invoke } from "@tauri-apps/api/core";
 import type { TileSource } from "~/types/tile-source";
 import { gcj02PixelDelta } from "~/lib/gcj02";
+import {
+  parseTileCoordsFromUrl,
+  replaceTileXYInUrl,
+} from "~/lib/tile-url";
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +33,8 @@ const GCJ02_PROTO = "tilegrab-gcj02";
 
 // 当前注入的 headers（供协议处理器读取）
 let currentHeaders: Record<string, string> = {};
+// 当前图源的实际瓦片像素尺寸，GCJ02 纠偏计算与合成必须使用同一尺寸。
+let currentTileSize = 256;
 // 当前 MBTiles 文件路径（供协议处理器读取）
 let currentMbtilesPath: string = "";
 let protoRegistered = false;
@@ -37,63 +43,6 @@ let gcj02ProtoRegistered = false;
 
 // 取消令牌：防止 async addPreviewLayer 在 source 切换或组件卸载后继续操作地图
 let addGen = 0;
-
-// ─── GCJ02 纠偏工具函数 ───────────────────────────────────────────────────────
-
-/**
- * 从瓦片 URL 中解析 (z, x, y)。
- * 支持查询参数格式（高德：?x=...&y=...&z=...）和路径格式（/{z}/{x}/{y}）。
- */
-function parseTileCoords(url: string): { z: number; x: number; y: number } | null {
-  try {
-    const u = new URL(url.startsWith("http") ? url : "https://" + url.replace(/^[^/]*\/\//, ""));
-    const zs = u.searchParams.get("z");
-    const xs = u.searchParams.get("x");
-    const ys = u.searchParams.get("y");
-    if (zs && xs && ys) {
-      const z = parseInt(zs), x = parseInt(xs), y = parseInt(ys);
-      if (!isNaN(z) && !isNaN(x) && !isNaN(y)) return { z, x, y };
-    }
-  } catch { /* fall through */ }
-
-  const m = url.match(/\/(\d+)\/(\d+)\/(\d+)(?:\.\w+)?(?:[?#]|$)/);
-  if (m) return { z: +m[1], x: +m[2], y: +m[3] };
-  return null;
-}
-
-/**
- * 将瓦片 URL 中的 (origX, origY) 替换为 (newX, newY)，z 保持不变。
- */
-function replaceTileXY(
-  url: string,
-  origX: number,
-  origY: number,
-  origZ: number,
-  newX: number,
-  newY: number,
-): string {
-  // 查询参数格式（高德等）
-  try {
-    const schemeMatch = url.match(/^([a-zA-Z][a-zA-Z0-9+\-.]*:\/\/)/);
-    const scheme = schemeMatch?.[1] ?? "";
-    const u = new URL("https://" + url.slice(scheme.length).replace(/^\/\//, ""));
-    if (u.searchParams.has("x") && u.searchParams.has("y")) {
-      u.searchParams.set("x", String(newX));
-      u.searchParams.set("y", String(newY));
-      return scheme + u.toString().slice("https://".length);
-    }
-  } catch { /* fall through */ }
-
-  // 路径格式：先替换 x 再替换 y（防止数字碰撞）
-  const withNewX = url.replace(
-    new RegExp(`(/${origZ}/)${origX}(/${origY}(?:\\.|[?#]|$))`),
-    `$1${newX}$2`,
-  );
-  return withNewX.replace(
-    new RegExp(`(/${origZ}/${newX}/)${origY}(?=\\.|[?#]|$)`),
-    `$1${newY}`,
-  );
-}
 
 /**
  * 注册 GCJ02 纠偏协议（一次性）。
@@ -117,21 +66,25 @@ function ensureGcj02Protocol() {
     const url = gcjScheme + "://" + rawGcj.slice(gcjSlash + 1);
     const headers = { ...currentHeaders };
 
-    const coords = parseTileCoords(url);
+    const coords = parseTileCoordsFromUrl(url);
     if (!coords) {
       // 无法解析坐标，直接代理（降级）
+      console.warn("[TilePreviewLayer] 无法解析瓦片坐标，GCJ02 纠偏已降级", {
+        url,
+      });
       const bytes = await invoke<number[]>("fetch_tile", { url, headers });
       return { data: new Uint8Array(bytes).buffer };
     }
 
     const { z, x, y } = coords;
-    const { dx, dy } = gcj02PixelDelta(z, x, y);
+    const tileSize = currentTileSize;
+    const { dx, dy } = gcj02PixelDelta(z, x, y, tileSize);
 
-    // 源瓦片的粗偏移（整数瓦片数）和细偏移（瓦片内像素，0..255）
-    const tileOffX = Math.floor(dx / 256);
-    const tileOffY = Math.floor(dy / 256);
-    const subX = ((dx % 256) + 256) % 256;
-    const subY = ((dy % 256) + 256) % 256;
+    // 源瓦片的粗偏移（整数瓦片数）和细偏移（瓦片内像素）。
+    const tileOffX = Math.floor(dx / tileSize);
+    const tileOffY = Math.floor(dy / tileSize);
+    const subX = ((dx % tileSize) + tileSize) % tileSize;
+    const subY = ((dy % tileSize) + tileSize) % tileSize;
 
     // 需要合成的 ≤ 2×2 邻接源瓦片（相对于基准偏移）
     const needed: Array<[number, number]> = [[0, 0]];
@@ -142,28 +95,51 @@ function ensureGcj02Protocol() {
     const fetchBitmap = async (i: number, j: number): Promise<ImageBitmap | null> => {
       const tileX = x + tileOffX + i;
       const tileY = y + tileOffY + j;
-      const tileUrl = replaceTileXY(url, x, y, z, tileX, tileY);
+      const tileUrl = replaceTileXYInUrl(url, x, y, z, tileX, tileY);
       try {
         const bytes = await invoke<number[]>("fetch_tile", { url: tileUrl, headers });
         const blob = new Blob([new Uint8Array(bytes)]);
-        return await createImageBitmap(blob);
-      } catch {
+        const bitmap = await createImageBitmap(blob);
+        if (bitmap.width !== tileSize || bitmap.height !== tileSize) {
+          console.warn("[TilePreviewLayer] 图源实际瓦片尺寸与配置不一致", {
+            configured: tileSize,
+            actual: `${bitmap.width}x${bitmap.height}`,
+            url: tileUrl,
+          });
+        }
+        return bitmap;
+      } catch (error) {
+        console.warn("[TilePreviewLayer] GCJ02 邻接瓦片获取失败", {
+          tileX,
+          tileY,
+          error,
+        });
         return null;
       }
     };
 
     const bitmaps = await Promise.all(needed.map(([i, j]) => fetchBitmap(i, j)));
 
-    // 合成到 256×256 画布
-    const canvas = new OffscreenCanvas(256, 256);
+    // 按图源配置的实际尺寸合成，支持 256、512 等瓦片。
+    const canvas = new OffscreenCanvas(tileSize, tileSize);
     const ctx = canvas.getContext("2d")!;
 
     for (let k = 0; k < needed.length; k++) {
       const [i, j] = needed[k];
       const bitmap = bitmaps[k];
       if (bitmap) {
-        // 瓦片在画布上的绘制起点：(i*256 - subX, j*256 - subY)
-        ctx.drawImage(bitmap, i * 256 - subX, j * 256 - subY);
+        // 尺寸不一致时按配置尺寸缩放，避免纠偏拼接出现空隙或裁切错位。
+        ctx.drawImage(
+          bitmap,
+          0,
+          0,
+          bitmap.width,
+          bitmap.height,
+          i * tileSize - subX,
+          j * tileSize - subY,
+          tileSize,
+          tileSize,
+        );
         bitmap.close();
       }
     }
@@ -254,6 +230,12 @@ async function addPreviewLayer(map: maplibregl.Map, src: TileSource) {
 
       // 所有 HTTP 请求统一走 Rust 后端代理，避免 WebView 请求被防火墙/CSP 拦截
       currentHeaders = { ...(src.headers ?? {}) };
+      currentTileSize = src.tile_size || 256;
+      console.info("[TilePreviewLayer] 应用在线预览配置", {
+        name: src.name,
+        tileSize: currentTileSize,
+        coordType: src.coord_type,
+      });
 
       // GCJ02 来源（高德等）：始终走在线实时纠偏协议，确保图层预览覆盖完整数据源范围
       const isGcj02 = src.coord_type === "GCJ02" && src.north_to_south;

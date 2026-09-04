@@ -915,6 +915,11 @@ export default {
     tileSizeHint:
       "Pixel width and height of one server tile; common values are 256 or 512",
     tileSizeInvalid: "Tile size must be an integer between 64 and 4096",
+    coordType: "Coordinate Offset",
+    coordTypeHint:
+      "Select GCJ02 correction when a mainland China source is position-shifted",
+    coordTypeWgs84: "WGS84 (no correction)",
+    coordTypeGcj02: "GCJ02 (China source)",
     httpHeaders: "HTTP Headers",
     add: "Add",
     noHeaders:

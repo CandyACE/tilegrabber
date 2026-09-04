@@ -1009,7 +1009,11 @@ async fn run_download(
         && *ctrl_rx.borrow() != CtrlSignal::Cancel
     {
         app_db
-            .add_log(Some(&task_id), "info", "开始 GCJ02 纠偏合成…")
+            .add_log(
+                Some(&task_id),
+                "info",
+                &format!("开始 GCJ02 纠偏合成（{}px）…", source.tile_size),
+            )
             .ok();
         app_db.update_task_status(&task_id, "processing").ok();
 
@@ -1026,6 +1030,7 @@ async fn run_download(
         let gcj02_crs = source.crs.clone();
         let gcj02_min_zoom = task.min_zoom;
         let gcj02_max_zoom = task.max_zoom;
+        let gcj02_tile_size = source.tile_size;
 
         let gcj02_result = tokio::task::spawn_blocking(move || {
             post_gcj02_composite(
@@ -1034,6 +1039,7 @@ async fn run_download(
                 gcj02_min_zoom,
                 gcj02_max_zoom,
                 &gcj02_crs,
+                gcj02_tile_size,
                 |done, total| {
                     let payload = ProgressPayload {
                         task_id: gcj02_task_id.clone(),
@@ -1500,7 +1506,7 @@ fn post_clip_tiles(
 /// 本函数对 `orig_bounds` 内的每块 WGS84 目标瓦片 (z, x, y)：
 /// 1. 计算该瓦片中心的 GCJ02 像素偏移 `(dx, dy)`；
 /// 2. 以偏移量确定 2×2 来源 Gaode 瓦片并读取（来源瓦片因下载时扩边已存在）；
-/// 3. 合成为 256×256 WGS84 对齐图像，编码为 PNG 并原地覆写；
+/// 3. 按来源瓦片实际尺寸合成 WGS84 对齐图像，编码为 PNG 并原地覆写；
 /// 4. 所有合成完成后删除扩边区（GCJ02_PAD）瓦片，更新格式元数据为 `png`。
 ///
 /// # 处理顺序安全性
@@ -1514,6 +1520,7 @@ fn post_gcj02_composite(
     min_zoom: u8,
     max_zoom: u8,
     crs: &crate::types::CrsType,
+    tile_size: u32,
     progress_cb: impl Fn(u64, u64),
 ) -> Result<()> {
     use rayon::prelude::*;
@@ -1521,6 +1528,14 @@ fn post_gcj02_composite(
     use std::collections::HashMap;
 
     use image::RgbaImage;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if !(64..=4096).contains(&tile_size) {
+        anyhow::bail!("GCJ02 纠偏瓦片尺寸无效: {}px", tile_size);
+    }
+    let tile_size_i32 = i32::try_from(tile_size)?;
+    tracing::info!(tile_size, "[gcj02] 开始按实际瓦片尺寸执行纠偏合成");
+    let size_mismatch_logged = AtomicBool::new(false);
 
     let conn = Connection::open(store_path)?;
     conn.execute_batch(
@@ -1582,15 +1597,16 @@ fn post_gcj02_composite(
         let tile_infos: Vec<TileInfo> = chunk
             .iter()
             .map(|&(z, x, y)| {
-                let (dx, dy) = crate::gcj02::gcj02_pixel_delta(z, x, y);
+                let (dx, dy) =
+                    crate::gcj02::gcj02_pixel_delta(z, x, y, tile_size);
                 TileInfo {
                     z,
                     x,
                     y,
-                    tile_off_x: dx.div_euclid(256),
-                    tile_off_y: dy.div_euclid(256),
-                    sub_x: dx.rem_euclid(256),
-                    sub_y: dy.rem_euclid(256),
+                    tile_off_x: dx.div_euclid(tile_size_i32),
+                    tile_off_y: dy.div_euclid(tile_size_i32),
+                    sub_x: dx.rem_euclid(tile_size_i32),
+                    sub_y: dy.rem_euclid(tile_size_i32),
                 }
             })
             .collect();
@@ -1629,7 +1645,7 @@ fn post_gcj02_composite(
         let results: Vec<(u8, u32, u32, Vec<u8>)> = tile_infos
             .par_iter()
             .filter_map(|ti| {
-                let mut canvas = RgbaImage::new(256, 256);
+                let mut canvas = RgbaImage::new(tile_size, tile_size);
                 let mut has_data = false;
 
                 for j in 0i32..2 {
@@ -1642,16 +1658,31 @@ fn post_gcj02_composite(
                         if let Some(data) = source_data.get(&(ti.z, sx, sy)) {
                             if let Ok(img) = image::load_from_memory(data) {
                                 let src = img.into_rgba8();
+                                if src.width() != tile_size || src.height() != tile_size {
+                                    if !size_mismatch_logged.swap(true, Ordering::Relaxed) {
+                                        tracing::warn!(
+                                            expected = tile_size,
+                                            actual_width = src.width(),
+                                            actual_height = src.height(),
+                                            "[gcj02] 图源实际瓦片尺寸与任务配置不一致，相关瓦片将跳过纠偏"
+                                        );
+                                    }
+                                    continue;
+                                }
                                 // 源瓦片在画布上的左上角（可为负值）
-                                let cx = i * 256 - ti.sub_x;
-                                let cy = j * 256 - ti.sub_y;
+                                let cx = i * tile_size_i32 - ti.sub_x;
+                                let cy = j * tile_size_i32 - ti.sub_y;
                                 // 计算源与目标的有效重叠区域
                                 let dst_x0 = cx.max(0) as u32;
                                 let dst_y0 = cy.max(0) as u32;
                                 let src_x0 = (-cx).max(0) as u32;
                                 let src_y0 = (-cy).max(0) as u32;
-                                let w = ((256 - src_x0 as i32).min(256 - cx)).max(0) as u32;
-                                let h = ((256 - src_y0 as i32).min(256 - cy)).max(0) as u32;
+                                let w = ((tile_size_i32 - src_x0 as i32)
+                                    .min(tile_size_i32 - cx))
+                                    .max(0) as u32;
+                                let h = ((tile_size_i32 - src_y0 as i32)
+                                    .min(tile_size_i32 - cy))
+                                    .max(0) as u32;
                                 for dp in 0..h {
                                     for dq in 0..w {
                                         let px = src.get_pixel(src_x0 + dq, src_y0 + dp);

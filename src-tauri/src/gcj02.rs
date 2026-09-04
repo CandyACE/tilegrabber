@@ -71,13 +71,18 @@ fn tile_center_wgs84(z: u8, x: u32, y: u32) -> (f64, f64) {
 /// - `dy` ≤ 0：Gaode 内容偏北（屏幕上方，WebMercator y 减小方向）
 ///
 /// 合成策略：目标瓦片 (z, x, y) 的像素内容来自
-/// `(z, x + dx.div_euclid(256), y + dy.div_euclid(256))` 起始的 2×2 源瓦片。
-/// 仅适用于 256×256 像素的 XYZ（north_to_south=true）WebMercator 瓦片。
-pub fn gcj02_pixel_delta(z: u8, x: u32, y: u32) -> (i32, i32) {
+/// `(z, x + dx.div_euclid(tile_size), y + dy.div_euclid(tile_size))`
+/// 起始的 2×2 源瓦片。仅适用于 XYZ（north_to_south=true）WebMercator 瓦片。
+pub fn gcj02_pixel_delta(z: u8, x: u32, y: u32, tile_size: u32) -> (i32, i32) {
     let (lng, lat) = tile_center_wgs84(z, x, y);
     let (gcj_lng, gcj_lat) = wgs84_to_gcj02(lng, lat);
 
-    let total_px = 256.0 * (1u64 << z) as f64;
+    // 调用方会校验尺寸；此处保留防御性回退，避免旧任务中的 0 值产生全零偏移。
+    let normalized_tile_size = if tile_size == 0 { 256 } else { tile_size };
+    if normalized_tile_size != tile_size {
+        tracing::warn!(tile_size, "[gcj02] 无效瓦片尺寸，已回退到 256");
+    }
+    let total_px = normalized_tile_size as f64 * (1u64 << z) as f64;
 
     // 经度偏移→像素（向东为正）
     let dx = ((gcj_lng - lng) / 360.0 * total_px).round() as i32;
@@ -115,16 +120,25 @@ mod tests {
     /// 偏移量在不同缩放层级下不应异常巨大
     #[test]
     fn pixel_delta_order_of_magnitude() {
-        let (dx, dy) = gcj02_pixel_delta(10, 857, 418);
+        let (dx, dy) = gcj02_pixel_delta(10, 857, 418, 256);
         assert!(dx.abs() < 500, "z10 经度像素偏移不应超过 500: {dx}");
         assert!(dy.abs() < 500, "z10 纬度像素偏移不应超过 500: {dy}");
+    }
+
+    /// 512 像素瓦片的纠偏像素量应约为 256 像素瓦片的两倍。
+    #[test]
+    fn pixel_delta_scales_with_tile_size() {
+        let (dx_256, dy_256) = gcj02_pixel_delta(10, 857, 418, 256);
+        let (dx_512, dy_512) = gcj02_pixel_delta(10, 857, 418, 512);
+        assert!((dx_512 - dx_256 * 2).abs() <= 1);
+        assert!((dy_512 - dy_256 * 2).abs() <= 1);
     }
 
     /// pixel_delta 在境内应非零，境外应接近零
     #[test]
     fn pixel_delta_zero_outside_china() {
         // 东京附近瓦片
-        let (dx, dy) = gcj02_pixel_delta(8, 232, 101);
+        let (dx, dy) = gcj02_pixel_delta(8, 232, 101, 256);
         assert_eq!(dx, 0, "境外 dx 应为 0");
         assert_eq!(dy, 0, "境外 dy 应为 0");
     }

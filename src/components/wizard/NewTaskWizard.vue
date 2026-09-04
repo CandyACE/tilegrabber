@@ -20,7 +20,7 @@ import {
 } from "lucide-vue-next";
 import UiInput from "@/components/ui/input/Input.vue";
 import UiButton from "@/components/ui/button/Button.vue";
-import type { TileSource } from "~/types/tile-source";
+import type { CoordType, TileSource } from "~/types/tile-source";
 import { useI18n } from "vue-i18n";
 import { BASEMAP_PRESETS, BASEMAP_CATEGORIES } from "~/data/basemap-presets";
 
@@ -64,6 +64,8 @@ const headerRows = ref<{ key: string; value: string }[]>([]);
 const scriptRows = ref<{ name: string; script: string; error: string }[]>([]);
 // 瓦片像素尺寸由用户明确配置，不根据 URL 参数自动猜测。
 const tileSize = ref(256);
+// 自定义图源默认按 WGS84 处理；中国偏移图源由用户明确选择 GCJ02。
+const coordType = ref<CoordType>("WGS84");
 const tileSizeValid = computed(
   () =>
     Number.isInteger(tileSize.value) &&
@@ -90,6 +92,7 @@ function selectSourceType(value: SourceType) {
   urlInput.value = "";
   errorMsg.value = "";
   tileSize.value = 256;
+  coordType.value = "WGS84";
 }
 
 /** 对所有 param_scripts 求值 → extra_params，并更新行的 error 状态 */
@@ -124,13 +127,15 @@ function applyRequestConfig(source: TileSource): TileSource {
   const configuredTileSize = tileSizeValid.value
     ? tileSize.value
     : source.tile_size || 256;
-  console.info("[NewTaskWizard] 应用瓦片尺寸配置", {
+  console.info("[NewTaskWizard] 应用瓦片与坐标配置", {
     source: source.name,
     tileSize: configuredTileSize,
+    coordType: coordType.value,
   });
   return {
     ...source,
     tile_size: configuredTileSize,
+    coord_type: coordType.value,
     headers,
     extra_params,
     param_scripts,
@@ -179,6 +184,7 @@ const sourceTypeOptions = computed(() => [
 function handlePresetSelect(preset: typeof BASEMAP_PRESETS[number]) {
   wmtsLayers.value = [];  // clear any previous WMTS layer list
   capturedTiles.value = [];
+  coordType.value = preset.source.coord_type;
   if (preset.requiresToken) {
     openTokenDialog(preset);
     return;
@@ -229,6 +235,7 @@ async function confirmTokenDialog() {
     // 持久化失败不阻塞，本次仍可用
   }
   const tokenKey = preset.requiresToken.tokenKey;
+  coordType.value = preset.source.coord_type;
   const merged: TileSource = {
     ...preset.source,
     name: preset.name,
@@ -887,6 +894,7 @@ function onLayerSelect(idx: number) {
                     <span
                       v-if="
                         tileSize !== 256 ||
+                        coordType !== 'WGS84' ||
                         headerRows.length ||
                         scriptRows.length
                       "
@@ -894,6 +902,7 @@ function onLayerSelect(idx: number) {
                     >
                       {{
                         (tileSize !== 256 ? 1 : 0) +
+                        (coordType !== 'WGS84' ? 1 : 0) +
                         headerRows.filter((r) => r.key).length +
                         scriptRows.filter((r) => r.name).length
                       }}
@@ -948,6 +957,31 @@ function onLayerSelect(idx: number) {
                           >
                             {{ t("wizard.tileSizeInvalid") }}
                           </p>
+                        </div>
+
+                        <!-- ── 坐标偏移类型 ── -->
+                        <div>
+                          <div class="flex items-center justify-between gap-4">
+                            <div class="min-w-0">
+                              <span class="text-xs font-medium text-slate-600">
+                                {{ t("wizard.coordType") }}
+                              </span>
+                              <p class="text-[10px] text-slate-400 mt-0.5">
+                                {{ t("wizard.coordTypeHint") }}
+                              </p>
+                            </div>
+                            <select
+                              v-model="coordType"
+                              class="h-8 w-36 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                            >
+                              <option value="WGS84">
+                                {{ t("wizard.coordTypeWgs84") }}
+                              </option>
+                              <option value="GCJ02">
+                                {{ t("wizard.coordTypeGcj02") }}
+                              </option>
+                            </select>
+                          </div>
                         </div>
 
                         <!-- ──  请求头 ── -->

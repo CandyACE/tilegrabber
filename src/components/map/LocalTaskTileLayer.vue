@@ -83,12 +83,17 @@ function pickInsertBefore(m: MaplibreMap): string | undefined {
   return m.getLayer(OVERLAY_FILL) ? OVERLAY_FILL : getFirstLabelLayerId(m);
 }
 
-async function addRasterLayer(m: MaplibreMap, taskId: string, task: BackendTask) {
+async function addRasterLayer(
+  m: MaplibreMap,
+  taskId: string,
+  task: BackendTask,
+  tileSize: number,
+) {
   const tileUrl = `${STORED_TILE_PROTO}://${taskId}/{z}/{x}/{y}`;
   m.addSource(SOURCE_ID, {
     type: "raster",
     tiles: [tileUrl],
-    tileSize: 256,
+    tileSize,
     minzoom: task.minZoom,
     maxzoom: task.maxZoom,
     bounds: [task.boundsWest, task.boundsSouth, task.boundsEast, task.boundsNorth],
@@ -213,20 +218,40 @@ async function addLayer(m: MaplibreMap, taskId: string, gen: number) {
 
   ensureStoredTileProtocol();
 
-  // 解析任务源配置以获取 format
+  // 解析任务源配置以获取格式与实际瓦片尺寸。
   let format = "png";
+  let tileSize = 256;
   try {
     const cfg = JSON.parse(task.sourceConfig);
     if (typeof cfg?.format === "string") format = cfg.format;
-  } catch {
-    /* 沿用默认 png */
+    if (
+      Number.isInteger(cfg?.tile_size) &&
+      cfg.tile_size >= 64 &&
+      cfg.tile_size <= 4096
+    ) {
+      tileSize = cfg.tile_size;
+    } else if (cfg?.tile_size !== undefined) {
+      console.warn("[LocalTaskTileLayer] 任务瓦片尺寸无效，已回退到 256", {
+        taskId,
+        tileSize: cfg.tile_size,
+      });
+    }
+  } catch (error) {
+    console.warn("[LocalTaskTileLayer] 解析任务源配置失败，沿用默认值", {
+      taskId,
+      error,
+    });
   }
 
   try {
     if (isVectorFormat(format)) {
       await addVectorLayer(m, taskId, task);
     } else {
-      await addRasterLayer(m, taskId, task);
+      console.info("[LocalTaskTileLayer] 使用任务配置的瓦片尺寸", {
+        taskId,
+        tileSize,
+      });
+      await addRasterLayer(m, taskId, task, tileSize);
     }
   } catch (e) {
     console.error("[LocalTaskTileLayer] addLayer failed:", e);

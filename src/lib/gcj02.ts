@@ -74,16 +74,26 @@ export function tileCenterWgs84(z: number, x: number, y: number): { lng: number;
  *   dy < 0 = 偏北（屏幕上方，WebMercator y 减小方向）
  *
  * 纠偏策略：为输出瓦片 (z, x, y)，从 GCJ02 来源获取从
- * (x + floor(dx/256), y + floor(dy/256)) 开始的 2×2 块瓦片并合成，
+ * (x + floor(dx/tileSize), y + floor(dy/tileSize)) 开始的 2×2 块瓦片并合成，
  * 使地物内容对齐到 WGS84 坐标系。
  *
  * 注意：仅适用于 XYZ（north_to_south=true）方案的来源。
  */
-export function gcj02PixelDelta(z: number, x: number, y: number): { dx: number; dy: number } {
+export function gcj02PixelDelta(
+  z: number,
+  x: number,
+  y: number,
+  tileSize = 256,
+): { dx: number; dy: number } {
   const { lng, lat } = tileCenterWgs84(z, x, y);
   const gcj = wgs84ToGcj02(lng, lat);
 
-  const totalPx = 256 * Math.pow(2, z);
+  const normalizedTileSize =
+    Number.isFinite(tileSize) && tileSize > 0 ? tileSize : 256;
+  if (normalizedTileSize !== tileSize) {
+    console.warn("[gcj02] 收到无效瓦片尺寸，已回退到 256", { tileSize });
+  }
+  const totalPx = normalizedTileSize * Math.pow(2, z);
 
   // 经度偏差→屏幕 x 像素（东正）
   const dx = Math.round(((gcj.lng - lng) / 360) * totalPx);

@@ -390,10 +390,11 @@ async function openImportDialog() {
       try {
         const c = JSON.parse(t.sourceConfig);
         return (
-          c.urlTemplate === myCfg.urlTemplate &&
+          c.url_template === myCfg.url_template &&
           c.format === myCfg.format &&
           c.crs === myCfg.crs &&
-          c.coordType === myCfg.coordType
+          c.coord_type === myCfg.coord_type &&
+          (c.tile_size ?? 256) === (myCfg.tile_size ?? 256)
         );
       } catch {
         return false;
@@ -1250,6 +1251,18 @@ function logTime(iso: string) {
                       );
                     } catch {
                       return 'png';
+                    }
+                  })()
+                "
+                :tile-size="
+                  (() => {
+                    try {
+                      return (
+                        JSON.parse(selectedCandidate.sourceConfig).tile_size ??
+                        256
+                      );
+                    } catch {
+                      return 256;
                     }
                   })()
                 "

@@ -13,6 +13,7 @@ const props = defineProps<{
   taskId: string;
   bounds: Bounds;
   format: string;
+  tileSize?: number;
   showBasemap?: boolean;
 }>();
 
@@ -32,6 +33,22 @@ function mimeFromFormat(fmt: string): string {
 function mountMap() {
   if (!container.value) return;
   ensureStoredTileProtocol();
+  const tileSize =
+    Number.isInteger(props.tileSize) &&
+    (props.tileSize ?? 0) >= 64 &&
+    (props.tileSize ?? 0) <= 4096
+      ? props.tileSize!
+      : 256;
+  if (props.tileSize !== undefined && tileSize !== props.tileSize) {
+    console.warn("[MiniMapPreview] 瓦片尺寸无效，已回退到 256", {
+      taskId: props.taskId,
+      tileSize: props.tileSize,
+    });
+  }
+  console.info("[MiniMapPreview] 初始化任务缩略图", {
+    taskId: props.taskId,
+    tileSize,
+  });
 
   map = new maplibregl.Map({
     container: container.value,
@@ -61,7 +78,7 @@ function mountMap() {
     map.addSource(SOURCE_ID, {
       type: "raster",
       tiles: [`${STORED_TILE_PROTO}://${props.taskId}/{z}/{x}/{y}`],
-      tileSize: 256,
+      tileSize,
       scheme: "xyz",
     });
     (map.getSource(SOURCE_ID) as any).type = "raster";
