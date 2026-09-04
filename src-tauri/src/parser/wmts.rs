@@ -57,7 +57,6 @@ pub fn parse_tms_url(url: &str, name: Option<&str>) -> Result<TileSource> {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| extract_name_from_url(&url))
         .to_string();
-    let tile_size = infer_tile_size(&url);
 
     Ok(TileSource {
         kind: SourceKind::Tms,
@@ -65,7 +64,6 @@ pub fn parse_tms_url(url: &str, name: Option<&str>) -> Result<TileSource> {
         url_template: url,
         subdomains,
         crs,
-        tile_size,
         format,
         ..Default::default()
     })
@@ -77,23 +75,6 @@ pub fn parse_tms_url(url: &str, name: Option<&str>) -> Result<TileSource> {
 /// 服务端会收到带反斜杠的参数值，导致图层类型、缩放倍率等参数失效。
 fn normalize_tms_url(raw: &str) -> String {
     raw.trim().replace("\\&", "&").replace("&amp;", "&")
-}
-
-/// 根据 URL 参数推断服务端返回的瓦片像素尺寸。
-///
-/// Google 的旧式地址可能在首个参数前省略 `?`，因此同时按路径和查询参数
-/// 边界扫描；`scale=2` 返回 512×512 瓦片，预览 tileSize 必须保持一致。
-fn infer_tile_size(url: &str) -> u32 {
-    let scale = url.split(['/', '?', '&']).find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        key.eq_ignore_ascii_case("scale")
-            .then(|| value.parse::<u32>().ok())
-            .flatten()
-    });
-    match scale {
-        Some(2) => 512,
-        _ => 256,
-    }
 }
 
 // ─── WMTS GetCapabilities 解析 ───────────────────────────────────────────────
@@ -472,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_tms_url_normalizes_escaped_ampersands_and_scale() {
+    fn test_parse_tms_url_normalizes_escaped_ampersands_without_size_inference() {
         let src = parse_tms_url(
             r"https://mt0.google.com/vt/lyrs=s\&scale=2\&x={x}\&y={y}\&z={z}",
             Some("Google 卫星图"),
@@ -483,7 +464,7 @@ mod tests {
             src.url_template,
             "https://mt0.google.com/vt/lyrs=s&scale=2&x={x}&y={y}&z={z}"
         );
-        assert_eq!(src.tile_size, 512);
+        assert_eq!(src.tile_size, 256);
     }
 
     #[test]

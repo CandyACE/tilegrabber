@@ -911,6 +911,10 @@ export default {
     captureWaiting:
       "Browse the map in the popup browser window and wait for tiles to appear in this list",
     requestConfig: "Request Config",
+    tileSize: "Tile Size",
+    tileSizeHint:
+      "Pixel width and height of one server tile; common values are 256 or 512",
+    tileSizeInvalid: "Tile size must be an integer between 64 and 4096",
     httpHeaders: "HTTP Headers",
     add: "Add",
     noHeaders:

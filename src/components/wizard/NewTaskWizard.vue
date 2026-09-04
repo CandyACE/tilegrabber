@@ -62,6 +62,14 @@ let previewRequestId = 0;
 const advancedOpen = ref(false);
 const headerRows = ref<{ key: string; value: string }[]>([]);
 const scriptRows = ref<{ name: string; script: string; error: string }[]>([]);
+// 瓦片像素尺寸由用户明确配置，不根据 URL 参数自动猜测。
+const tileSize = ref(256);
+const tileSizeValid = computed(
+  () =>
+    Number.isInteger(tileSize.value) &&
+    tileSize.value >= 64 &&
+    tileSize.value <= 4096,
+);
 
 function addHeaderRow() {
   headerRows.value.push({ key: "", value: "" });
@@ -74,6 +82,14 @@ function addScriptRow() {
 }
 function removeScriptRow(i: number) {
   scriptRows.value.splice(i, 1);
+}
+
+/** 切换来源类型时恢复安全的默认瓦片尺寸，避免上一个来源的配置串入新任务。 */
+function selectSourceType(value: SourceType) {
+  sourceType.value = value;
+  urlInput.value = "";
+  errorMsg.value = "";
+  tileSize.value = 256;
 }
 
 /** 对所有 param_scripts 求值 → extra_params，并更新行的 error 状态 */
@@ -93,7 +109,7 @@ function evalParamScripts(): Record<string, string> {
   return result;
 }
 
-/** 把当前 headerRows 和 scriptRows 合并到 source 后返回新对象 */
+/** 把当前瓦片尺寸、headerRows 和 scriptRows 合并到 source 后返回新对象。 */
 function applyRequestConfig(source: TileSource): TileSource {
   const headers: Record<string, string> = { ...(source.headers ?? {}) };
   for (const r of headerRows.value) {
@@ -104,7 +120,21 @@ function applyRequestConfig(source: TileSource): TileSource {
   for (const r of scriptRows.value) {
     if (r.name.trim()) param_scripts[r.name.trim()] = r.script;
   }
-  return { ...source, headers, extra_params, param_scripts };
+  // handleNext 已完成范围校验；这里保留防御性回退，避免异常状态写入任务配置。
+  const configuredTileSize = tileSizeValid.value
+    ? tileSize.value
+    : source.tile_size || 256;
+  console.info("[NewTaskWizard] 应用瓦片尺寸配置", {
+    source: source.name,
+    tileSize: configuredTileSize,
+  });
+  return {
+    ...source,
+    tile_size: configuredTileSize,
+    headers,
+    extra_params,
+    param_scripts,
+  };
 }
 
 const sourceTypeOptions = computed(() => [
@@ -362,6 +392,15 @@ watch(parsedSource, (src) => {
 
 async function handleNext() {
   errorMsg.value = "";
+  const usesRequestConfig =
+    sourceType.value !== "file" && sourceType.value !== "mbtiles";
+  if (usesRequestConfig && !tileSizeValid.value) {
+    console.warn("[NewTaskWizard] 拒绝无效瓦片尺寸", {
+      tileSize: tileSize.value,
+    });
+    errorMsg.value = t("wizard.tileSizeInvalid");
+    return;
+  }
   if (step.value === 1) {
     isLoading.value = true;
     try {
@@ -552,9 +591,7 @@ function onLayerSelect(idx: number) {
                       : 'border-slate-200 hover:border-slate-300 bg-white'
                   "
                   @click="
-                    sourceType = opt.value;
-                    urlInput = '';
-                    errorMsg = '';
+                    selectSourceType(opt.value);
                   "
                 >
                   <div
@@ -848,10 +885,15 @@ function onLayerSelect(idx: number) {
                     </svg>
                     <span>{{ t('wizard.requestConfig') }}</span>
                     <span
-                      v-if="headerRows.length || scriptRows.length"
+                      v-if="
+                        tileSize !== 256 ||
+                        headerRows.length ||
+                        scriptRows.length
+                      "
                       class="ml-1 px-1.5 py-0.5 rounded-full text-[10px] bg-blue-100 text-blue-600 font-semibold"
                     >
                       {{
+                        (tileSize !== 256 ? 1 : 0) +
                         headerRows.filter((r) => r.key).length +
                         scriptRows.filter((r) => r.name).length
                       }}
@@ -867,6 +909,47 @@ function onLayerSelect(idx: number) {
                   >
                     <div class="overflow-hidden">
                       <div class="space-y-4 pb-2">
+                        <!-- ── 瓦片大小 ── -->
+                        <div>
+                          <div class="flex items-center justify-between gap-4">
+                            <div class="min-w-0">
+                              <span class="text-xs font-medium text-slate-600">
+                                {{ t("wizard.tileSize") }}
+                              </span>
+                              <p
+                                id="tile-size-hint"
+                                class="text-[10px] text-slate-400 mt-0.5"
+                              >
+                                {{ t("wizard.tileSizeHint") }}
+                              </p>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                              <UiInput
+                                v-model.number="tileSize"
+                                type="number"
+                                min="64"
+                                max="4096"
+                                step="1"
+                                aria-describedby="tile-size-hint"
+                                :aria-invalid="!tileSizeValid"
+                                class="w-24 h-8 text-xs font-mono"
+                                :class="
+                                  tileSizeValid
+                                    ? ''
+                                    : 'border-red-300 focus-visible:ring-red-200'
+                                "
+                              />
+                              <span class="text-[11px] text-slate-400">px</span>
+                            </div>
+                          </div>
+                          <p
+                            v-if="!tileSizeValid"
+                            class="text-[10px] text-red-500 mt-1"
+                          >
+                            {{ t("wizard.tileSizeInvalid") }}
+                          </p>
+                        </div>
+
                         <!-- ──  请求头 ── -->
                         <div>
                           <div class="flex items-center justify-between mb-1.5">
