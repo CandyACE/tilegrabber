@@ -4,6 +4,18 @@
 
 ---
 
+## [v0.5.3] - 待发布
+
+### 修复
+
+- 修复 GitHub Actions Ubuntu 后端检查未安装 Tauri 所需 GLib/GObject/WebKitGTK 开发库，导致 `gobject-sys` 编译失败的问题
+
+### 优化
+
+- TMS/XYZ URL 导入表单直接提供 WGS84 / GCJ02 坐标类型选择，避免中国区偏移图源因遗漏高级配置而产生位置偏移
+
+---
+
 ## [v0.5.2] - 2026-09-04
 
 ### 修复

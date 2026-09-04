@@ -95,6 +95,14 @@ function selectSourceType(value: SourceType) {
   coordType.value = "WGS84";
 }
 
+/** 记录用户显式选择的坐标偏移类型，便于定位图层偏移配置问题。 */
+function handleCoordTypeChange() {
+  console.info("[NewTaskWizard] 更新坐标偏移类型", {
+    sourceType: sourceType.value,
+    coordType: coordType.value,
+  });
+}
+
 /** 对所有 param_scripts 求值 → extra_params，并更新行的 error 状态 */
 function evalParamScripts(): Record<string, string> {
   const result: Record<string, string> = {};
@@ -726,6 +734,36 @@ function onLayerSelect(idx: number) {
                         class="w-full"
                       />
                     </div>
+                    <!-- TMS/XYZ 图源的坐标类型属于核心导入参数，直接展示，避免用户遗漏 GCJ02 纠偏。 -->
+                    <div>
+                      <div class="flex items-center justify-between gap-4">
+                        <div class="min-w-0">
+                          <label
+                            for="tms-coord-type"
+                            class="text-xs font-medium text-slate-600"
+                          >
+                            {{ t("wizard.coordType") }}
+                          </label>
+                          <p class="text-[10px] text-slate-400 mt-0.5">
+                            {{ t("wizard.coordTypeHint") }}
+                          </p>
+                        </div>
+                        <select
+                          id="tms-coord-type"
+                          v-model="coordType"
+                          data-testid="tms-coord-type"
+                          class="h-8 w-44 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                          @change="handleCoordTypeChange"
+                        >
+                          <option value="WGS84">
+                            {{ t("wizard.coordTypeWgs84") }}
+                          </option>
+                          <option value="GCJ02">
+                            {{ t("wizard.coordTypeGcj02") }}
+                          </option>
+                        </select>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -959,8 +997,8 @@ function onLayerSelect(idx: number) {
                           </p>
                         </div>
 
-                        <!-- ── 坐标偏移类型 ── -->
-                        <div>
+                        <!-- TMS/XYZ 已在导入表单直接展示坐标类型，其余在线来源仍在高级配置中设置。 -->
+                        <div v-if="sourceType !== 'tms'">
                           <div class="flex items-center justify-between gap-4">
                             <div class="min-w-0">
                               <span class="text-xs font-medium text-slate-600">
@@ -973,6 +1011,7 @@ function onLayerSelect(idx: number) {
                             <select
                               v-model="coordType"
                               class="h-8 w-36 shrink-0 rounded-md border border-slate-200 bg-white px-2 text-xs text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                              @change="handleCoordTypeChange"
                             >
                               <option value="WGS84">
                                 {{ t("wizard.coordTypeWgs84") }}

@@ -46,6 +46,21 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Tauri 在 Linux 编译时依赖 WebKitGTK、GLib/GObject 与状态栏相关开发库。
+      # 安装后显式打印 pkg-config 版本，便于后续从 CI 日志快速定位系统依赖问题。
+      - name: 安装并检查 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+          echo "glib-2.0: $(pkg-config --modversion glib-2.0)"
+          echo "gobject-2.0: $(pkg-config --modversion gobject-2.0)"
+          echo "webkit2gtk-4.1: $(pkg-config --modversion webkit2gtk-4.1)"
+
       - name: Cargo check
         working-directory: src-tauri
         run: cargo check
