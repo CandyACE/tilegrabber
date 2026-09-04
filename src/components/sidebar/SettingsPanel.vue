@@ -419,8 +419,13 @@ async function startDownloadAndInstall() {
   const update = getPendingUpdate();
   if (!update) {
     installError.value = "未找到可用的更新句柄，请重新检查更新";
+    console.warn("[SettingsPanel] 无法开始安装：更新句柄不存在");
     return;
   }
+  console.info("[SettingsPanel] 开始下载并安装更新", {
+    currentVersion: update.currentVersion,
+    targetVersion: update.version,
+  });
   downloading.value = true;
   downloadPercent.value = 0;
   downloadedBytes.value = 0;
@@ -448,8 +453,15 @@ async function startDownloadAndInstall() {
       }
     });
     // 下载安装完成 → 重启应用替换为新版本
+    console.info("[SettingsPanel] 更新安装完成，准备重启应用", {
+      targetVersion: update.version,
+    });
     await relaunch();
   } catch (e) {
+    console.error("[SettingsPanel] 更新安装失败", {
+      targetVersion: update.version,
+      error: e,
+    });
     installError.value = String(e);
     downloading.value = false;
   }

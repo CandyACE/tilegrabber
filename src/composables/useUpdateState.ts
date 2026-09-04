@@ -1,4 +1,4 @@
-import { ref, readonly } from "vue";
+import { ref, readonly, shallowRef } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
@@ -19,8 +19,9 @@ export interface UpdateCheckResult {
 // 单例状态：整个应用共享一份后台检查结果与 Update 句柄
 const autoCheckResult = ref<UpdateCheckResult | null>(null);
 const hasUpdate = ref(false);
-// Plugin 返回的 Update 句柄（含签名验证后的下载/安装方法）
-const pendingUpdate = ref<Update | null>(null);
+// Plugin 返回的 Update 句柄继承自 Tauri Resource，内部包含私有 #rid。
+// 必须使用 shallowRef 保留原始类实例，普通 ref 的深度代理会导致私有字段访问异常。
+const pendingUpdate = shallowRef<Update | null>(null);
 
 let _unlisten: UnlistenFn | null = null;
 let _initialized = false;
@@ -70,11 +71,20 @@ export async function runUpdateCheck(): Promise<UpdateCheckResult> {
     const update = (await check()) as Update | null;
     // 释放上一次的句柄（避免泄漏）
     if (pendingUpdate.value && pendingUpdate.value !== update) {
-      pendingUpdate.value.close().catch(() => {});
+      pendingUpdate.value.close().catch((closeError) => {
+        console.warn("[useUpdateState] 释放旧更新句柄失败", {
+          error: closeError,
+        });
+      });
     }
     pendingUpdate.value = update;
+    console.info("[useUpdateState] 已保存原始更新句柄", {
+      hasUpdate: Boolean(update),
+      version: update?.version ?? null,
+    });
     result = toResult(update, update?.currentVersion ?? "");
   } catch (e) {
+    console.error("[useUpdateState] 检查更新失败", { error: e });
     result = toResult(null, "", e);
   }
   autoCheckResult.value = result;
@@ -90,8 +100,16 @@ export function getPendingUpdate(): Update | null {
 /** 安装完成后清理句柄。 */
 export function clearPendingUpdate() {
   if (pendingUpdate.value) {
-    pendingUpdate.value.close().catch(() => {});
+    const update = pendingUpdate.value;
     pendingUpdate.value = null;
+    console.info("[useUpdateState] 清理更新句柄", {
+      version: update.version,
+    });
+    update.close().catch((closeError) => {
+      console.warn("[useUpdateState] 释放更新句柄失败", {
+        error: closeError,
+      });
+    });
   }
 }
 
