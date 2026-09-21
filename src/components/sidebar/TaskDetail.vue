@@ -354,7 +354,14 @@ function startExtend() {
       north: task.value.boundsNorth,
     },
     originalPolygon: task.value.polygonWgs84
-      ? (JSON.parse(task.value.polygonWgs84) as [number, number][])
+      ? (() => {
+          const value = JSON.parse(task.value.polygonWgs84) as
+            | [number, number][]
+            | [number, number][][];
+          return value.length > 0 && Array.isArray(value[0]?.[0])
+            ? (value as [number, number][][])
+            : [value as [number, number][]];
+        })()
       : null,
     originalMinZoom: task.value.minZoom,
     originalMaxZoom: task.value.maxZoom,

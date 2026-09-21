@@ -205,7 +205,7 @@ pub fn export_geotiff<F: Fn(u64, u64)>(
     bounds: [f64; 4],
     zoom: u8,
     clip_to_bounds: bool,
-    polygon: Option<Vec<[f64; 2]>>,
+    polygon: Option<Vec<Vec<[f64; 2]>>>,
     crs: &CrsType,
     target_epsg: Option<u32>,
     compression: &str,
@@ -570,7 +570,7 @@ fn render_geotiff_strips<FProgress, FConsume>(
     out_y0: u32,
     out_w: u32,
     out_h: u32,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
     merc_n_out: f64,
     merc_per_out_px: f64,
     geo_west: f64,
@@ -701,9 +701,11 @@ fn apply_polygon_mask_to_row(
     geo_west: f64,
     lon_per_px: f64,
     row_lat: f64,
-    polygon: &[[f64; 2]],
+    polygons: &[Vec<[f64; 2]>],
 ) {
-    // 计算当前扫描线与多边形各边的经度交点
+    // 汇总所有面的扫描线交点；每个面各自按奇偶规则形成区间，最终按并集保留像素。
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    for polygon in polygons {
     let mut crossings: Vec<f64> = Vec::new();
     let n = polygon.len();
     for i in 0..n {
@@ -716,16 +718,15 @@ fn apply_polygon_mask_to_row(
         }
     }
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        for pair in crossings.chunks_exact(2) {
+            intervals.push((pair[0], pair[1]));
+        }
+    }
 
-    // 逐列扫描：维护 inside 状态，在每个交叉点切换
-    let mut crossing_idx = 0usize;
-    let mut inside = false;
+    // 逐列扫描，只要落入任意面的区间就保留。
     for col in 0..out_w as usize {
         let lng = geo_west + (col as f64 + 0.5) * lon_per_px;
-        while crossing_idx < crossings.len() && crossings[crossing_idx] <= lng {
-            inside = !inside;
-            crossing_idx += 1;
-        }
+        let inside = intervals.iter().any(|(west, east)| lng >= *west && lng <= *east);
         if !inside {
             let base = row_offset + col * 4;
             strip_buf[base] = 0;
@@ -834,7 +835,7 @@ fn render_reprojected_strip(
     geo_east: f64,
     src_crs: &CrsType,
     dst_crs: &TargetCrs,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
 ) -> Vec<u8> {
     let src_h = src_canvas.height() as f64;
     let src_raw = src_canvas.as_raw();
@@ -931,7 +932,7 @@ fn render_reprojected_strip_utm(
     zone: u8,
     is_north: bool,
     src_crs: &CrsType,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
 ) -> Vec<u8> {
     let src_w = src_canvas.width() as f64;
     let src_h = src_canvas.height() as f64;
@@ -963,7 +964,7 @@ fn render_reprojected_strip_utm(
 
             // 多边形掩膜逐像素检查
             if let Some(poly) = polygon {
-                if !point_in_polygon(lon, lat, poly) {
+                if !crate::tile_math::point_in_polygons(lon, lat, poly) {
                     continue;
                 }
             }
@@ -1014,22 +1015,6 @@ fn render_reprojected_strip_utm(
     }
 
     buf
-}
-
-/// 点在多边形内检测（奇偶规则）
-fn point_in_polygon(lon: f64, lat: f64, polygon: &[[f64; 2]]) -> bool {
-    let n = polygon.len();
-    let mut inside = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let [xi, yi] = polygon[i];
-        let [xj, yj] = polygon[j];
-        if ((yi > lat) != (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
 }
 
 #[cfg(test)]

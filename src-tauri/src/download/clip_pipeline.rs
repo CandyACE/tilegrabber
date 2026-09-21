@@ -40,7 +40,7 @@ pub enum ClipOutcome {
 pub struct ClipPipelineConfig {
     pub store_path: String,
     pub bounds: Bounds,
-    pub polygon: Option<Vec<[f64; 2]>>,
+    pub polygon: Option<Vec<Vec<[f64; 2]>>>,
     pub crs: CrsType,
     pub task_id: String,
 }
@@ -49,15 +49,7 @@ pub struct ClipPipelineConfig {
 fn is_boundary(coord: &TileCoord, cfg: &ClipPipelineConfig) -> bool {
     let tb = crate::tile_math::tile_to_lonlat_bounds(coord.x, coord.y, coord.z, &cfg.crs);
     if let Some(poly) = &cfg.polygon {
-        let corners = [
-            [tb.west, tb.north],
-            [tb.east, tb.north],
-            [tb.east, tb.south],
-            [tb.west, tb.south],
-        ];
-        !corners
-            .iter()
-            .all(|c| crate::tile_math::point_in_polygon(c[0], c[1], poly))
+        !crate::tile_math::tile_fully_within_polygons(coord.x, coord.y, coord.z, poly, &cfg.crs)
     } else {
         let b = &cfg.bounds;
         !(tb.west >= b.west && tb.east <= b.east && tb.south >= b.south && tb.north <= b.north)
@@ -148,7 +140,7 @@ fn run_consumer_blocking(
             .par_iter()
             .filter_map(|(rowid, z, x, y, data)| {
                 let r = if let Some(poly) = &polygon {
-                    crate::export::tile_clip::clip_tile_to_polygon_crs(
+                    crate::export::tile_clip::clip_tile_to_polygons_crs(
                         data, *x, *y, *z, poly, &crs,
                     )
                 } else {

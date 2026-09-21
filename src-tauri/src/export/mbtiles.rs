@@ -38,7 +38,7 @@ pub fn export_mbtiles<F>(
     format: &str,
     tile_size: u32,
     clip_to_bounds: bool,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
     crs: &CrsType,
     jpeg_quality: Option<u8>,
     png_level: Option<u8>,
@@ -265,7 +265,7 @@ where
 
                 let write_data = if need_clip {
                     if let Some(poly) = polygon {
-                        match crate::export::tile_clip::clip_tile_to_polygon_crs(
+                        match crate::export::tile_clip::clip_tile_to_polygons_crs(
                             data, *x as u32, *y as u32, *z as u8, poly, crs,
                         )? {
                             None => return Ok(None),

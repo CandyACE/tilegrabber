@@ -11,7 +11,7 @@ const props = defineProps<{
   map: MaplibreMap | null;
   bounds: Bounds | null;
   /** 实际多边形顶点 [lng, lat][]，有值时优先绘制真实轮廓而非矩形包围盒 */
-  polygon?: [number, number][] | null;
+  polygons?: [number, number][][] | null;
 }>();
 
 const SOURCE_ID = "imported-bounds-src";
@@ -81,19 +81,22 @@ function show(bounds: Bounds) {
     });
 
     // 如果有实际多边形，额外绘制精确轮廓
-    if (props.polygon && props.polygon.length >= 3) {
-      const ring: [number, number][] = [...props.polygon];
-      const first = ring[0];
-      const last = ring[ring.length - 1];
-      if (first[0] !== last[0] || first[1] !== last[1]) {
-        ring.push(first);
-      }
+    if (props.polygons && props.polygons.length > 0) {
+      const rings = props.polygons
+        .filter((polygon) => polygon.length >= 3)
+        .map((polygon) => {
+          const ring: [number, number][] = [...polygon];
+          const first = ring[0];
+          const last = ring[ring.length - 1];
+          if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+          return ring;
+        });
       const polyGeojson: GeoJSON.FeatureCollection = {
         type: "FeatureCollection",
         features: [
           {
             type: "Feature",
-            geometry: { type: "Polygon", coordinates: [ring] },
+            geometry: { type: "MultiPolygon", coordinates: rings.map((ring) => [ring]) },
             properties: {},
           },
         ],
@@ -123,7 +126,7 @@ function show(bounds: Bounds) {
 }
 
 watch(
-  () => [props.map, props.bounds, props.polygon] as const,
+  () => [props.map, props.bounds, props.polygons] as const,
   ([m, b]) => {
     if (!m) return;
     b ? show(b) : remove();

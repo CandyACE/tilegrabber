@@ -369,6 +369,139 @@ pub fn point_in_polygon(lng: f64, lat: f64, polygon: &[[f64; 2]]) -> bool {
     inside
 }
 
+/// 判断点是否位于矩形内部或边界上。
+///
+/// 这里使用很小的浮点容差，避免瓦片边界与多边形边界恰好重合时被误判为不相交。
+#[inline]
+fn point_in_or_on_bounds(point: [f64; 2], bounds: &Bounds) -> bool {
+    const EPSILON: f64 = 1e-10;
+    point[0] >= bounds.west - EPSILON
+        && point[0] <= bounds.east + EPSILON
+        && point[1] >= bounds.south - EPSILON
+        && point[1] <= bounds.north + EPSILON
+}
+
+/// 判断三点的方向关系。
+#[inline]
+fn orientation(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
+    cross2d(sub2d(b, a), sub2d(c, a))
+}
+
+/// 判断点是否在线段上（含端点）。
+#[inline]
+fn point_on_segment(point: [f64; 2], start: [f64; 2], end: [f64; 2]) -> bool {
+    const EPSILON: f64 = 1e-10;
+    orientation(start, end, point).abs() <= EPSILON
+        && point[0] >= start[0].min(end[0]) - EPSILON
+        && point[0] <= start[0].max(end[0]) + EPSILON
+        && point[1] >= start[1].min(end[1]) - EPSILON
+        && point[1] <= start[1].max(end[1]) + EPSILON
+}
+
+/// 判断两条线段是否相交或接触。
+///
+/// `segments_intersect` 只识别严格相交；严格裁剪的快速路径还需要识别边界接触、
+/// 共线重叠等情况，否则凹多边形的缺口可能让瓦片被错误地当成完整内部瓦片。
+fn segments_intersect_or_touch(p1: [f64; 2], p2: [f64; 2], p3: [f64; 2], p4: [f64; 2]) -> bool {
+    if segments_intersect(p1, p2, p3, p4) {
+        return true;
+    }
+
+    const EPSILON: f64 = 1e-10;
+    let d1 = orientation(p1, p2, p3);
+    let d2 = orientation(p1, p2, p4);
+    let d3 = orientation(p3, p4, p1);
+    let d4 = orientation(p3, p4, p2);
+
+    (d1.abs() <= EPSILON && point_on_segment(p3, p1, p2))
+        || (d2.abs() <= EPSILON && point_on_segment(p4, p1, p2))
+        || (d3.abs() <= EPSILON && point_on_segment(p1, p3, p4))
+        || (d4.abs() <= EPSILON && point_on_segment(p2, p3, p4))
+}
+
+/// 判断多边形边界是否进入、穿过或接触瓦片范围。
+///
+/// 只有多边形边界完全位于瓦片外部时，且瓦片四角均在同一多边形内，才可跳过
+/// 像素级裁剪。仅检查四角会漏掉凹多边形伸入瓦片内部的缺口。
+fn polygon_boundary_touches_bounds(polygon: &[[f64; 2]], bounds: &Bounds) -> bool {
+    if polygon.len() < 3 {
+        return true;
+    }
+
+    let tile_edges = [
+        ([bounds.west, bounds.north], [bounds.east, bounds.north]),
+        ([bounds.east, bounds.north], [bounds.east, bounds.south]),
+        ([bounds.east, bounds.south], [bounds.west, bounds.south]),
+        ([bounds.west, bounds.south], [bounds.west, bounds.north]),
+    ];
+
+    for index in 0..polygon.len() {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % polygon.len()];
+        if point_in_or_on_bounds(start, bounds)
+            || point_in_or_on_bounds(end, bounds)
+            || tile_edges.iter().any(|&(edge_start, edge_end)| {
+                segments_intersect_or_touch(start, end, edge_start, edge_end)
+            })
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// 判断点是否位于多面集合中的任意一个面内。
+///
+/// 多面区域按各外环的并集处理；KML 内环在解析阶段已被排除，避免把洞误当成下载面。
+pub fn point_in_polygons(lng: f64, lat: f64, polygons: &[Vec<[f64; 2]>]) -> bool {
+    polygons
+        .iter()
+        .any(|polygon| point_in_polygon(lng, lat, polygon))
+}
+
+/// 判断瓦片是否完全位于多面集合中的同一个面内。
+///
+/// 不能仅判断四个角点是否分别落在多面并集内：当瓦片跨越两个
+/// 不相连的面或位于两个面之间的空白区域时，四个角点可能都命中，
+/// 但瓦片内部仍需要像素级裁剪。
+pub fn tile_fully_within_polygons(
+    x: u32,
+    y: u32,
+    zoom: u8,
+    polygons: &[Vec<[f64; 2]>],
+    crs: &CrsType,
+) -> bool {
+    let tb = tile_to_lonlat_bounds(x, y, zoom, crs);
+    let corners = [
+        [tb.west, tb.north],
+        [tb.east, tb.north],
+        [tb.east, tb.south],
+        [tb.west, tb.south],
+    ];
+    polygons.iter().any(|polygon| {
+        corners
+            .iter()
+            .all(|corner| point_in_polygon(corner[0], corner[1], polygon))
+            && !polygon_boundary_touches_bounds(polygon, &tb)
+    })
+}
+
+/// 解析任务中保存的多边形 JSON。
+///
+/// 新格式为 `[[[lng, lat], ...], ...]`；旧版本单面格式
+/// `[[lng, lat], ...]` 也会被包装成只有一个面的集合。
+pub fn parse_polygon_geometry(value: &str) -> Option<Vec<Vec<[f64; 2]>>> {
+    if let Ok(polygons) = serde_json::from_str::<Vec<Vec<[f64; 2]>>>(value) {
+        if !polygons.is_empty() {
+            return Some(polygons);
+        }
+    }
+    serde_json::from_str::<Vec<[f64; 2]>>(value)
+        .ok()
+        .filter(|polygon| !polygon.is_empty())
+        .map(|polygon| vec![polygon])
+}
+
 /// 判断瓦片是否与多边形相交（用于下载阶段过滤不必要的瓦片）
 ///
 /// 存在以下三种相交情形之一时返回 true：
@@ -448,6 +581,19 @@ pub fn tile_intersects_polygon(
     false
 }
 
+/// 判断瓦片是否与多面集合中的任意一个面相交。
+pub fn tile_intersects_polygons(
+    x: u32,
+    y: u32,
+    zoom: u8,
+    polygons: &[Vec<[f64; 2]>],
+    crs: &CrsType,
+) -> bool {
+    polygons
+        .iter()
+        .any(|polygon| tile_intersects_polygon(x, y, zoom, polygon, crs))
+}
+
 /// 按多边形范围枚举瓦片（仅返回与多边形相交的瓦片，跳过外围矩形中不相交的部分）
 pub fn enumerate_tiles_with_polygon(
     bounds: &Bounds,
@@ -481,11 +627,133 @@ pub fn enumerate_tiles_with_polygon(
     tiles
 }
 
+/// 按多面范围枚举瓦片，只保留与任意一个多边形相交的瓦片。
+pub fn enumerate_tiles_with_polygons(
+    bounds: &Bounds,
+    min_zoom: u8,
+    max_zoom: u8,
+    crs: &CrsType,
+    polygons: &[Vec<[f64; 2]>],
+    limit: Option<u64>,
+) -> Vec<TileCoord> {
+    let max_tiles = limit.unwrap_or(500_000);
+    let mut tiles = Vec::new();
+
+    'outer: for zoom in min_zoom..=max_zoom {
+        let ((x_min, x_max), (y_min, y_max)) = match crs {
+            CrsType::Wgs84 => bounds_to_tile_range_wgs84(bounds, zoom),
+            _ => bounds_to_tile_range_xyz(bounds, zoom),
+        };
+        for y in y_min..=y_max {
+            for x in x_min..=x_max {
+                if tiles.len() as u64 >= max_tiles {
+                    break 'outer;
+                }
+                if tile_intersects_polygons(x, y, zoom, polygons, crs) {
+                    tiles.push(TileCoord { z: zoom, x, y });
+                }
+            }
+        }
+    }
+    tiles
+}
+
 // ─── 单元测试 ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn multi_polygon_geometry_keeps_disconnected_regions() {
+        let west = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+        let east = vec![[10.0, 10.0], [11.0, 10.0], [11.0, 11.0]];
+        let polygons = vec![west, east];
+        assert!(point_in_polygons(0.5, 0.2, &polygons));
+        assert!(point_in_polygons(10.5, 10.2, &polygons));
+        assert!(!point_in_polygons(5.0, 5.0, &polygons));
+    }
+
+    #[test]
+    fn multi_polygon_enumeration_includes_each_disconnected_region() {
+        let polygons = vec![
+            vec![[-101.0, 39.0], [-99.0, 39.0], [-99.0, 41.0], [-101.0, 41.0]],
+            vec![[99.0, 39.0], [101.0, 39.0], [101.0, 41.0], [99.0, 41.0]],
+        ];
+        let bounds = Bounds {
+            west: -101.0,
+            east: 101.0,
+            south: 39.0,
+            north: 41.0,
+        };
+        let tiles =
+            enumerate_tiles_with_polygons(&bounds, 6, 6, &CrsType::WebMercator, &polygons, None);
+        let west_tile = lng_lat_to_tile_xyz(-100.0, 40.0, 6);
+        let east_tile = lng_lat_to_tile_xyz(100.0, 40.0, 6);
+        assert!(tiles.iter().any(|tile| (tile.x, tile.y) == west_tile));
+        assert!(tiles.iter().any(|tile| (tile.x, tile.y) == east_tile));
+    }
+
+    #[test]
+    fn multi_polygon_tile_is_not_marked_inside_when_corners_hit_different_faces() {
+        let tile = TileCoord { z: 1, x: 0, y: 0 };
+        let tile_bounds = tile_to_lonlat_bounds(tile.x, tile.y, tile.z, &CrsType::WebMercator);
+        let split_lng = (tile_bounds.west + tile_bounds.east) / 2.0;
+        let polygons = vec![
+            vec![
+                [tile_bounds.west - 1.0, tile_bounds.south - 1.0],
+                [split_lng, tile_bounds.south - 1.0],
+                [split_lng, tile_bounds.north + 1.0],
+                [tile_bounds.west - 1.0, tile_bounds.north + 1.0],
+            ],
+            vec![
+                [split_lng, tile_bounds.south - 1.0],
+                [tile_bounds.east + 1.0, tile_bounds.south - 1.0],
+                [tile_bounds.east + 1.0, tile_bounds.north + 1.0],
+                [split_lng, tile_bounds.north + 1.0],
+            ],
+        ];
+        assert!(!tile_fully_within_polygons(
+            tile.x,
+            tile.y,
+            tile.z,
+            &polygons,
+            &CrsType::WebMercator
+        ));
+    }
+
+    #[test]
+    fn concave_polygon_tile_with_an_internal_notch_requires_clipping() {
+        let tile = TileCoord { z: 1, x: 0, y: 0 };
+        let bounds = tile_to_lonlat_bounds(tile.x, tile.y, tile.z, &CrsType::WebMercator);
+        let middle_lng = (bounds.west + bounds.east) / 2.0;
+        let notch_bottom = (bounds.south + bounds.north) / 2.0;
+        let polygon = vec![
+            [bounds.west - 1.0, bounds.south - 1.0],
+            [bounds.east + 1.0, bounds.south - 1.0],
+            [bounds.east + 1.0, bounds.north + 1.0],
+            [middle_lng + 10.0, bounds.north + 1.0],
+            [middle_lng + 10.0, notch_bottom],
+            [middle_lng - 10.0, notch_bottom],
+            [middle_lng - 10.0, bounds.north + 1.0],
+            [bounds.west - 1.0, bounds.north + 1.0],
+        ];
+        let polygons = vec![polygon];
+
+        assert!(
+            !tile_fully_within_polygons(tile.x, tile.y, tile.z, &polygons, &CrsType::WebMercator),
+            "凹多边形缺口进入瓦片时必须进入像素裁剪流程"
+        );
+    }
+
+    #[test]
+    fn polygon_geometry_parser_supports_old_and_new_storage_formats() {
+        let old = parse_polygon_geometry("[[0,0],[1,0],[0,1]]").expect("旧格式应兼容");
+        assert_eq!(old.len(), 1);
+        let new = parse_polygon_geometry("[[[0,0],[1,0],[0,1]],[[10,10],[11,10],[10,11]]]")
+            .expect("新格式应解析");
+        assert_eq!(new.len(), 2);
+    }
 
     #[test]
     fn test_lng_lat_to_tile_xyz() {

@@ -184,8 +184,8 @@ pub async fn validate_tile_url(
 
 /// 解析区域文件（KML / KMZ / GeoJSON）
 ///
-/// 返回第一个多边形坐标面及其外包围矩形。
-/// `polygon` 为 `null` 时表示文件中只有点/线要素，此时只返回 bounds。
+/// 返回所有多边形外环及其外包围矩形。
+/// `polygons` 为 `null` 时表示文件中只有点/线要素，此时只返回 bounds。
 #[command]
 pub async fn parse_area_file(path: String) -> Result<crate::parser::area_file::ParsedArea, String> {
     crate::parser::area_file::parse_area_file(std::path::Path::new(&path))

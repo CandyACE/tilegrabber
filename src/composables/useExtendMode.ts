@@ -5,7 +5,7 @@ export interface ExtendModeContext {
   taskId: string;
   taskName: string;
   originalBounds: Bounds;
-  originalPolygon: [number, number][] | null;
+  originalPolygon: [number, number][][] | null;
   originalMinZoom: number;
   originalMaxZoom: number;
 }

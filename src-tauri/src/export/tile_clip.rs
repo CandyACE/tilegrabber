@@ -409,3 +409,192 @@ pub fn clip_tile_to_polygon_crs(
 
     encode_png_fast(&img).map(Some)
 }
+
+/// 将单张瓦片按多面区域的并集进行像素级裁剪。
+///
+/// 所有外环按并集处理，保证多个相互分离、相邻或重叠的 KML / GeoJSON 面都能保留。
+/// 使用逐行扫描线交点计算并集区间，避免逐像素遍历全部顶点造成的性能退化。
+pub fn clip_tile_to_polygons_crs(
+    data: &[u8],
+    x: u32,
+    y: u32,
+    zoom: u8,
+    polygons: &[Vec<[f64; 2]>],
+    crs: &CrsType,
+) -> Result<Option<Vec<u8>>> {
+    if polygons.len() == 1 {
+        return clip_tile_to_polygon_crs(data, x, y, zoom, &polygons[0], crs);
+    }
+    if !crate::tile_math::tile_intersects_polygons(x, y, zoom, polygons, crs) {
+        return Ok(None);
+    }
+
+    let mut img = image::load_from_memory(data)
+        .context("解码多面区域瓦片图像失败")?
+        .into_rgba8();
+    let width = img.width() as usize;
+    let height = img.height() as usize;
+    let width_f = width as f64;
+    let tb = crate::tile_math::tile_to_lonlat_bounds(x, y, zoom, crs);
+    let is_wgs84 = matches!(crs, CrsType::Wgs84);
+    let merc = |lat: f64| -> f64 { (PI / 4.0 + lat.to_radians() / 2.0).tan().ln() };
+    let merc_n = merc(tb.north);
+    let merc_span = merc_n - merc(tb.south);
+    let lng_span = tb.east - tb.west;
+
+    // 预先把所有顶点投影到瓦片像素坐标，行循环中只计算线段交点。
+    let projected_polygons: Vec<Vec<(f64, f64)>> = polygons
+        .iter()
+        .filter(|polygon| polygon.len() >= 3)
+        .map(|polygon| {
+            polygon
+                .iter()
+                .map(|vertex| {
+                    let col = (vertex[0] - tb.west) / lng_span * width_f;
+                    let row = if is_wgs84 {
+                        (tb.north - vertex[1]) / (tb.north - tb.south) * height as f64
+                    } else {
+                        (merc_n - merc(vertex[1])) / merc_span * height as f64
+                    };
+                    (col, row)
+                })
+                .collect()
+        })
+        .collect();
+    let raw = img.as_mut();
+    let stride = width * 4;
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    let mut crossings: Vec<f64> = Vec::new();
+
+    for row in 0..height {
+        let scan_y = row as f64 + 0.5;
+        intervals.clear();
+
+        // 每个面独立按奇偶规则得到内部区间，再合并所有区间形成多面并集。
+        for polygon in &projected_polygons {
+            crossings.clear();
+            let mut previous = polygon.len() - 1;
+            for index in 0..polygon.len() {
+                let (x0, y0) = polygon[index];
+                let (x1, y1) = polygon[previous];
+                if (y0 > scan_y) != (y1 > scan_y) {
+                    crossings.push((x1 - x0) * (scan_y - y0) / (y1 - y0) + x0);
+                }
+                previous = index;
+            }
+            crossings.sort_unstable_by(|left, right| {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for pair in crossings.chunks_exact(2) {
+                intervals.push((pair[0].max(0.0), pair[1].min(width_f)));
+            }
+        }
+
+        intervals.sort_unstable_by(|left, right| {
+            left.0
+                .partial_cmp(&right.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let row_buffer = &mut raw[row * stride..(row + 1) * stride];
+        let mut clear_until = 0usize;
+
+        // 交叠或相邻的区间合并后处理，避免多个面相交时将已保留像素再次清零。
+        for (start, end) in &intervals {
+            if end <= start {
+                continue;
+            }
+            let keep_start = (start - 0.5).ceil().max(0.0).min(width_f) as usize;
+            let keep_end = ((end - 0.5).floor() + 1.0).max(0.0).min(width_f) as usize;
+            if keep_end <= clear_until {
+                continue;
+            }
+            if keep_start > clear_until {
+                row_buffer[clear_until * 4..keep_start * 4].fill(0);
+            }
+            clear_until = clear_until.max(keep_end);
+        }
+        if clear_until < width {
+            row_buffer[clear_until * 4..].fill(0);
+        }
+    }
+    encode_png_fast(&img).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{ImageFormat, Rgba};
+
+    #[test]
+    fn multi_polygon_web_mercator_clip_uses_correct_inverse_latitude() {
+        let tile = crate::tile_math::tile_to_lonlat_bounds(0, 0, 1, &CrsType::WebMercator);
+        let split_lng = (tile.west + tile.east) / 2.0;
+        let split_lat = (tile.south + tile.north) / 2.0;
+        let polygons = vec![
+            vec![
+                [tile.west - 1.0, split_lat],
+                [split_lng, split_lat],
+                [split_lng, tile.north + 1.0],
+                [tile.west - 1.0, tile.north + 1.0],
+            ],
+            vec![
+                [split_lng, split_lat],
+                [tile.east + 1.0, split_lat],
+                [tile.east + 1.0, tile.north + 1.0],
+                [split_lng, tile.north + 1.0],
+            ],
+        ];
+
+        let mut image = RgbaImage::new(4, 4);
+        for pixel in image.pixels_mut() {
+            *pixel = Rgba([255, 0, 0, 255]);
+        }
+        let source = encode_png_fast(&image).expect("测试输入图像编码失败");
+        let clipped = clip_tile_to_polygons_crs(&source, 0, 0, 1, &polygons, &CrsType::WebMercator)
+            .expect("多面裁剪不应失败")
+            .expect("瓦片应与多面相交");
+        let output = image::load_from_memory_with_format(&clipped, ImageFormat::Png)
+            .expect("裁剪结果应为有效 PNG")
+            .into_rgba8();
+
+        assert_eq!(output.get_pixel(0, 0)[3], 255);
+        assert_eq!(output.get_pixel(3, 0)[3], 255);
+        assert_eq!(output.get_pixel(0, 3)[3], 0);
+        assert_eq!(output.get_pixel(3, 3)[3], 0);
+    }
+
+    #[test]
+    fn multi_polygon_clip_keeps_both_disconnected_regions() {
+        let mut image = RgbaImage::new(8, 4);
+        for pixel in image.pixels_mut() {
+            *pixel = Rgba([255, 0, 0, 255]);
+        }
+        let source = encode_png_fast(&image).expect("测试输入图像编码失败");
+        let tile = crate::tile_math::tile_to_lonlat_bounds(0, 0, 1, &CrsType::WebMercator);
+        let middle_lng = (tile.west + tile.east) / 2.0;
+        let polygons = vec![
+            vec![
+                [tile.west - 1.0, tile.south - 1.0],
+                [middle_lng - 20.0, tile.south - 1.0],
+                [middle_lng - 20.0, tile.north + 1.0],
+                [tile.west - 1.0, tile.north + 1.0],
+            ],
+            vec![
+                [middle_lng + 20.0, tile.south - 1.0],
+                [tile.east + 1.0, tile.south - 1.0],
+                [tile.east + 1.0, tile.north + 1.0],
+                [middle_lng + 20.0, tile.north + 1.0],
+            ],
+        ];
+        let clipped = clip_tile_to_polygons_crs(&source, 0, 0, 1, &polygons, &CrsType::WebMercator)
+            .expect("多面裁剪不应失败")
+            .expect("瓦片应与多面相交");
+        let output = image::load_from_memory_with_format(&clipped, ImageFormat::Png)
+            .expect("裁剪结果应为有效 PNG")
+            .into_rgba8();
+
+        assert_eq!(output.get_pixel(0, 2)[3], 255);
+        assert_eq!(output.get_pixel(3, 2)[3], 0);
+        assert_eq!(output.get_pixel(7, 2)[3], 255);
+    }
+}

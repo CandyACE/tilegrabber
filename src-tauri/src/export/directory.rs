@@ -37,7 +37,7 @@ pub fn export_directory<F>(
     format: &str,
     clip_to_bounds: bool,
     bounds: [f64; 4],
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
     crs: &CrsType,
     jpeg_quality: Option<u8>,
     png_level: Option<u8>,
@@ -119,7 +119,7 @@ where
                 // 范围裁剪：完全在范围外的跳过；边缘相交的保留区域内像素，外部透明
                 let write_data = if need_clip {
                     if let Some(poly) = polygon {
-                        match crate::export::tile_clip::clip_tile_to_polygon_crs(
+                        match crate::export::tile_clip::clip_tile_to_polygons_crs(
                             data, *x as u32, *y as u32, *z as u8, poly, crs,
                         ) {
                             Ok(None) => return None, // 无交集

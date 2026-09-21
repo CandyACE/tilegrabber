@@ -1,5 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
+import {
+  ref,
+  shallowRef,
+  markRaw,
+  computed,
+  nextTick,
+  onMounted,
+  onUnmounted,
+} from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -349,18 +357,21 @@ function exitSetupMode() {
 }
 
 // ─── 地图 ──────────────────────────────────────────────────────────────────
-const mapRef = ref<maplibregl.Map | null>(null);
+// MapLibre Map 内部会在缩放、拖动时高频更新状态；必须避免被 Vue 深度代理，
+// 否则每帧访问地图对象都会经过 Proxy，导致未选中图层时仍出现明显卡顿。
+const mapRef = shallowRef<maplibregl.Map | null>(null);
 const mapAny = computed(() => mapRef.value as any);
 
 function onMapReady(map: maplibregl.Map) {
-  mapRef.value = map;
+  // 显式标记第三方地图实例为原始对象，防止后续通过响应式链路再次被代理。
+  mapRef.value = markRaw(map);
 }
 
 // ─── 绘制区域 ───────────────────────────────────────────────────────────────
 const areaDrawRef = ref<InstanceType<typeof AreaDraw> | null>(null);
 const drawActive = ref(false);
 const drawnBounds = ref<Bounds | null>(null);
-const drawnPolygon = ref<[number, number][] | null>(null);
+const drawnPolygon = ref<[number, number][][] | null>(null);
 const drawMode = ref<"rectangle" | "polygon">("rectangle");
 const isImportedBounds = ref(false);
 
@@ -374,7 +385,7 @@ function onBoundsChange(bounds: Bounds) {
 }
 
 function onPolygonChange(polygon: [number, number][] | null) {
-  drawnPolygon.value = polygon;
+  drawnPolygon.value = polygon ? [polygon] : null;
 }
 
 function onDrawActiveChange(active: boolean) {
@@ -394,10 +405,10 @@ function onDrawModeChange(mode: "rectangle" | "polygon") {
   // 如果当前正在绘制，切换模式👉 由 AreaDraw 内的 watch 负责实时切换
 }
 
-function onImportBounds(bounds: Bounds, polygon: [number, number][] | null) {
+function onImportBounds(bounds: Bounds, polygons: [number, number][][] | null) {
   areaDrawRef.value?.clear();
   drawnBounds.value = bounds;
-  drawnPolygon.value = polygon ?? null;
+  drawnPolygon.value = polygons ?? null;
   isImportedBounds.value = true;
   // 如果地图已就绪，气飞到导入范围
   if (mapRef.value) {
@@ -748,7 +759,7 @@ function handleDetailDeleted() {
             v-if="mapRef"
             :map="mapAny"
             :bounds="isImportedBounds ? drawnBounds : null"
-            :polygon="isImportedBounds ? drawnPolygon : null"
+            :polygons="isImportedBounds ? drawnPolygon : null"
           />
 
           <!-- 扩展任务模式：显示原始区域轮廓 -->
@@ -756,7 +767,7 @@ function handleDetailDeleted() {
             v-if="mapRef && extendActive && extendCtx"
             :map="mapAny"
             :bounds="extendCtx.originalBounds"
-            :polygon="extendCtx.originalPolygon"
+            :polygons="extendCtx.originalPolygon"
           />
 
           <TileGrid

@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::download::engine::DownloadEngine;
 use crate::storage::app_db::{AppDb, CompletedTaskPreview, LogEntry, NewTask, Task};
+use crate::tile_math::parse_polygon_geometry;
 
 // ─── 导出任务状态 ─────────────────────────────────────────────────────────────
 
@@ -779,10 +780,10 @@ pub async fn export_mbtiles(
         task.bounds_east,
         task.bounds_north,
     ];
-    let polygon: Option<Vec<[f64; 2]>> = task
+    let polygon = task
         .polygon_wgs84
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        .and_then(parse_polygon_geometry);
     let crs = source.crs;
     let task_name = task.name.clone();
 
@@ -911,10 +912,10 @@ pub async fn export_pmtiles(
         task.bounds_east,
         task.bounds_north,
     ];
-    let polygon: Option<Vec<[f64; 2]>> = task
+    let polygon = task
         .polygon_wgs84
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        .and_then(parse_polygon_geometry);
     let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
         .map(|s| s.crs)
         .unwrap_or_default();
@@ -1056,10 +1057,10 @@ pub async fn export_directory(
         task.bounds_east,
         task.bounds_north,
     ];
-    let polygon: Option<Vec<[f64; 2]>> = task
+    let polygon = task
         .polygon_wgs84
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        .and_then(parse_polygon_geometry);
     let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
         .map(|s| s.crs)
         .unwrap_or_default();
@@ -1203,10 +1204,10 @@ pub async fn export_geotiff(
     };
 
     // 若启用精确裁剪且任务带有多边形，解析顶点用于像素级掩膜
-    let polygon: Option<Vec<[f64; 2]>> = if clip_to_bounds {
+    let polygon = if clip_to_bounds {
         task.polygon_wgs84
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
+            .and_then(parse_polygon_geometry)
     } else {
         None
     };
@@ -1345,10 +1346,10 @@ pub async fn get_stored_tile(
         north: task.bounds_north,
     };
     // 解析多边形坐标（用于精确裁剪）
-    let polygon: Option<Vec<[f64; 2]>> = task
+    let polygon = task
         .polygon_wgs84
         .as_deref()
-        .and_then(|s| serde_json::from_str(s).ok());
+        .and_then(parse_polygon_geometry);
     // 解析数据源以获取 CRS
     let crs = serde_json::from_str::<crate::types::TileSource>(&task.source_config)
         .map(|s| s.crs)
@@ -1379,7 +1380,7 @@ pub async fn get_stored_tile(
         if clip_to_bounds && !already_clipped {
             if let Some(ref poly) = polygon {
                 // 多边形裁剪
-                crate::export::tile_clip::clip_tile_to_polygon_crs(
+                crate::export::tile_clip::clip_tile_to_polygons_crs(
                     &data, x as u32, y as u32, z as u8, poly, &crs,
                 )
                 .map_err(|e| e.to_string())?

@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use crate::storage::app_db::AppDb;
 use crate::storage::tile_store::TileStore;
-use crate::tile_math::{enumerate_tiles, enumerate_tiles_with_polygon};
+use crate::tile_math::{enumerate_tiles, enumerate_tiles_with_polygons, parse_polygon_geometry};
 use crate::types::{Bounds, TileSource};
 
 use super::clip_pipeline::{self, ClipMsg, ClipOutcome, ClipPipelineConfig};
@@ -144,11 +144,7 @@ impl DownloadEngine {
             .await;
             if let Err(_panic) = result {
                 let _ = app_db.update_task_status(&task_id, "failed");
-                let _ = app_db.add_log(
-                    Some(&task_id),
-                    "error",
-                    "下载任务因内部 panic 异常终止",
-                );
+                let _ = app_db.add_log(Some(&task_id), "error", "下载任务因内部 panic 异常终止");
             }
             if let Ok(mut h) = engine_ref.lock() {
                 h.remove(&tid);
@@ -242,13 +238,13 @@ async fn run_download(
     app_db.add_log(Some(&task_id), "info", "开始下载任务").ok();
     let task = match app_db.get_task(&task_id) {
         Ok(t) => t,
-            Err(e) => {
-                tracing::error!(task_id, error = %e, "[engine] cannot load task");
-                app_db
-                    .add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e))
-                    .ok();
-                return;
-            }
+        Err(e) => {
+            tracing::error!(task_id, error = %e, "[engine] cannot load task");
+            app_db
+                .add_log(Some(&task_id), "error", &format!("加载任务失败: {}", e))
+                .ok();
+            return;
+        }
     };
 
     // 2. 解析 TileSource
@@ -326,20 +322,13 @@ async fn run_download(
     // 将数据源格式写入 metadata，确保本地服务器以正确 MIME 类型提供瓦片
     let tile_format = serde_json::from_str::<serde_json::Value>(&task.source_config)
         .ok()
-        .and_then(|v| {
-            v.get("format")
-                .and_then(|f| f.as_str())
-                .map(str::to_string)
-        })
+        .and_then(|v| v.get("format").and_then(|f| f.as_str()).map(str::to_string))
         .unwrap_or_else(|| "png".to_string());
     tile_store.write_meta(&[("format", &tile_format)]).ok();
 
     // 矢量瓦片（Mapbox Vector Tile / Protobuf）旁路：跳过 GCJ02 像素纠偏与像素级裁剪
     // —— 这些后处理基于栅格像素，对 protobuf 几何无意义。
-    let is_vector_format = matches!(
-        tile_format.to_ascii_lowercase().as_str(),
-        "pbf" | "mvt"
-    );
+    let is_vector_format = matches!(tile_format.to_ascii_lowercase().as_str(), "pbf" | "mvt");
     if is_vector_format && source.coord_type == crate::types::CoordType::Gcj02 {
         app_db
             .add_log(
@@ -376,13 +365,14 @@ async fn run_download(
             base_bounds.clone()
         };
 
-        // 若任务附带多边形范围，仅枚举与多边形相交的瓦片，跳过外包围矩形中多余的瓦片
-        let polygon: Option<Vec<[f64; 2]>> = task
+        // 若任务附带一个或多个多边形范围，仅枚举与任意多边形相交的瓦片。
+        // 兼容旧任务保存的单环 JSON：[[lng, lat], ...]。
+        let polygons: Option<Vec<Vec<[f64; 2]>>> = task
             .polygon_wgs84
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
+            .and_then(parse_polygon_geometry);
 
-        let tiles = if let Some(ref poly) = polygon {
+        let tiles = if let Some(ref polygons) = polygons {
             if source.coord_type == crate::types::CoordType::Gcj02 && !is_vector_format {
                 // GCJ02 纠偏合成需要从目标瓦片东/北方向读取 2×2 源瓦片拼合。
                 // 若仅按多边形过滤下载，多边形东/北边缘以外的源瓦片将缺失，
@@ -408,15 +398,18 @@ async fn run_download(
                     .add_log(
                         Some(&task_id),
                         "info",
-                        "已检测到多边形范围，将按多边形过滤下载瓦片",
+                        &format!(
+                            "已检测到 {} 个多边形范围，将按多面并集过滤下载瓦片",
+                            polygons.len()
+                        ),
                     )
                     .ok();
-                enumerate_tiles_with_polygon(
+                enumerate_tiles_with_polygons(
                     &bounds,
                     task.min_zoom,
                     task.max_zoom,
                     &source.crs,
-                    poly,
+                    polygons,
                     Some(2_000_000),
                 )
             }
@@ -513,11 +506,15 @@ async fn run_download(
     app_db.update_task_status(&task_id, "downloading").ok();
 
     // === 流水线裁剪 ===
-    // 启用条件：开启 clip_to_bounds + 非矢量瓦片 + 非 GCJ02（GCJ02 必须先合成再裁剪）。
-    // 满足时，启动后台消费者；主写入循环在每次 save_tiles_batch 成功后转发坐标。
-    let streaming_clip_enabled = task.clip_to_bounds
-        && !is_vector_format
-        && source.coord_type != crate::types::CoordType::Gcj02;
+    // 恢复下载时，.tiles 中可能已有上一次下载留下的未裁剪瓦片；流水线只能处理本次
+    // 新写入的瓦片。恢复任务因此必须在下载结束后全量扫描，避免旧瓦片被遗漏后仍写入
+    // `tiles.clipped=1` 标记。
+    let streaming_clip_enabled = should_enable_streaming_clip(
+        task.clip_to_bounds,
+        is_vector_format,
+        source.coord_type == crate::types::CoordType::Gcj02,
+        init_total,
+    );
     let (clip_tx, clip_handle): (
         Option<tokio::sync::mpsc::UnboundedSender<ClipMsg>>,
         Option<tokio::task::JoinHandle<ClipOutcome>>,
@@ -533,7 +530,7 @@ async fn run_download(
             polygon: task
                 .polygon_wgs84
                 .as_deref()
-                .and_then(|s| serde_json::from_str::<Vec<[f64; 2]>>(s).ok()),
+                .and_then(parse_polygon_geometry),
             crs: source.crs.clone(),
             task_id: task_id.clone(),
         };
@@ -547,6 +544,19 @@ async fn run_download(
             .ok();
         (Some(tx), Some(handle))
     } else {
+        if task.clip_to_bounds
+            && !is_vector_format
+            && source.coord_type != crate::types::CoordType::Gcj02
+            && init_total > 0
+        {
+            app_db
+                .add_log(
+                    Some(&task_id),
+                    "info",
+                    "恢复下载检测到已有瓦片：下载完成后将全量执行严格裁剪，确保多个面区域不遗漏旧瓦片",
+                )
+                .ok();
+        }
         (None, None)
     };
 
@@ -608,10 +618,9 @@ async fn run_download(
             // 批量写入成功的瓦片（单事务）——先保存原始数据，下载完成后再统一裁剪
             if !success_tiles.is_empty() {
                 let store = write_store.clone();
-                let coords_for_clip: Option<Vec<crate::tile_math::TileCoord>> =
-                    write_clip_tx.as_ref().map(|_| {
-                        success_tiles.iter().map(|(c, _)| c.clone()).collect()
-                    });
+                let coords_for_clip: Option<Vec<crate::tile_math::TileCoord>> = write_clip_tx
+                    .as_ref()
+                    .map(|_| success_tiles.iter().map(|(c, _)| c.clone()).collect());
                 tokio::task::spawn_blocking(move || {
                     store.save_tiles_batch(&success_tiles).ok();
                 })
@@ -734,7 +743,10 @@ async fn run_download(
                 if tile_delay_ms > 0 {
                     tokio::time::sleep(tokio::time::Duration::from_millis(tile_delay_ms)).await;
                 }
-                (tile, worker::download_tile(&client, tile, &source, max_retries).await)
+                (
+                    tile,
+                    worker::download_tile(&client, tile, &source, max_retries).await,
+                )
             });
         }
 
@@ -803,10 +815,7 @@ async fn run_download(
                         .add_log(
                             Some(&task_id),
                             "warn",
-                            &format!(
-                                "磁盘剩余空间不足（{}），任务已自动暂停",
-                                format_bytes(free)
-                            ),
+                            &format!("磁盘剩余空间不足（{}），任务已自动暂停", format_bytes(free)),
                         )
                         .ok();
                     disk_full_abort = true;
@@ -955,9 +964,7 @@ async fn run_download(
     };
     let streaming_clip_completed = streaming_clip_boundary.is_some();
     if streaming_clip_completed {
-        tile_store
-            .write_meta(&[("tiles.clipped", "1")])
-            .ok();
+        tile_store.write_meta(&[("tiles.clipped", "1")]).ok();
     }
 
     // 磁盘满时提前中止：暂停任务并通知前端
@@ -1134,10 +1141,10 @@ async fn run_download(
             south: task.bounds_south,
             north: task.bounds_north,
         };
-        let clip_polygon: Option<Vec<[f64; 2]>> = task
+        let clip_polygon: Option<Vec<Vec<[f64; 2]>>> = task
             .polygon_wgs84
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
+            .and_then(parse_polygon_geometry);
         let clip_crs = source.crs.clone();
         let clip_store_path = tile_store_path.clone();
         let clip_app = app.clone();
@@ -1214,9 +1221,7 @@ async fn run_download(
     // 将最终精确进度持久化到 tasks 表（下载循环内只按 0.5s 节流更新，最后一次可能未到 100%）
     // 同步更新 total_tiles：GCJ02 合成后会删除 padding 瓦片，download_state 行数从 N+M 缩减到 N，
     // 但 init_download_state 时写入的 total_tiles = N+M 从未更新，导致进度分母偏大无法到 100%
-    app_db
-        .update_task_total(&task_id, progress.total)
-        .ok();
+    app_db.update_task_total(&task_id, progress.total).ok();
     app_db
         .update_task_progress(&task_id, progress.downloaded, progress.failed)
         .ok();
@@ -1266,6 +1271,18 @@ async fn run_download(
 
 // ─── 辅助函数 ─────────────────────────────────────────────────────────────────
 
+/// 判断是否可使用仅覆盖本次写入瓦片的流水线裁剪。
+///
+/// 已存在下载状态的恢复任务必须返回 `false`，以便后续统一裁剪扫描全部已存储瓦片。
+fn should_enable_streaming_clip(
+    clip_to_bounds: bool,
+    is_vector_format: bool,
+    is_gcj02: bool,
+    init_total: i64,
+) -> bool {
+    clip_to_bounds && !is_vector_format && !is_gcj02 && init_total == 0
+}
+
 fn format_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
@@ -1292,7 +1309,7 @@ fn format_bytes(bytes: u64) -> String {
 fn post_clip_tiles(
     store_path: &str,
     bounds: &Bounds,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
     crs: &crate::types::CrsType,
     progress_cb: impl Fn(u64, u64),
     tile_flash_cb: impl Fn(Vec<TileFlashBounds>),
@@ -1358,15 +1375,9 @@ fn post_clip_tiles(
             //   如果只靠 bbox 检查，位于 bbox 内但多边形外的瓦片会被错误跳过
             //   （高缩放级别时这类瓦片数量极多，导致高缩放裁剪失效）
             let needs_processing = if let Some(poly) = polygon {
-                let corners = [
-                    [tb.west, tb.north],
-                    [tb.east, tb.north],
-                    [tb.east, tb.south],
-                    [tb.west, tb.south],
-                ];
-                !corners
-                    .iter()
-                    .all(|c| crate::tile_math::point_in_polygon(c[0], c[1], poly))
+                !crate::tile_math::tile_fully_within_polygons(
+                    *x as u32, *y as u32, *z as u8, poly, crs,
+                )
             } else {
                 !(tb.west >= bounds.west
                     && tb.east <= bounds.east
@@ -1433,7 +1444,7 @@ fn post_clip_tiles(
             .par_iter()
             .filter_map(|(rowid, z, x, y, data)| {
                 let result = if let Some(poly) = polygon {
-                    crate::export::tile_clip::clip_tile_to_polygon_crs(
+                    crate::export::tile_clip::clip_tile_to_polygons_crs(
                         data, *x as u32, *y as u32, *z as u8, poly, crs,
                     )
                 } else {
@@ -1564,8 +1575,7 @@ fn post_gcj02_composite(
     // 枚举原始范围内的所有目标瓦片（逐层级，避免单次枚举超出上限）
     let mut target_tiles: Vec<(u8, u32, u32)> = Vec::new();
     for z in min_zoom..=max_zoom {
-        let tiles =
-            crate::tile_math::enumerate_tiles(orig_bounds, z, z, crs, Some(10_000_000));
+        let tiles = crate::tile_math::enumerate_tiles(orig_bounds, z, z, crs, Some(10_000_000));
         for tc in tiles {
             target_tiles.push((tc.z, tc.x, tc.y));
         }
@@ -1597,8 +1607,7 @@ fn post_gcj02_composite(
         let tile_infos: Vec<TileInfo> = chunk
             .iter()
             .map(|&(z, x, y)| {
-                let (dx, dy) =
-                    crate::gcj02::gcj02_pixel_delta(z, x, y, tile_size);
+                let (dx, dy) = crate::gcj02::gcj02_pixel_delta(z, x, y, tile_size);
                 TileInfo {
                     z,
                     x,
@@ -1959,5 +1968,34 @@ async fn run_mbtiles_import(
                 app_db.soft_err(Some(&task_id), "标记任务失败状态", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_enable_streaming_clip;
+
+    #[test]
+    fn 恢复下载必须关闭流水线裁剪以触发全量裁剪() {
+        assert!(
+            should_enable_streaming_clip(true, false, false, 0),
+            "首次栅格任务应启用流水线裁剪"
+        );
+        assert!(
+            !should_enable_streaming_clip(true, false, false, 1),
+            "恢复任务必须走全量裁剪，覆盖已有的旧瓦片"
+        );
+        assert!(
+            !should_enable_streaming_clip(false, false, false, 0),
+            "未开启严格裁剪时不应启动流水线"
+        );
+        assert!(
+            !should_enable_streaming_clip(true, true, false, 0),
+            "矢量瓦片不应执行像素级流水线裁剪"
+        );
+        assert!(
+            !should_enable_streaming_clip(true, false, true, 0),
+            "GCJ02 瓦片必须在纠偏合成后统一裁剪"
+        );
     }
 }

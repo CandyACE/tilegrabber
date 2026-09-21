@@ -127,15 +127,24 @@ async function showTask(taskId: string, gen: number, flyTo = true) {
     // 实际多边形轮廓（如果有）
     if (t.polygonWgs84) {
       try {
-        const pts: [number, number][] = JSON.parse(t.polygonWgs84);
-        if (pts && pts.length >= 3) {
-          const ring: [number, number][] = [...pts];
-          if (
-            ring[0][0] !== ring[ring.length - 1][0] ||
-            ring[0][1] !== ring[ring.length - 1][1]
-          ) {
-            ring.push(ring[0]);
-          }
+        const value = JSON.parse(t.polygonWgs84) as
+          | [number, number][]
+          | [number, number][][];
+        const polygons: [number, number][][] =
+          value.length > 0 && Array.isArray(value[0]?.[0])
+            ? (value as [number, number][][])
+            : [value as [number, number][]];
+        const rings = polygons
+          .filter((polygon) => polygon.length >= 3)
+          .map((polygon) => {
+            const ring: [number, number][] = [...polygon];
+            if (
+              ring[0][0] !== ring[ring.length - 1][0] ||
+              ring[0][1] !== ring[ring.length - 1][1]
+            ) ring.push(ring[0]);
+            return ring;
+          });
+        if (rings.length > 0) {
           m.addSource(POLY_SOURCE_ID, {
             type: "geojson",
             data: {
@@ -143,7 +152,10 @@ async function showTask(taskId: string, gen: number, flyTo = true) {
               features: [
                 {
                   type: "Feature",
-                  geometry: { type: "Polygon", coordinates: [ring] },
+                  geometry: {
+                    type: "MultiPolygon",
+                    coordinates: rings.map((ring) => [ring]),
+                  },
                   properties: {},
                 },
               ],

@@ -49,7 +49,7 @@ const emit = defineEmits<{
     },
   ];
   "draw-mode-change": [mode: "rectangle" | "polygon"];
-  "import-bounds": [bounds: Bounds, polygon: [number, number][] | null];
+  "import-bounds": [bounds: Bounds, polygons: [number, number][][] | null];
 }>();
 
 // ─── 下载配置 ──────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ async function triggerImport() {
       east: number;
       south: number;
       north: number;
-      polygon: [number, number][] | null;
+      polygons: [number, number][][] | null;
     }>("parse_area_file", { path });
     const bounds: Bounds = {
       west: result.west,
@@ -112,7 +112,11 @@ async function triggerImport() {
       south: result.south,
       north: result.north,
     };
-    emit("import-bounds", bounds, result.polygon);
+    console.info("[DownloadSetupPanel] 区域文件导入完成", {
+      path,
+      polygonCount: result.polygons?.length ?? 0,
+    });
+    emit("import-bounds", bounds, result.polygons);
   } catch (e) {
     importError.value = String(e);
   }

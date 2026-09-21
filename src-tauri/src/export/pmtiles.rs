@@ -29,7 +29,7 @@ pub fn export_pmtiles<F>(
     max_zoom: u8,
     format: &str,
     clip_to_bounds: bool,
-    polygon: Option<&[[f64; 2]]>,
+    polygon: Option<&[Vec<[f64; 2]>]>,
     crs: &CrsType,
     jpeg_quality: Option<u8>,
     png_level: Option<u8>,
@@ -250,7 +250,7 @@ where
             // 裁剪：多边形优先于矩形
             let write_data: std::borrow::Cow<[u8]> = if need_clip {
                 let clipped_opt = if let Some(poly) = polygon {
-                    crate::export::tile_clip::clip_tile_to_polygon_crs(
+                    crate::export::tile_clip::clip_tile_to_polygons_crs(
                         &data, x, y, z, poly, crs,
                     )?
                 } else {

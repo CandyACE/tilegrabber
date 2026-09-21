@@ -1,6 +1,6 @@
-//! 区域文件解析：KML / KMZ / GeoJSON → bounds + polygon
+//! 区域文件解析：KML / KMZ / GeoJSON → bounds + polygons
 //!
-//! 返回第一个多边形的外环坐标及其外包围矩形。
+//! 返回所有多边形的外环坐标及其外包围矩形。
 //! KMZ 为 ZIP 压缩的 KML，内部找到第一个 .kml 文件解析。
 
 use anyhow::{Context, Result};
@@ -11,8 +11,8 @@ pub struct ParsedArea {
     pub east: f64,
     pub south: f64,
     pub north: f64,
-    /// 第一个多边形外环坐标 `[lng, lat]`（可能为 None，如点/线要素）
-    pub polygon: Option<Vec<[f64; 2]>>,
+    /// 所有多边形外环坐标（可能为 None，如点/线要素）
+    pub polygons: Option<Vec<Vec<[f64; 2]>>>,
 }
 
 // ─── 公开入口 ────────────────────────────────────────────────────────────────
@@ -69,7 +69,8 @@ fn parse_kmz(path: &std::path::Path) -> Result<ParsedArea> {
 fn parse_kml_str(content: &str) -> Result<ParsedArea> {
     let doc = roxmltree::Document::parse(content).context("解析 KML XML 失败")?;
 
-    let mut first_polygon: Option<Vec<[f64; 2]>> = None;
+    let mut polygons: Vec<Vec<[f64; 2]>> = Vec::new();
+    let mut first_fallback_ring: Option<Vec<[f64; 2]>> = None;
     let mut all_coords: Vec<[f64; 2]> = Vec::new();
 
     // 遍历所有 <coordinates> 标签
@@ -81,16 +82,14 @@ fn parse_kml_str(content: &str) -> Result<ParsedArea> {
                     continue;
                 }
 
-                // 只保留第一个多边形外环（兄弟名称链路中有 LinearRing 且父级含 outerBoundaryIs）
-                if first_polygon.is_none() {
-                    // 检查是否在 LinearRing > outerBoundaryIs / Polygon 结构内
-                    let in_polygon = is_in_polygon_outer_ring(&node);
-                    if in_polygon {
-                        first_polygon = Some(ring.clone());
-                    } else if first_polygon.is_none() {
-                        // 如果找不到明确 Polygon 结构，用第一个 <coordinates> 作为 fallback
-                        first_polygon = Some(ring.clone());
+                // 只把 Polygon.outerBoundaryIs 作为下载面；innerBoundaryIs 是洞，不能另算一个面。
+                if is_in_polygon_outer_ring(&node) {
+                    if let Some(polygon) = normalize_ring(&ring) {
+                        polygons.push(polygon);
                     }
+                } else if first_fallback_ring.is_none() {
+                    // 兼容结构不规范、仅包含 coordinates 的旧 KML。
+                    first_fallback_ring = normalize_ring(&ring);
                 }
                 all_coords.extend_from_slice(&ring);
             }
@@ -102,24 +101,37 @@ fn parse_kml_str(content: &str) -> Result<ParsedArea> {
     }
 
     let bounds = coords_to_bounds(&all_coords);
+    if polygons.is_empty() {
+        if let Some(ring) = first_fallback_ring {
+            polygons.push(ring);
+        }
+    }
+    tracing::info!(polygon_count = polygons.len(), "[area_file] KML 区域解析完成");
     Ok(ParsedArea {
         west: bounds[0],
         south: bounds[1],
         east: bounds[2],
         north: bounds[3],
-        polygon: first_polygon,
+        polygons: (!polygons.is_empty()).then_some(polygons),
     })
 }
 
-/// 检查 `<coordinates>` 节点是否位于 Polygon 的 outerBoundaryIs 结构中
+/// 检查 `<coordinates>` 节点是否位于 Polygon 的 outerBoundaryIs 结构中。
 fn is_in_polygon_outer_ring(node: &roxmltree::Node) -> bool {
     let mut cur = *node;
-    // 向上最多查 6 层祖先
+    let mut found_outer_boundary = false;
+    // 向上最多查 6 层祖先，遇到 innerBoundaryIs 时立即排除。
     for _ in 0..6 {
         if let Some(parent) = cur.parent() {
             let name = parent.tag_name().name().to_lowercase();
+            if name == "innerboundaryis" {
+                return false;
+            }
+            if name == "outerboundaryis" {
+                found_outer_boundary = true;
+            }
             if name == "polygon" {
-                return true;
+                return found_outer_boundary;
             }
             cur = parent;
         } else {
@@ -144,33 +156,43 @@ fn parse_kml_coordinates(text: &str) -> Vec<[f64; 2]> {
         .collect()
 }
 
+/// 去掉重复闭合点并拒绝退化坐标环。
+fn normalize_ring(ring: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
+    let mut normalized = ring.to_vec();
+    if normalized.len() > 1 && normalized.first() == normalized.last() {
+        normalized.pop();
+    }
+    (normalized.len() >= 3).then_some(normalized)
+}
+
 // ─── GeoJSON 解析 ─────────────────────────────────────────────────────────────
 
 fn parse_geojson_str(content: &str) -> Result<ParsedArea> {
     let v: serde_json::Value = serde_json::from_str(content).context("解析 GeoJSON 失败")?;
 
-    let mut first_polygon: Option<Vec<[f64; 2]>> = None;
+    let mut polygons: Vec<Vec<[f64; 2]>> = Vec::new();
     let mut all_coords: Vec<[f64; 2]> = Vec::new();
 
-    collect_geojson_coords(&v, &mut first_polygon, &mut all_coords);
+    collect_geojson_coords(&v, &mut polygons, &mut all_coords);
 
     if all_coords.is_empty() {
         anyhow::bail!("GeoJSON 文件中未找到有效坐标");
     }
 
     let bounds = coords_to_bounds(&all_coords);
+    tracing::info!(polygon_count = polygons.len(), "[area_file] GeoJSON 区域解析完成");
     Ok(ParsedArea {
         west: bounds[0],
         south: bounds[1],
         east: bounds[2],
         north: bounds[3],
-        polygon: first_polygon,
+        polygons: (!polygons.is_empty()).then_some(polygons),
     })
 }
 
 fn collect_geojson_coords(
     v: &serde_json::Value,
-    first_poly: &mut Option<Vec<[f64; 2]>>,
+    polygons: &mut Vec<Vec<[f64; 2]>>,
     all: &mut Vec<[f64; 2]>,
 ) {
     let geom_type = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -179,13 +201,13 @@ fn collect_geojson_coords(
         "FeatureCollection" => {
             if let Some(features) = v.get("features").and_then(|f| f.as_array()) {
                 for feature in features {
-                    collect_geojson_coords(feature, first_poly, all);
+                    collect_geojson_coords(feature, polygons, all);
                 }
             }
         }
         "Feature" => {
             if let Some(geom) = v.get("geometry") {
-                collect_geojson_coords(geom, first_poly, all);
+                collect_geojson_coords(geom, polygons, all);
             }
         }
         "Polygon" => {
@@ -194,32 +216,21 @@ fn collect_geojson_coords(
                 if let Some(outer_ring) = coords.first().and_then(|r| r.as_array()) {
                     let ring = parse_coord_ring(outer_ring);
                     all.extend_from_slice(&ring);
-                    // 去掉闭合的最后一个点（与第一个点相同）
-                    let poly = if ring.len() > 1 && ring.first() == ring.last() {
-                        ring[..ring.len() - 1].to_vec()
-                    } else {
-                        ring
-                    };
-                    if first_poly.is_none() {
-                        *first_poly = Some(poly);
+                    if let Some(polygon) = normalize_ring(&ring) {
+                        polygons.push(polygon);
                     }
                 }
             }
         }
         "MultiPolygon" => {
-            if let Some(polygons) = v.get("coordinates").and_then(|c| c.as_array()) {
-                for poly_coords in polygons {
+            if let Some(polygon_values) = v.get("coordinates").and_then(|c| c.as_array()) {
+                for poly_coords in polygon_values {
                     if let Some(rings) = poly_coords.as_array() {
                         if let Some(outer_ring) = rings.first().and_then(|r| r.as_array()) {
                             let ring = parse_coord_ring(outer_ring);
                             all.extend_from_slice(&ring);
-                            if first_poly.is_none() {
-                                let poly = if ring.len() > 1 && ring.first() == ring.last() {
-                                    ring[..ring.len() - 1].to_vec()
-                                } else {
-                                    ring
-                                };
-                                *first_poly = Some(poly);
+                            if let Some(polygon) = normalize_ring(&ring) {
+                                polygons.push(polygon);
                             }
                         }
                     }
@@ -229,7 +240,7 @@ fn collect_geojson_coords(
         "GeometryCollection" => {
             if let Some(geoms) = v.get("geometries").and_then(|g| g.as_array()) {
                 for geom in geoms {
-                    collect_geojson_coords(geom, first_poly, all);
+                    collect_geojson_coords(geom, polygons, all);
                 }
             }
         }
@@ -300,4 +311,32 @@ fn coords_to_bounds(coords: &[[f64; 2]]) -> [f64; 4] {
         }
     }
     [west, south, east, north]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_kml_str;
+
+    #[test]
+    fn parses_all_kml_polygon_outer_rings() {
+        let kml = r#"
+            <kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+              <Placemark><Polygon><outerBoundaryIs><LinearRing><coordinates>
+                10,10,0 11,10,0 11,11,0 10,10,0
+              </coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>
+              <Placemark><Polygon><outerBoundaryIs><LinearRing><coordinates>
+                20,20,0 21,20,0 21,21,0 20,20,0
+              </coordinates></LinearRing></outerBoundaryIs>
+              <innerBoundaryIs><LinearRing><coordinates>
+                20.2,20.2,0 20.3,20.2,0 20.3,20.3,0 20.2,20.2,0
+              </coordinates></LinearRing></innerBoundaryIs></Polygon></Placemark>
+            </Document></kml>
+        "#;
+        let parsed = parse_kml_str(kml).expect("KML 应能解析");
+        let polygons = parsed.polygons.expect("应返回多面");
+        assert_eq!(polygons.len(), 2);
+        assert_eq!(polygons[0].len(), 3);
+        assert_eq!(polygons[1].len(), 3);
+        assert_eq!([parsed.west, parsed.south, parsed.east, parsed.north], [10.0, 10.0, 21.0, 21.0]);
+    }
 }
