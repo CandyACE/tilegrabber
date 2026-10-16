@@ -155,6 +155,8 @@ jobs:
             > **macOS 用户**：首次打开如遇 Gatekeeper 拦截，请在「系统设置 → 隐私与安全性」中允许运行，或执行 `xattr -d com.apple.quarantine <应用路径>` 解除隔离。
           # 由 publish 统一生成完整清单，避免并行构建上传部分平台清单。
           includeUpdaterJson: false
+          # 仓库同时保留 pnpm 锁文件，但 CI 使用 npm ci；显式调用本地 CLI，避免 Windows runner 找不到 pnpm。
+          tauriScript: npm run tauri --
           releaseDraft: true
           prerelease: false
           args: >-
