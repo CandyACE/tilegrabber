@@ -395,7 +395,11 @@ jobs:
               platforms: (
                 {} +
                 (if ($win_upd_url != "" and $win_sig != "") then {"windows-x86_64": {signature: $win_sig, url: $win_upd_url}} else {} end) +
-                (if ($mac_arm_url != "" and $mac_arm_sig != "") then {"darwin-aarch64": {signature: $mac_arm_sig, url: $mac_arm_url}} else {} end) +
+                # macOS 更新器在不同版本中使用 app 后缀或通用平台键，两个键共用同一份签名归档。
+                (if ($mac_arm_url != "" and $mac_arm_sig != "") then {
+                  "darwin-aarch64-app": {signature: $mac_arm_sig, url: $mac_arm_url},
+                  "darwin-aarch64": {signature: $mac_arm_sig, url: $mac_arm_url}
+                } else {} end) +
                 (if ($linux_url != "" and $linux_sig != "") then {"linux-x86_64": {signature: $linux_sig, url: $linux_url}} else {} end)
               )
             }' > latest.json
