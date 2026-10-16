@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-vue-next";
 import { useI18n } from "vue-i18n";
+import TaskNameEditor from "./TaskNameEditor.vue";
 import ExportDialog from "./ExportDialog.vue";
 import MiniMapPreview from "./MiniMapPreview.vue";
 import { useTaskDetail } from "~/composables/useTaskDetail";
@@ -37,6 +38,7 @@ interface BackendTask {
   boundsNorth: number;
   minZoom: number;
   maxZoom: number;
+  zoomLevels?: number[] | null;
   totalTiles: number;
   downloadedTiles: number;
   failedTiles: number;
@@ -61,6 +63,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   close: [];
   deleted: [id: string];
+  renamed: [];
   flyTo: [bounds: { west: number; east: number; south: number; north: number }];
 }>();
 
@@ -602,12 +605,7 @@ function logTime(iso: string) {
     <div v-if="task" class="flex-1 overflow-y-auto px-4 py-3 space-y-4">
       <!-- 任务名称 + 状态 -->
       <div>
-        <p
-          class="text-sm font-semibold mb-1"
-          style="color: var(--color-text-primary)"
-        >
-          {{ task.name }}
-        </p>
+        <TaskNameEditor :task-id="task.id" :name="task.name" @saved="task.name = $event; emit('renamed')" />
         <span
           class="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium"
           :class="statusInfo(task.status).cls"
@@ -817,7 +815,7 @@ function logTime(iso: string) {
             {{ t("taskDetail.zoomRange") }}
           </dt>
           <dd class="font-mono" style="color: var(--color-text-primary)">
-            z{{ task.minZoom }} – z{{ task.maxZoom }}
+            {{ task.zoomLevels?.map(z => `Z${z}`).join(", ") ?? `Z${task.minZoom} – Z${task.maxZoom}` }}
           </dd>
         </div>
         <div class="flex justify-between">

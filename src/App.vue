@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { mergeDownloadAreas } from "~/lib/download-area";
 import {
   ref,
   shallowRef,
@@ -145,7 +146,7 @@ function showDiskFullWarning() {
 onMounted(async () => {
   // 单次 IPC 获取所有设置：语言立即应用，其余缓存供 onSplashDone 使用
   try {
-    cachedSettings = await invoke<Record<string, string>>("get_all_settings");
+    cachedSettings = (await invoke<Record<string, string> | null>("get_all_settings")) ?? {};
     const lang = cachedSettings["app.language"];
     if (lang && lang !== "auto" && lang !== "") {
       i18n.global.locale.value = lang as "zh-CN" | "en";
@@ -182,7 +183,12 @@ async function onSplashDone() {
   appVisible.value = true;
   showSplash.value = false;
   // 使用已缓存设置，无需额外 IPC 调用
-  await applyFloatWindowSetting(cachedSettings["app.float_window"]);
+  try {
+    await applyFloatWindowSetting(cachedSettings["app.float_window"]);
+  } catch (error) {
+    // 辅助浮窗异常不应中断首次启动的主界面和免责声明流程。
+    console.error("[App] 浮窗初始化失败，继续启动主界面", error);
+  }
   if (cachedSettings["app.disclaimer_agreed"] !== "true") {
     showDisclaimer.value = true;
   }
@@ -225,7 +231,6 @@ const {
   context: extendCtx,
   isActive: extendActive,
   cancel: cancelExtend,
-  unionBounds,
 } = useExtendMode();
 const extendBusy = ref(false);
 const extendError = ref<string>("");
@@ -240,7 +245,12 @@ async function confirmExtend() {
   extendBusy.value = true;
   extendError.value = "";
   try {
-    const merged = unionBounds(extendCtx.value.originalBounds, drawnBounds.value);
+    // 扩区也保存真实的多面并集，避免保留旧多边形后遗漏新增区域。
+    const merged = mergeDownloadAreas([
+      { ...extendCtx.value.originalBounds, polygons: extendCtx.value.originalPolygon },
+      { ...drawnBounds.value, polygons: drawnPolygon.value },
+    ]);
+    console.info("[App] 扩展任务区域", { taskId: extendCtx.value.taskId, polygons: merged.polygons?.length });
     const [added] = await invoke<[number, number]>("update_task_geometry", {
       args: {
         taskId: extendCtx.value.taskId,
@@ -250,7 +260,7 @@ async function confirmExtend() {
         boundsNorth: merged.north,
         minZoom: extendCtx.value.originalMinZoom,
         maxZoom: extendCtx.value.originalMaxZoom,
-        polygonWgs84: null,
+        polygonWgs84: JSON.stringify(merged.polygons),
       },
     });
     pushToast2(t("extendMode.success", { added }), "success");
@@ -436,6 +446,7 @@ async function createAndDownload(config: {
   name: string;
   minZoom: number;
   maxZoom: number;
+  zoomLevels: number[] | null;
   clipToBounds: boolean;
   remoteTarget?: { url: string; token: string; name: string } | null;
 }) {
@@ -459,6 +470,7 @@ async function createAndDownload(config: {
           boundsNorth: drawnBounds.value.north,
           minZoom: config.minZoom,
           maxZoom: config.maxZoom,
+          zoomLevels: config.zoomLevels,
           clipToBounds: config.clipToBounds,
           polygonWgs84: drawnPolygon.value
             ? JSON.stringify(drawnPolygon.value)
@@ -487,6 +499,7 @@ async function createAndDownload(config: {
         boundsNorth: drawnBounds.value.north,
         minZoom: config.minZoom,
         maxZoom: config.maxZoom,
+        zoomLevels: config.zoomLevels,
         clipToBounds: config.clipToBounds,
         polygonWgs84: drawnPolygon.value
           ? JSON.stringify(drawnPolygon.value)
@@ -636,6 +649,7 @@ function handleDetailDeleted() {
         v-if="downloadSetupMode && previewSource"
         :source="previewSource"
         :bounds="drawnBounds"
+        :polygons="drawnPolygon"
         :draw-active="drawActive"
         @close="exitSetupMode"
         @toggle-draw="toggleDraw"
@@ -669,6 +683,7 @@ function handleDetailDeleted() {
             class="absolute inset-0 z-10"
             @close="closeTask"
             @deleted="handleDetailDeleted"
+            @renamed="sidebarRef?.loadTasks()"
             @fly-to="handleDetailFlyTo"
           />
         </Transition>

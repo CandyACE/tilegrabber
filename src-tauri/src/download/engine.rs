@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use crate::storage::app_db::AppDb;
 use crate::storage::tile_store::TileStore;
-use crate::tile_math::{enumerate_tiles, enumerate_tiles_with_polygons, parse_polygon_geometry};
+use crate::tile_math::{enumerate_selected_tiles, parse_polygon_geometry};
 use crate::types::{Bounds, TileSource};
 
 use super::clip_pipeline::{self, ClipMsg, ClipOutcome, ClipPipelineConfig};
@@ -247,6 +247,17 @@ async fn run_download(
         }
     };
 
+    // 在进入枚举与纠偏前校验一次；旧任务自动还原为连续层级。
+    let selected_levels = match crate::tile_math::resolve_zoom_levels(task.min_zoom, task.max_zoom, task.zoom_levels.as_deref()) {
+        Ok(levels) => levels,
+        Err(error) => {
+            tracing::error!(task_id, %error, "任务层级无效");
+            app_db.add_log(Some(&task_id), "error", &error.to_string()).ok();
+            app_db.update_task_status(&task_id, "failed").ok();
+            return;
+        }
+    };
+
     // 2. 解析 TileSource
     let source: TileSource = match serde_json::from_str(&task.source_config) {
         Ok(s) => s,
@@ -372,56 +383,22 @@ async fn run_download(
             .as_deref()
             .and_then(parse_polygon_geometry);
 
-        let tiles = if let Some(ref polygons) = polygons {
-            if source.coord_type == crate::types::CoordType::Gcj02 && !is_vector_format {
-                // GCJ02 纠偏合成需要从目标瓦片东/北方向读取 2×2 源瓦片拼合。
-                // 若仅按多边形过滤下载，多边形东/北边缘以外的源瓦片将缺失，
-                // 导致合成时 has_data=false，边缘瓦片保留 GCJ02 偏移。
-                // 解决方案：GCJ02 + 多边形任务下载整个扩展边距范围（orig+GCJ02_PAD）
-                // 的全部瓦片，多边形遮罩由后续的 clip_to_bounds_or_polygon 步骤处理。
-                app_db
-                    .add_log(
-                        Some(&task_id),
-                        "info",
-                        "GCJ02 多边形任务：下载完整扩展范围以保证纠偏合成质量，多边形遮罩在后处理阶段应用",
-                    )
-                    .ok();
-                enumerate_tiles(
-                    &bounds,
-                    task.min_zoom,
-                    task.max_zoom,
-                    &source.crs,
-                    Some(2_000_000),
-                )
-            } else {
-                app_db
-                    .add_log(
-                        Some(&task_id),
-                        "info",
-                        &format!(
-                            "已检测到 {} 个多边形范围，将按多面并集过滤下载瓦片",
-                            polygons.len()
-                        ),
-                    )
-                    .ok();
-                enumerate_tiles_with_polygons(
-                    &bounds,
-                    task.min_zoom,
-                    task.max_zoom,
-                    &source.crs,
-                    polygons,
-                    Some(2_000_000),
-                )
-            }
+        // GCJ02 栅格仍完整扩边下载；其余任务按所有外环并集枚举。
+        let filter_polygons = if source.coord_type == crate::types::CoordType::Gcj02 && !is_vector_format {
+            None
         } else {
-            enumerate_tiles(
-                &bounds,
-                task.min_zoom,
-                task.max_zoom,
-                &source.crs,
-                Some(2_000_000),
-            )
+            polygons.as_deref()
         };
+        let tiles = match enumerate_selected_tiles(&bounds, task.min_zoom, task.max_zoom, task.zoom_levels.as_deref(), &source.crs, filter_polygons, 2_000_000) {
+            Ok(tiles) => tiles,
+            Err(error) => {
+                tracing::error!(task_id, %error, "区域与层级枚举失败");
+                app_db.add_log(Some(&task_id), "error", &error.to_string()).ok();
+                app_db.update_task_status(&task_id, "failed").ok();
+                return;
+            }
+        };
+        tracing::info!(task_id, tiles = tiles.len(), levels = ?task.zoom_levels, "已按所选区域和层级枚举下载瓦片");
         match tile_store.init_download_state(&tiles) {
             Ok(total) => {
                 app_db.update_task_total(&task_id, total).ok();
@@ -1035,16 +1012,14 @@ async fn run_download(
             north: task.bounds_north,
         };
         let gcj02_crs = source.crs.clone();
-        let gcj02_min_zoom = task.min_zoom;
-        let gcj02_max_zoom = task.max_zoom;
+        let gcj02_levels = selected_levels.clone();
         let gcj02_tile_size = source.tile_size;
 
         let gcj02_result = tokio::task::spawn_blocking(move || {
             post_gcj02_composite(
                 &gcj02_store_path,
                 &gcj02_bounds,
-                gcj02_min_zoom,
-                gcj02_max_zoom,
+                &gcj02_levels,
                 &gcj02_crs,
                 gcj02_tile_size,
                 |done, total| {
@@ -1528,8 +1503,7 @@ fn post_clip_tiles(
 fn post_gcj02_composite(
     store_path: &str,
     orig_bounds: &Bounds,
-    min_zoom: u8,
-    max_zoom: u8,
+    zoom_levels: &[u8],
     crs: &crate::types::CrsType,
     tile_size: u32,
     progress_cb: impl Fn(u64, u64),
@@ -1574,7 +1548,7 @@ fn post_gcj02_composite(
 
     // 枚举原始范围内的所有目标瓦片（逐层级，避免单次枚举超出上限）
     let mut target_tiles: Vec<(u8, u32, u32)> = Vec::new();
-    for z in min_zoom..=max_zoom {
+    for &z in zoom_levels {
         let tiles = crate::tile_math::enumerate_tiles(orig_bounds, z, z, crs, Some(10_000_000));
         for tc in tiles {
             target_tiles.push((tc.z, tc.x, tc.y));
@@ -1734,7 +1708,7 @@ fn post_gcj02_composite(
     // 5. 删除扩边区（GCJ02_PAD）中不属于原始范围的 padding 瓦片
     {
         let tx = conn.unchecked_transaction()?;
-        for z in min_zoom..=max_zoom {
+        for &z in zoom_levels {
             let ((x_min, x_max), (y_min, y_max)) =
                 crate::tile_math::bounds_to_tile_range_xyz(orig_bounds, z);
             let args = params![

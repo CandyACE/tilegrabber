@@ -107,6 +107,9 @@ pub struct SubmitTaskRequest {
     pub bounds_north: f64,
     pub min_zoom: u8,
     pub max_zoom: u8,
+    /// 可选的离散下载层级，缺省兼容连续范围。
+    #[serde(default)]
+    pub zoom_levels: Option<Vec<u8>>,
     #[serde(default)]
     pub clip_to_bounds: bool,
     #[serde(default)]
@@ -176,6 +179,7 @@ pub async fn submit_task(
         bounds_north: req.bounds_north,
         min_zoom: req.min_zoom,
         max_zoom: req.max_zoom,
+        zoom_levels: req.zoom_levels,
         clip_to_bounds: req.clip_to_bounds,
         polygon_wgs84: req.polygon_wgs84,
     };

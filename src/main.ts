@@ -16,7 +16,8 @@ window.addEventListener(
 if (!("__TAURI_INTERNALS__" in window)) {
   mockIPC(
     (_cmd, _payload) => {
-      if (_cmd === "list_tasks") return [];
+      if (_cmd === "list_tasks" || _cmd === "list_layers") return [];
+      if (_cmd === "get_all_settings") return {};
       if (_cmd === "calculate_tile_count") return { total: 0, per_zoom: [] };
       if (_cmd === "plugin:event|listen") return 0;
       if (_cmd === "plugin:event|unlisten") return null;
@@ -26,4 +27,9 @@ if (!("__TAURI_INTERNALS__" in window)) {
   );
 }
 
-createApp(App).use(i18n).mount("#app");
+const app = createApp(App);
+// 记录启动或空列表渲染异常，保留组件与调用位置以便定位用户报告。
+app.config.errorHandler = (error, _instance, info) => {
+  console.error("[App] 界面运行异常", { error, info });
+};
+app.use(i18n).mount("#app");

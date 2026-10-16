@@ -1,4 +1,7 @@
 export default {
+  mapStartup: {"failed": "Map initialization failed. Check your graphics driver or retry.", "retry": "Reload map"},
+  taskRename: {"label": "Rename task", "invalid": "Use 1 to 200 characters for the task name", "failed": "Rename failed: {error}"},
+  regions: {"中华人民共和国": "China", "上海市": "Shanghai", "云南省": "Yunnan", "内蒙古自治区": "Inner Mongolia", "北京市": "Beijing", "台湾省": "Taiwan", "吉林省": "Jilin", "四川省": "Sichuan", "天津市": "Tianjin", "宁夏回族自治区": "Ningxia", "安徽省": "Anhui", "山东省": "Shandong", "山西省": "Shanxi", "广东省": "Guangdong", "广西壮族自治区": "Guangxi", "新疆维吾尔自治区": "Xinjiang", "江苏省": "Jiangsu", "江西省": "Jiangxi", "河北省": "Hebei", "河南省": "Henan", "浙江省": "Zhejiang", "海南省": "Hainan", "湖北省": "Hubei", "湖南省": "Hunan", "澳门特别行政区": "Macao", "甘肃省": "Gansu", "福建省": "Fujian", "西藏自治区": "Tibet", "贵州省": "Guizhou", "辽宁省": "Liaoning", "重庆市": "Chongqing", "陕西省": "Shaanxi", "青海省": "Qinghai", "香港特别行政区": "Hong Kong", "黑龙江省": "Heilongjiang"},
   appName: "御图",
   app: {
     networkOffline:
@@ -776,6 +779,19 @@ export default {
   },
 
   downloadSetup: {
+    appendArea: "Append to current area (uncheck to replace)",
+    presets: "Select administrative region",
+    country: "Country",
+    province: "Province / municipality",
+    city: "City / prefecture",
+    wholeCountry: "Entire country",
+    wholeProvince: "Entire region",
+    loadingRegions: "Loading regions…",
+    retryRegions: "Reload regions",
+    noCityBoundaries: "City boundaries are unavailable here. You can apply the entire region.",
+    applyPresets: "Apply selected regions",
+    customZooms: "Select individual zoom levels",
+    selectZoom: "Select at least one zoom level",
     title: "New Download Task",
     taskName: "Task Name",
     taskNamePlaceholder: "Enter task name",
@@ -804,7 +820,7 @@ export default {
     targetLocal: "Download locally",
     targetRemote: "Remote — {name}",
     cancel: "Cancel",
-    estimateTiles: "~{count} tiles",
+    estimateTiles: "Bounding box ≤ {count} tiles",
     crsLabels: {
       WEB_MERCATOR: "EPSG:3857",
       WGS84: "EPSG:4326",

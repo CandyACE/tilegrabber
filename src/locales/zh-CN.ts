@@ -1,4 +1,7 @@
 export default {
+  mapStartup: {"failed": "地图初始化失败，请检查图形驱动或重试", "retry": "重新加载地图"},
+  taskRename: {"label": "重命名任务", "invalid": "任务名称须为 1 至 200 个字符", "failed": "重命名失败：{error}"},
+  regions: {"中华人民共和国": "中华人民共和国", "上海市": "上海市", "云南省": "云南省", "内蒙古自治区": "内蒙古自治区", "北京市": "北京市", "台湾省": "台湾省", "吉林省": "吉林省", "四川省": "四川省", "天津市": "天津市", "宁夏回族自治区": "宁夏回族自治区", "安徽省": "安徽省", "山东省": "山东省", "山西省": "山西省", "广东省": "广东省", "广西壮族自治区": "广西壮族自治区", "新疆维吾尔自治区": "新疆维吾尔自治区", "江苏省": "江苏省", "江西省": "江西省", "河北省": "河北省", "河南省": "河南省", "浙江省": "浙江省", "海南省": "海南省", "湖北省": "湖北省", "湖南省": "湖南省", "澳门特别行政区": "澳门特别行政区", "甘肃省": "甘肃省", "福建省": "福建省", "西藏自治区": "西藏自治区", "贵州省": "贵州省", "辽宁省": "辽宁省", "重庆市": "重庆市", "陕西省": "陕西省", "青海省": "青海省", "香港特别行政区": "香港特别行政区", "黑龙江省": "黑龙江省"},
   appName: "御图",
   app: {
     networkOffline: "网络已断开 — 下载任务已自动暂停，网络恢复后将自动继续",
@@ -759,6 +762,19 @@ export default {
   },
 
   downloadSetup: {
+    appendArea: "追加到当前范围（取消则替换）",
+    presets: "选择行政区",
+    country: "国家",
+    province: "省份 / 直辖市",
+    city: "城市 / 自治州",
+    wholeCountry: "全国",
+    wholeProvince: "全部范围",
+    loadingRegions: "正在加载行政区…",
+    retryRegions: "重新加载行政区",
+    noCityBoundaries: "该区域暂无市级边界，可直接应用省级范围。",
+    applyPresets: "应用所选行政区",
+    customZooms: "勾选下载层级（可不连续）",
+    selectZoom: "请至少勾选一个层级",
     title: "新建下载任务",
     taskName: "任务名称",
     taskNamePlaceholder: "输入任务名称",
@@ -785,7 +801,7 @@ export default {
     targetLocal: "本机下载",
     targetRemote: "远端下载 — {name}",
     cancel: "取消",
-    estimateTiles: "约 {count} 块瓦片",
+    estimateTiles: "包围框估算 ≤ {count} 块",
     crsLabels: {
       WEB_MERCATOR: "EPSG:3857",
       WGS84: "EPSG:4326",

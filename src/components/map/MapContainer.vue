@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import maplibregl from "maplibre-gl";
 import type { Map as MaplibreMap } from "maplibre-gl";
 
 const mapContainer = ref<HTMLDivElement>();
 let map: MaplibreMap | null = null;
+const { t } = useI18n();
+const mapError = ref("");
 
 const emit = defineEmits<{
   ready: [map: MaplibreMap];
@@ -14,77 +17,91 @@ const emit = defineEmits<{
 const cursorCoords = ref<{ lng: number; lat: number } | null>(null);
 const zoom = ref(4);
 
-onMounted(() => {
+// WebGL 初始化失败时保留应用外壳，允许用户重试并查看诊断信息。
+function initializeMap() {
   if (!mapContainer.value) return;
+  mapError.value = "";
+  try {
 
-  map = new maplibregl.Map({
-    container: mapContainer.value,
-    style: {
-      version: 8,
-      glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-      sources: {
-        basemap: {
-          type: "raster",
-          tiles: [
-            "https://tiles1.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
-            "https://tiles2.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
-            "https://tiles3.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
-          ],
-          tileSize: 256,
-          attribution:
-            '© <a href="https://www.geovisearth.com/" target="_blank">星图地球</a>',
-          maxzoom: 18,
+    map = new maplibregl.Map({
+      container: mapContainer.value,
+      style: {
+        version: 8,
+        glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+        sources: {
+          basemap: {
+            type: "raster",
+            tiles: [
+              "https://tiles1.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
+              "https://tiles2.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
+              "https://tiles3.geovisearth.com/base/v1/vec/{z}/{x}/{y}?format=png&tmsIds=w&token=5853926b4d949104dd7742408f27de6321c106f67a76c3763fbbd5e4e5605b81",
+            ],
+            tileSize: 256,
+            attribution:
+              '© <a href="https://www.geovisearth.com/" target="_blank">星图地球</a>',
+            maxzoom: 18,
+          },
         },
+        layers: [
+          {
+            id: "basemap",
+            type: "raster",
+            source: "basemap",
+          },
+        ],
       },
-      layers: [
-        {
-          id: "basemap",
-          type: "raster",
-          source: "basemap",
-        },
-      ],
-    },
-    center: [104.1954, 35.8617], // 中国中心
-    zoom: 4,
-    maxZoom: 22,
-    pitch: 0,
-    maxPitch: 0,
-    attributionControl: false,
-  });
+      center: [104.1954, 35.8617], // 中国中心
+      zoom: 4,
+      maxZoom: 22,
+      pitch: 0,
+      maxPitch: 0,
+      attributionControl: false,
+    });
 
-  // 控件
-  map.addControl(
-    new maplibregl.NavigationControl({ showCompass: true }),
-    "top-right",
-  );
-  map.addControl(
-    new maplibregl.AttributionControl({ compact: true }),
-    "bottom-right",
-  );
-  map.addControl(
-    new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
-    "bottom-left",
-  );
+    // 控件
+    map.addControl(
+      new maplibregl.NavigationControl({ showCompass: true }),
+      "top-right",
+    );
+    map.addControl(
+      new maplibregl.AttributionControl({ compact: true }),
+      "bottom-right",
+    );
+    map.addControl(
+      new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }),
+      "bottom-left",
+    );
 
-  // 监听事件
-  map.on("mousemove", (e) => {
-    cursorCoords.value = { lng: e.lngLat.lng, lat: e.lngLat.lat };
-  });
-  map.on("mouseleave", () => {
-    cursorCoords.value = null;
-  });
-  map.on("zoom", () => {
-    zoom.value = Math.round((map?.getZoom() ?? 4) * 10) / 10;
-  });
+    // 监听事件
+    map.on("mousemove", (e) => {
+      cursorCoords.value = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+    });
+    map.on("mouseleave", () => {
+      cursorCoords.value = null;
+    });
+    map.on("zoom", () => {
+      zoom.value = Math.round((map?.getZoom() ?? 4) * 10) / 10;
+    });
 
-  // 地图加载完成后通知父组件
-  map.on("load", () => {
-    if (map) emit("ready", map);
-  });
+    // 地图加载完成后通知父组件
+    map.on("load", () => {
+      if (map) emit("ready", map);
+    });
 
-  // 禁止右键旋转（dragRotate 同时处理旋转和倾斜）
-  map.dragRotate.disable();
-});
+    // 禁止右键旋转（dragRotate 同时处理旋转和倾斜）
+    map.dragRotate.disable();
+    console.info("[MapContainer] 地图初始化完成");
+  } catch (error) {
+    console.error("[MapContainer] 地图初始化失败", error);
+    mapError.value = String(error);
+    // 清理本身也可能失败，不能掩盖最初的初始化错误。
+    try { map?.remove(); } catch (cleanupError) {
+      console.warn("[MapContainer] 地图清理失败", cleanupError);
+    }
+    map = null;
+  }
+}
+onMounted(initializeMap);
 
 onUnmounted(() => {
   map?.remove();
@@ -99,6 +116,12 @@ defineExpose({ map: computed(() => map) });
   <div class="relative w-full h-full">
     <!-- MapLibre 容器 -->
     <div ref="mapContainer" class="absolute inset-0" />
+
+    <div v-if="mapError" class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-white p-6">
+      <p class="text-sm">{{ t('mapStartup.failed') }}</p>
+      <p class="max-w-xl text-xs text-red-600" role="alert">{{ mapError }}</p>
+      <button class="rounded border px-4 py-2 text-sm" @click="initializeMap">{{ t('mapStartup.retry') }}</button>
+    </div>
 
     <!-- 状态栏 -->
     <div

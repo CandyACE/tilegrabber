@@ -14,6 +14,8 @@ const props = defineProps<{
   bounds: Bounds | null;
   crs?: CrsType;
   maxZoomLimit?: number;
+  /** 下载配置页自行按离散层级估算时关闭连续范围计数。 */
+  showCount?: boolean;
 }>();
 
 // v-model: { min, max }
@@ -29,7 +31,7 @@ const tileCount = ref<TileCount | null>(null);
 const counting = ref(false);
 
 async function refreshCount() {
-  if (!props.bounds) {
+  if (!props.bounds || props.showCount === false) {
     tileCount.value = null;
     return;
   }
@@ -135,7 +137,7 @@ const countWarning = computed(() => {
     </div>
 
     <!-- 瓦片数量 -->
-    <div
+    <div v-if="showCount !== false"
       class="rounded-lg px-3 py-2 text-xs"
       :class="{
         'bg-(--color-canvas-subtle) text-(--color-text-secondary)':

@@ -57,13 +57,14 @@ jobs:
           # macOS Apple Silicon (M 系列)
           - os: macos-latest
             label: macOS-arm64
-            bundles: dmg
+            # 必须显式构建 app，Tauri 才会生成自动更新归档及其签名。
+            bundles: app,dmg
             rust-target: aarch64-apple-darwin
 
           # macOS Intel
           # - os: macos-13
           #   label: macOS-x64
-          #   bundles: dmg
+          #   bundles: app,dmg
           #   rust-target: x86_64-apple-darwin
 
     runs-on: ${{ matrix.os }}
@@ -152,6 +153,8 @@ jobs:
             | Linux | `*_amd64.deb` | Debian / Ubuntu |
 
             > **macOS 用户**：首次打开如遇 Gatekeeper 拦截，请在「系统设置 → 隐私与安全性」中允许运行，或执行 `xattr -d com.apple.quarantine <应用路径>` 解除隔离。
+          # 由 publish 统一生成完整清单，避免并行构建上传部分平台清单。
+          includeUpdaterJson: false
           releaseDraft: true
           prerelease: false
           args: >-
@@ -219,7 +222,26 @@ jobs:
           echo "::endgroup::"
 
           # ── 等待所有平台产物上传完成（最长 10 分钟）─────────────────
-          # 判断依据：Windows(.exe) + macOS arm64(.dmg) + Linux(.AppImage) 均已出现
+          # 安装包、更新归档及同名签名必须齐全，禁止静默发布缺少平台的清单。
+          # 签名按更新文件的完整名称配对，防止误用其他架构或产物的签名。
+          validate_release_assets() {
+            jq -e '
+              [.assets[] | select(.state == "uploaded") | .name] as $names |
+              def has_asset($pattern): any($names[]; test($pattern));
+              def has_signed_asset($pattern):
+                any($names[]; . as $name |
+                  test($pattern) and (($names | index($name + ".sig")) != null));
+              [
+                (if has_signed_asset("-setup\\.exe$") then empty else "Windows 安装包及同名签名" end),
+                (if has_asset("_aarch64\\.dmg$") then empty else "macOS ARM64 安装包" end),
+                (if has_signed_asset("_aarch64\\.app\\.tar\\.gz$") then empty else "macOS ARM64 更新归档及同名签名" end),
+                (if has_asset("\\.AppImage$") then empty else "Linux 安装包" end),
+                (if has_signed_asset("\\.AppImage(\\.tar\\.gz)?$") then empty else "Linux 更新产物及同名签名" end)
+              ] as $missing |
+              if ($missing | length) == 0 then true
+              else error("发布产物不完整：" + ($missing | join("、"))) end
+            '
+          }
           echo "::group::等待构建产物上传"
           ELAPSED=0
           MAX_WAIT=600
@@ -238,8 +260,8 @@ jobs:
             echo "macOS arm: ${MACOS_ARM_URL:-(等待中)}"
             echo "Linux    : ${LINUX_URL:-(等待中)}"
 
-            if [ -n "$WIN_URL" ] && [ -n "$MACOS_ARM_URL" ] && [ -n "$LINUX_URL" ]; then
-              echo "所有产物上传完成！"
+            if echo "$RELEASE_JSON" | validate_release_assets; then
+              echo "所有安装包、更新产物及签名已上传完成！"
               break
             fi
             ELAPSED=$((ELAPSED + INTERVAL))
@@ -247,7 +269,9 @@ jobs:
             sleep $INTERVAL
           done
           if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "::warning::等待超时，将使用当前已上传的产物生成 latest.json（部分平台可能缺失）"
+            echo "::error::等待产物上传超时，停止发布；请检查缺失平台的打包目标与签名配置"
+            echo "$RELEASE_JSON" | jq -r '.assets[] | "已发现产物：\(.name)（\(.state)）"'
+            exit 1
           fi
           echo "::endgroup::"
 
@@ -284,23 +308,23 @@ jobs:
           # Linux：updater 产物为 .AppImage 或 .AppImage.tar.gz，签名 = 同名 .sig
           WIN_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
             '[.assets[] | select(.name | test("-setup\\.exe$"))] | sort_by(.name) | last | .browser_download_url // ""')
-          WIN_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
-            '[.assets[] | select(.name | test("-setup\\.exe\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          WIN_SIG_URL=$(echo "$RELEASE_JSON" | jq -r --arg url "$WIN_UPD_URL.sig" \
+            '.assets[] | select(.browser_download_url == $url) | .browser_download_url')
 
           MACOS_ARM_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
-            '[.assets[] | select(.name | test("aarch64.*\\.app\\.tar\\.gz$"))] | sort_by(.name) | last | .browser_download_url // ""')
-          MACOS_ARM_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
-            '[.assets[] | select(.name | test("aarch64.*\\.app\\.tar\\.gz\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+            '[.assets[] | select(.name | test("_aarch64\\.app\\.tar\\.gz$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          MACOS_ARM_SIG_URL=$(echo "$RELEASE_JSON" | jq -r --arg url "$MACOS_ARM_UPD_URL.sig" \
+            '.assets[] | select(.browser_download_url == $url) | .browser_download_url')
 
           # AppImage.tar.gz 是更新专用归档；若无则回退到 .AppImage 本体
           LINUX_UPD_URL=$(echo "$RELEASE_JSON" | jq -r \
             '[.assets[] | select(.name | test("\\.AppImage\\.tar\\.gz$"))] | sort_by(.name) | last | .browser_download_url // ""')
-          LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
-            '[.assets[] | select(.name | test("\\.AppImage\\.tar\\.gz\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+          LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r --arg url "$LINUX_UPD_URL.sig" \
+            '.assets[] | select(.browser_download_url == $url) | .browser_download_url')
           if [ -z "$LINUX_UPD_URL" ]; then
             LINUX_UPD_URL="$LINUX_URL"
-            LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r \
-              '[.assets[] | select(.name | test("\\.AppImage\\.sig$"))] | sort_by(.name) | last | .browser_download_url // ""')
+            LINUX_SIG_URL=$(echo "$RELEASE_JSON" | jq -r --arg url "$LINUX_UPD_URL.sig" \
+              '.assets[] | select(.browser_download_url == $url) | .browser_download_url')
           fi
 
           echo "发布后资产 URL："
@@ -312,8 +336,19 @@ jobs:
           # ── 下载 .sig 文件读取签名内容（plugin-updater 需要 inline 签名）─
           fetch_sig() {
             local url="$1"
-            if [ -z "$url" ]; then echo ""; return; fi
-            curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$url" || true
+            if [ -z "$url" ]; then
+              echo "::error::更新签名地址为空，停止生成清单" >&2
+              return 1
+            fi
+            echo "读取更新签名：$url" >&2
+            # HTTP 错误必须中断发布，不能把错误页面或空响应写进签名字段。
+            local signature
+            signature=$(curl -fSLsS --retry 3 -H "Authorization: Bearer $GH_TOKEN" "$url") || return 1
+            if [ -z "$(printf '%s' "$signature" | tr -d '[:space:]')" ]; then
+              echo "::error::更新签名内容为空：$url" >&2
+              return 1
+            fi
+            printf '%s' "$signature"
           }
           WIN_SIG=$(fetch_sig "$WIN_SIG_URL")
           MACOS_ARM_SIG=$(fetch_sig "$MACOS_ARM_SIG_URL")

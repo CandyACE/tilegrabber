@@ -26,6 +26,7 @@ interface BackendTask {
   boundsNorth: number;
   minZoom: number;
   maxZoom: number;
+  zoomLevels?: number[] | null;
   totalTiles: number;
   downloadedTiles: number;
   failedTiles: number;
@@ -62,6 +63,7 @@ function toFrontendTask(b: BackendTask): Task {
     })(),
     minZoom: b.minZoom,
     maxZoom: b.maxZoom,
+    zoomLevels: b.zoomLevels,
     totalTiles: b.totalTiles,
     downloadedTiles: b.downloadedTiles,
     failedTiles: b.failedTiles,
@@ -541,6 +543,7 @@ defineExpose({ loadTasks });
             :exportJob="getActiveJobForTask(task.id)"
             :selectable="batchMode"
             :selected="selectedIds.has(task.id)"
+            @renamed="loadTasks"
             @pause="handlePause"
             @resume="handleResume"
             @cancel="handleCancel"

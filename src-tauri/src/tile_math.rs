@@ -253,6 +253,17 @@ pub fn enumerate_tiles(
     tiles
 }
 
+/// 统一验证下载层级，防止空选择或非法层级进入移位和瓦片枚举。
+pub fn resolve_zoom_levels(min: u8, max: u8, selected: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(min <= max && max <= 22, "下载层级必须在 0 至 22 之间且最小值不大于最大值");
+    let mut levels = selected.map(Vec::from).unwrap_or_else(|| (min..=max).collect());
+    anyhow::ensure!(!levels.is_empty() && levels.iter().all(|z| (min..=max).contains(z)), "至少选择一个范围内的下载层级");
+    levels.sort_unstable();
+    levels.dedup();
+    tracing::debug!(?levels, "下载层级校验完成");
+    Ok(levels)
+}
+
 /// 生成指定层级的瓦片网格 GeoJSON（用于地图可视化预览）
 ///
 /// 返回 GeoJSON FeatureCollection，包含:
@@ -638,19 +649,30 @@ pub fn enumerate_tiles_with_polygons(
 ) -> Vec<TileCoord> {
     let max_tiles = limit.unwrap_or(500_000);
     let mut tiles = Vec::new();
-
-    'outer: for zoom in min_zoom..=max_zoom {
-        let ((x_min, x_max), (y_min, y_max)) = match crs {
-            CrsType::Wgs84 => bounds_to_tile_range_wgs84(bounds, zoom),
-            _ => bounds_to_tile_range_xyz(bounds, zoom),
-        };
-        for y in y_min..=y_max {
-            for x in x_min..=x_max {
-                if tiles.len() as u64 >= max_tiles {
-                    break 'outer;
-                }
-                if tile_intersects_polygons(x, y, zoom, polygons, crs) {
-                    tiles.push(TileCoord { z: zoom, x, y });
+    let mut seen = std::collections::HashSet::new();
+    // 分离区域按各自包围框枚举，避免扫描两个省份之间的大量无关瓦片。
+    for zoom in min_zoom..=max_zoom {
+        for polygon in polygons {
+            if polygon.len() < 3 { continue; }
+            let face_bounds = Bounds {
+                west: polygon.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min).max(bounds.west),
+                east: polygon.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max).min(bounds.east),
+                south: polygon.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min).max(bounds.south),
+                north: polygon.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max).min(bounds.north),
+            };
+            if face_bounds.west > face_bounds.east || face_bounds.south > face_bounds.north { continue; }
+            let ((x_min, x_max), (y_min, y_max)) = match crs {
+                CrsType::Wgs84 => bounds_to_tile_range_wgs84(&face_bounds, zoom),
+                _ => bounds_to_tile_range_xyz(&face_bounds, zoom),
+            };
+            for y in y_min..=y_max {
+                for x in x_min..=x_max {
+                    let tile = TileCoord { z: zoom, x, y };
+                    if !seen.contains(&tile) && tile_intersects_polygon(x, y, zoom, polygon, crs) {
+                        if tiles.len() as u64 >= max_tiles { return tiles; }
+                        seen.insert(tile);
+                        tiles.push(tile);
+                    }
                 }
             }
         }
@@ -658,11 +680,50 @@ pub fn enumerate_tiles_with_polygons(
     tiles
 }
 
+/// 按离散层级枚举区域并集，超出上限时整体失败，避免静默下载不完整的区域。
+pub fn enumerate_selected_tiles(
+    bounds: &Bounds, min: u8, max: u8, selected: Option<&[u8]>,
+    crs: &CrsType, polygons: Option<&[Vec<[f64; 2]>]>, limit: u64,
+) -> anyhow::Result<Vec<TileCoord>> {
+    let mut tiles = Vec::new();
+    for z in resolve_zoom_levels(min, max, selected)? {
+        let remaining = limit.saturating_sub(tiles.len() as u64);
+        let next = match polygons {
+            Some(polygons) => enumerate_tiles_with_polygons(bounds, z, z, crs, polygons, Some(remaining + 1)),
+            None => enumerate_tiles(bounds, z, z, crs, Some(remaining + 1)),
+        };
+        anyhow::ensure!(next.len() as u64 <= remaining, "任务超过 {} 瓦片上限，请缩小区域或减少层级", limit);
+        tiles.extend(next);
+    }
+    tracing::debug!(tiles = tiles.len(), "区域与层级组合枚举完成");
+    Ok(tiles)
+}
+
 // ─── 单元测试 ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_levels_union_deduplicates_and_rejects_partial_downloads() {
+        let bounds = Bounds { west: -101.0, east: 101.0, south: 39.0, north: 41.0 };
+        let west = vec![[-101.0,39.0],[-99.0,39.0],[-99.0,41.0],[-101.0,41.0]];
+        let east = vec![[99.0,39.0],[101.0,39.0],[101.0,41.0],[99.0,41.0]];
+        let polygons = vec![west.clone(), east, west];
+        let tiles = enumerate_selected_tiles(&bounds, 4, 6, Some(&[6,4,6]), &CrsType::WebMercator, Some(&polygons), 1000).unwrap();
+        assert!(tiles.iter().all(|t| t.z == 4 || t.z == 6));
+        assert!(tiles.iter().any(|t| t.z == 4));
+        assert!(tiles.iter().any(|t| t.z == 6));
+        assert_eq!(tiles.len(), tiles.iter().collect::<std::collections::HashSet<_>>().len());
+        let gap = lng_lat_to_tile_xyz(0.0, 40.0, 6);
+        assert!(!tiles.iter().any(|t| t.z == 6 && (t.x,t.y) == gap));
+        assert!(enumerate_selected_tiles(&bounds, 4, 6, Some(&[4,6]), &CrsType::WebMercator, Some(&polygons), 1).is_err());
+        assert!(resolve_zoom_levels(4,6,Some(&[])).is_err());
+        assert!(resolve_zoom_levels(4,6,Some(&[7])).is_err());
+        assert!(resolve_zoom_levels(0,255,None).is_err());
+        assert_eq!(resolve_zoom_levels(4,6,None).unwrap(), vec![4,5,6]);
+    }
 
     #[test]
     fn multi_polygon_geometry_keeps_disconnected_regions() {

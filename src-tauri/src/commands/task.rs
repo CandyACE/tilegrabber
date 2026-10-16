@@ -176,6 +176,7 @@ pub async fn estimate_download(
     min_zoom: i32,
     max_zoom: i32,
     crs_str: String,
+    zoom_levels: Option<Vec<u8>>,
 ) -> Result<EstimateInfo, String> {
     use crate::tile_math::count_tiles;
     use crate::types::{Bounds, CrsType};
@@ -186,8 +187,10 @@ pub async fn estimate_download(
         CrsType::WebMercator
     };
     let bounds = Bounds { west, east, south, north };
-    let result = count_tiles(&bounds, min_zoom as u8, max_zoom as u8, &crs);
-    let tile_count = result.total;
+    let min = u8::try_from(min_zoom).map_err(|_| "无效的最小层级")?;
+    let max = u8::try_from(max_zoom).map_err(|_| "无效的最大层级")?;
+    let levels = crate::tile_math::resolve_zoom_levels(min, max, zoom_levels.as_deref()).map_err(|e| e.to_string())?;
+    let tile_count = levels.into_iter().map(|z| count_tiles(&bounds, z, z, &crs).total).sum::<u64>();
     let estimated_bytes = tile_count * BYTES_PER_TILE_ESTIMATE;
 
     Ok(EstimateInfo {
@@ -238,6 +241,12 @@ pub async fn list_tasks(app_db: State<'_, AppDb>) -> Result<Vec<Task>, String> {
 #[tauri::command]
 pub async fn get_task(task_id: String, app_db: State<'_, AppDb>) -> Result<Task, String> {
     app_db.get_task(&task_id).map_err(|e| e.to_string())
+}
+
+/// 修改任务名称，返回去除首尾空白后的名称。
+#[tauri::command]
+pub async fn rename_task(task_id: String, name: String, app_db: State<'_, AppDb>) -> Result<String, String> {
+    app_db.rename_task(&task_id, &name).map_err(|e| e.to_string())
 }
 
 /// 查找与给定数据源匹配的最新已完成任务，返回其 ID 和下载范围/层级信息。
@@ -448,23 +457,16 @@ pub async fn update_task_geometry(
     let new_south = args.bounds_south.min(task.bounds_south);
     let new_north = args.bounds_north.max(task.bounds_north);
 
-    // 多边形：若前端未提供且原有，则保留；若前端提供则替换（暂不支持真正的 polygon union，
-    // 此简化策略下重新枚举使用 bbox，因此即使保留多边形也只影响后续 UI 展示）
+    // 未提供新边界时保留原有多面集合，扩层时仍按原区域并集枚举。
     let new_polygon = args.polygon_wgs84.as_deref().or(task.polygon_wgs84.as_deref());
 
-    app_db
-        .update_task_geometry(
-            &args.task_id,
-            new_west,
-            new_east,
-            new_south,
-            new_north,
-            args.min_zoom,
-            args.max_zoom,
-            new_polygon,
-        )
-        .map_err(|e| e.to_string())?;
-
+    // 离散任务扩区时保留原勾选，仅补充向范围两端扩展的层级。
+    let expanded_levels = task.zoom_levels.as_ref().map(|levels| {
+        let mut levels = levels.clone();
+        levels.extend(args.min_zoom..task.min_zoom);
+        levels.extend((task.max_zoom + 1)..=args.max_zoom);
+        levels
+    });
     // 解析 TileSource，取 CRS
     let source: crate::types::TileSource =
         serde_json::from_str(&task.source_config).map_err(|e| e.to_string())?;
@@ -474,13 +476,27 @@ pub async fn update_task_geometry(
         south: new_south,
         north: new_north,
     };
-    let tiles = crate::tile_math::enumerate_tiles(
-        &bounds,
-        args.min_zoom,
-        args.max_zoom,
-        &source.crs,
-        Some(50_000_000),
-    );
+    let polygons = new_polygon.and_then(crate::tile_math::parse_polygon_geometry);
+    let is_gcj02_raster = source.coord_type == crate::types::CoordType::Gcj02
+        && !matches!(source.format.to_ascii_lowercase().as_str(), "pbf" | "mvt");
+    // 与首次下载保持一致：GCJ02 栅格需要完整扩边供像素合成，其他源按多面并集枚举。
+    let enumeration_bounds = if is_gcj02_raster {
+        crate::types::Bounds {
+            west: (bounds.west - 0.01).max(-180.0),
+            east: (bounds.east + 0.01).min(180.0),
+            south: (bounds.south - 0.01).max(-85.051_129),
+            north: (bounds.north + 0.01).min(85.051_129),
+        }
+    } else {
+        bounds
+    };
+    let tiles = crate::tile_math::enumerate_selected_tiles(
+        &enumeration_bounds, args.min_zoom, args.max_zoom, expanded_levels.as_deref(),
+        &source.crs, if is_gcj02_raster { None } else { polygons.as_deref() }, 2_000_000,
+    ).map_err(|error| {
+        tracing::warn!(task_id = %args.task_id, %error, "扩展任务枚举失败，保留原配置");
+        error.to_string()
+    })?;
 
     let path = task
         .tile_store_path
@@ -491,6 +507,20 @@ pub async fn update_task_geometry(
             .map_err(|e| e.to_string())?;
 
     let progress_before = tile_store.get_progress().map_err(|e| e.to_string())?;
+    app_db
+        .update_task_geometry(
+            &args.task_id,
+            new_west,
+            new_east,
+            new_south,
+            new_north,
+            args.min_zoom,
+            args.max_zoom,
+            new_polygon,
+            expanded_levels.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+
     let total_after = tile_store
         .init_download_state(&tiles)
         .map_err(|e| e.to_string())?;
@@ -500,6 +530,7 @@ pub async fn update_task_geometry(
         .update_task_total(&args.task_id, total_after)
         .map_err(|e| e.to_string())?;
 
+    tracing::info!(task_id = %args.task_id, added, total_after, "任务区域与层级扩展完成");
     Ok((added.max(0), total_after))
 }
 
@@ -1666,6 +1697,7 @@ pub async fn export_task(
             ("tgr.bounds_north", &task.bounds_north.to_string()),
             ("tgr.min_zoom", &task.min_zoom.to_string()),
             ("tgr.max_zoom", &task.max_zoom.to_string()),
+            ("tgr.zoom_levels", &serde_json::to_string(&task.zoom_levels).map_err(|e| e.to_string())?),
             (
                 "tgr.clip_to_bounds",
                 if task.clip_to_bounds { "1" } else { "0" },
@@ -1801,6 +1833,7 @@ pub async fn import_mbtiles(
         bounds_north,
         min_zoom,
         max_zoom,
+        zoom_levels: None,
         clip_to_bounds: false,
         polygon_wgs84: None,
     };
@@ -2073,6 +2106,7 @@ pub async fn import_task(
             bounds_north,
             min_zoom,
             max_zoom,
+            zoom_levels: meta.get("tgr.zoom_levels").map(|json| serde_json::from_str(json)).transpose().map_err(|e| format!("任务层级元数据无效：{}", e))?.flatten(),
             clip_to_bounds,
             polygon_wgs84,
         };
@@ -2126,6 +2160,7 @@ pub async fn import_task(
             bounds_north: task.bounds_north,
             min_zoom: task.min_zoom,
             max_zoom: task.max_zoom,
+            zoom_levels: task.zoom_levels,
             clip_to_bounds: task.clip_to_bounds,
             polygon_wgs84: task.polygon_wgs84,
         };

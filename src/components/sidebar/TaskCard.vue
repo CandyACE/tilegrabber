@@ -19,6 +19,7 @@ import {
   HardDrive,
   X,
 } from "lucide-vue-next";
+import TaskNameEditor from "./TaskNameEditor.vue";
 import { useI18n } from "vue-i18n";
 import { useExportJobs, type ExportRecord } from "~/composables/useExportJobs";
 
@@ -39,6 +40,7 @@ export interface Task {
   sourceType: string;
   minZoom: number;
   maxZoom: number;
+  zoomLevels?: number[] | null;
   totalTiles: number;
   downloadedTiles: number;
   failedTiles: number;
@@ -67,6 +69,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  renamed: [id: string, name: string];
   pause: [id: string];
   resume: [id: string];
   cancel: [id: string];
@@ -211,12 +214,7 @@ watch(
       class="flex items-start justify-between gap-2 mb-1.5"
       :class="selectable ? 'pl-6' : ''"
     >
-      <span
-        class="text-sm font-medium leading-snug truncate"
-        style="color: var(--color-text-primary)"
-      >
-        {{ task.name }}
-      </span>
+      <TaskNameEditor :task-id="task.id" :name="task.name" @saved="emit('renamed', task.id, $event)" />
       <div class="shrink-0 flex items-center gap-1">
         <!-- 远程任务标识 -->
         <span
@@ -260,7 +258,7 @@ watch(
       :class="selectable ? 'pl-6' : ''"
       style="color: var(--color-text-muted)"
     >
-      {{ task.sourceType }} · z{{ task.minZoom }}–z{{ task.maxZoom }} ·
+      {{ task.sourceType }} · {{ task.zoomLevels?.map(z => `Z${z}`).join(", ") ?? `Z${task.minZoom}–Z${task.maxZoom}` }} ·
       {{ task.totalTiles.toLocaleString() }} {{ t('taskCard.tiles') }}
     </p>
 

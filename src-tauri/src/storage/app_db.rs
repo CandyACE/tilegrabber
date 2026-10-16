@@ -12,7 +12,7 @@ use chrono::Utc;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
-const CURRENT_APP_DB_VERSION: i32 = 1;
+const CURRENT_APP_DB_VERSION: i32 = 2;
 
 const APP_DB_MIGRATIONS: &[&str] = &[
     // v1: 在基线 schema 之上创建 remote_servers 表
@@ -26,6 +26,8 @@ const APP_DB_MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL
     );
     "#,
+    // v2：独立保存离散层级；NULL 兼容旧任务的连续范围。
+    "ALTER TABLE tasks ADD COLUMN zoom_levels TEXT;",
 ];
 
 // ─── 任务状态 ────────────────────────────────────────────────────────────────
@@ -89,6 +91,9 @@ pub struct Task {
     pub bounds_north: f64,
     pub min_zoom: u8,
     pub max_zoom: u8,
+    /// 显式勾选的层级；旧任务未设置时使用 min_zoom 到 max_zoom。
+    #[serde(default)]
+    pub zoom_levels: Option<Vec<u8>>,
     pub total_tiles: i64,
     pub downloaded_tiles: i64,
     pub failed_tiles: i64,
@@ -116,6 +121,9 @@ pub struct NewTask {
     pub bounds_north: f64,
     pub min_zoom: u8,
     pub max_zoom: u8,
+    /// 显式勾选的层级；旧任务未设置时使用 min_zoom 到 max_zoom。
+    #[serde(default)]
+    pub zoom_levels: Option<Vec<u8>>,
     /// 是否严格裁剪至选框范围（仅影响导出阶段的精确裁剪，与下载瓦片范围无关）
     #[serde(default)]
     pub clip_to_bounds: bool,
@@ -334,14 +342,17 @@ impl AppDb {
         tile_store_path: &str,
         source: &str,
     ) -> Result<()> {
+        let levels = crate::tile_math::resolve_zoom_levels(new_task.min_zoom, new_task.max_zoom, new_task.zoom_levels.as_deref())?;
+        let zoom_json = new_task.zoom_levels.as_ref().map(|_| serde_json::to_string(&levels)).transpose()?;
+        tracing::info!(task_id = id, ?levels, "创建下载任务");
         let now = Utc::now().to_rfc3339();
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO tasks
              (id, name, source_config, status,
               bounds_west, bounds_east, bounds_south, bounds_north,
-              min_zoom, max_zoom, clip_to_bounds, polygon_wgs84, tile_store_path, source, created_at, updated_at)
-             VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14)",
+              min_zoom, max_zoom, clip_to_bounds, polygon_wgs84, tile_store_path, source, created_at, updated_at, zoom_levels)
+             VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?14,?15)",
             params![
                 id,
                 new_task.name,
@@ -357,9 +368,24 @@ impl AppDb {
                 tile_store_path,
                 source,
                 now,
+                zoom_json,
             ],
         )?;
         Ok(())
+    }
+
+    /// 重命名只更新名称和修改时间，保留下载状态与进度。
+    pub fn rename_task(&self, id: &str, name: &str) -> Result<String> {
+        let name = name.trim();
+        anyhow::ensure!(!name.is_empty() && name.chars().count() <= 200, "任务名称须为 1 至 200 个字符");
+        let changed = self.lock()?.execute(
+            "UPDATE tasks SET name=?1, updated_at=?2 WHERE id=?3",
+            params![name, Utc::now().to_rfc3339(), id],
+        )?;
+        anyhow::ensure!(changed == 1, "任务不存在：{}", id);
+        tracing::info!(task_id = id, "任务重命名成功");
+        self.add_log(Some(id), "info", "任务名称已修改").ok();
+        Ok(name.to_string())
     }
 
     pub fn get_task(&self, id: &str) -> Result<Task> {
@@ -369,7 +395,7 @@ impl AppDb {
                     bounds_west,bounds_east,bounds_south,bounds_north,
                     min_zoom,max_zoom,total_tiles,downloaded_tiles,failed_tiles,
                     tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at,
-                    COALESCE(source,'local')
+                    COALESCE(source,'local'),zoom_levels
              FROM tasks WHERE id=?1",
             params![id],
             row_to_task,
@@ -384,7 +410,7 @@ impl AppDb {
                     bounds_west,bounds_east,bounds_south,bounds_north,
                     min_zoom,max_zoom,total_tiles,downloaded_tiles,failed_tiles,
                     tile_store_path,clip_to_bounds,polygon_wgs84,created_at,updated_at,
-                    COALESCE(source,'local')
+                    COALESCE(source,'local'),zoom_levels
              FROM tasks ORDER BY created_at DESC",
         )?;
         let tasks = stmt
@@ -498,12 +524,13 @@ impl AppDb {
         min_zoom: u8,
         max_zoom: u8,
         polygon_wgs84: Option<&str>,
+        zoom_levels: Option<&[u8]>,
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let conn = self.lock()?;
         conn.execute(
             "UPDATE tasks SET bounds_west=?1, bounds_east=?2, bounds_south=?3, bounds_north=?4,
-                              min_zoom=?5, max_zoom=?6, polygon_wgs84=?7, updated_at=?8
+                              min_zoom=?5, max_zoom=?6, polygon_wgs84=?7, updated_at=?8, zoom_levels=?10
              WHERE id=?9",
             params![
                 bounds_west,
@@ -514,7 +541,8 @@ impl AppDb {
                 max_zoom as i64,
                 polygon_wgs84,
                 now,
-                id
+                id,
+                zoom_levels.map(serde_json::to_string).transpose()?,
             ],
         )?;
         Ok(())
@@ -800,5 +828,74 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
         source: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "local".to_string()),
+        zoom_levels: row.get::<_, Option<String>>(19)?.map(|json| serde_json::from_str(&json).map_err(|e| rusqlite::Error::FromSqlConversionFailure(19, rusqlite::types::Type::Text, Box::new(e)))).transpose()?,
     })
+}
+
+#[cfg(test)]
+mod task_edit_tests {
+    use super::*;
+
+    /// 使用真实 SQLite 验证空库、迁移和重启后的任务数据，不访问用户目录。
+    fn sample_task(levels: Option<Vec<u8>>) -> NewTask {
+        NewTask {
+            name: "原任务".into(), source_config: "{}".into(),
+            bounds_west: 100.0, bounds_east: 101.0, bounds_south: 30.0, bounds_north: 31.0,
+            min_zoom: 4, max_zoom: 8, zoom_levels: levels,
+            clip_to_bounds: false, polygon_wgs84: None,
+        }
+    }
+
+    #[test]
+    fn empty_database_startup_and_last_task_deletion_are_safe() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = AppDb::open(dir.path())?;
+        assert!(db.list_tasks()?.is_empty());
+        assert!(db.get_downloading_task_ids()?.is_empty());
+        db.reset_downloading_to_paused()?;
+        assert!(db.get_all_settings_raw()?.is_empty());
+        db.create_task("one", &sample_task(None), "one.tiles")?;
+        db.delete_task("one")?;
+        assert!(db.list_tasks()?.is_empty());
+        drop(db);
+        let db = AppDb::open(dir.path())?;
+        assert!(db.list_tasks()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn rename_preserves_progress_and_selected_levels_after_restart() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = AppDb::open(dir.path())?;
+        db.create_task("one", &sample_task(Some(vec![8, 4, 8])), "one.tiles")?;
+        db.update_task_status("one", "paused")?;
+        db.update_task_total("one", 100)?;
+        db.update_task_progress("one", 20, 2)?;
+        assert_eq!(db.rename_task("one", "  新名称  ")?, "新名称");
+        assert!(db.rename_task("one", "  ").is_err());
+        assert!(db.rename_task("missing", "名称").is_err());
+        drop(db);
+        let task = AppDb::open(dir.path())?.get_task("one")?;
+        assert_eq!(task.name, "新名称");
+        assert_eq!(task.status, "paused");
+        assert_eq!((task.total_tiles, task.downloaded_tiles, task.failed_tiles), (100, 20, 2));
+        assert_eq!(task.zoom_levels, Some(vec![4, 8]));
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_database_migrates_without_changing_continuous_levels() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        {
+            let db = AppDb::open(dir.path())?;
+            db.create_task("old", &sample_task(None), "old.tiles")?;
+            db.lock()?.execute_batch("ALTER TABLE tasks DROP COLUMN zoom_levels; PRAGMA user_version=1;")?;
+        }
+        let db = AppDb::open(dir.path())?;
+        let task = db.get_task("old")?;
+        assert_eq!(task.zoom_levels, None);
+        assert_eq!((task.min_zoom, task.max_zoom), (4, 8));
+        assert!(db.create_task("invalid", &sample_task(Some(vec![])), "bad.tiles").is_err());
+        Ok(())
+    }
 }

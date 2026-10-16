@@ -34,7 +34,7 @@ use commands::task::{
     export_pmtiles, export_task, failed_tiles_summary, find_completed_task_for_source,
     get_download_progress_geojson, get_export_jobs, get_stored_tile, get_task, get_task_logs,
     get_task_thumbnail, import_mbtiles, import_task, import_tiles_from_source, list_failed_tiles,
-    list_tasks, pause_download, resume_download, retry_failed, retry_failed_tiles,
+    list_tasks, rename_task, pause_download, resume_download, retry_failed, retry_failed_tiles,
     reveal_in_explorer, start_download, update_task_geometry, CancelMap, ExportState,
 };
 use commands::tile_proxy::fetch_tile;
@@ -128,6 +128,12 @@ fn show_main_window(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 原生异常写入文件日志，便于区分空列表渲染失败与进程级崩溃。
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!(panic = %info, "应用发生原生异常");
+        previous_hook(info);
+    }));
     tauri::Builder::default()
         .plugin(
             tauri_plugin_single_instance::Builder::new()
@@ -181,6 +187,7 @@ pub fn run() {
                 .get_downloading_task_ids()
                 .unwrap_or_default();
             let _ = app_db.reset_downloading_to_paused();
+            tracing::info!(interrupted_tasks = interrupted_ids.len(), "应用数据库初始化完成，准备显示主窗口");
             app.manage(app_db);
 
             // 初始化下载引擎
@@ -318,7 +325,7 @@ pub fn run() {
 
             // 创建系统托盘图标（缺图标时仅记录日志，不阻断启动）
             if let Some(icon) = app.default_window_icon().cloned() {
-                TrayIconBuilder::new()
+                let tray_result = TrayIconBuilder::new()
                     .icon(icon)
                     .tooltip("御图 — 点击显示主界面")
                     .on_tray_icon_event(|tray, event| {
@@ -335,7 +342,11 @@ pub fn run() {
                             }
                         }
                     })
-                    .build(app)?;
+                    .build(app);
+                // 托盘为辅助功能，桌面环境不支持时仍允许空库首次启动。
+                if let Err(error) = tray_result {
+                    tracing::warn!(%error, "系统托盘创建失败，继续显示主窗口");
+                }
             } else {
                 tracing::warn!("[tray] 应用未配置默认图标，跳过托盘创建");
             }
@@ -402,6 +413,7 @@ pub fn run() {
             // 任务管理
             create_task,
             list_tasks,
+            rename_task,
             get_task,
             delete_task,
             find_completed_task_for_source,
