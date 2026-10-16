@@ -22,6 +22,7 @@
 
 - 修复 macOS ARM64 发布仅构建 DMG、缺少自动更新归档及签名，导致更新检查提示找不到 `darwin-aarch64` 平台的问题；发布前强制校验各平台更新产物与同名签名，缺失或签名下载失败时停止生成更新清单
 - 发布清单同时提供 `darwin-aarch64-app` 与 `darwin-aarch64` 平台键，兼容不同版本更新器的 macOS Apple Silicon 平台识别
+- 修复发布流水线在 Windows runner 未预装 pnpm 时无法启动打包的问题，统一在各平台构建前安装 pnpm
 - 修复 Tauri 前端 npm 包与 Rust 插件版本漂移导致 `tauri:dev` 启动时版本校验失败的问题；固定双方兼容的小版本，避免依赖重新安装后再次失配
 
 ---
